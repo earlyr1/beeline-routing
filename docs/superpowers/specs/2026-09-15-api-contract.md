@@ -152,3 +152,19 @@
 - `frontend/src/store/useAppStore.ts` zustand: `datasetId`, `datasetStatus`, `state: PlanningState | null`, `selectedRequestId`, `selectedEngineerId`, `activeTab`, `showPrevious: boolean`, действия `upload`, `plan`, `applyEvent`, `selectRequest`, `selectEngineer`, `setTab`.
 - Вкладки правой панели регистрируются в `frontend/src/components/panel/tabs.ts` массивом `{id, title, component}`; План 4 добавляет вкладку `proposals` одной строкой.
 - Цвет инженера: `frontend/src/lib/colors.ts`, функция `engineerColor(engineerId, engineerIds)`.
+
+## Принятые уточнения (после Планов 2 и 3)
+
+Эти пункты имеют приоритет над текстом выше.
+
+1. `PlanningState.baseline` это FCFS, пересчитанный на текущей задаче после тех же событий и с теми же закреплёнными визитами.
+2. `POST /api/datasets/{id}/plan` без событий возвращает план предподсчёта. Если события были, день пересобирается: `version` = прежняя + 1, `events` = `[]`, `now` = `"00:00"`, `previous_plan` = `null`.
+3. `DatasetStatus.stage` при `failed` остаётся на этапе ошибки. `progress` считает только геокодируемые адреса, иначе `{"done": 0, "total": 0}`.
+4. `PlanDiff.time_shifts` включает и заявки, перенесённые к другому инженеру. `removed[].reason`: «Заявка отменена», текст причины неназначения или «Снята с плана».
+5. `RouteGeometry`: первый участок начинается в стартовой точке инженера; участок на каждый визит, включая закреплённые. `source: "osrm"` только если все участки по дорогам; `public` всегда `"straight"`. `plan=previous` при `previous_plan = null` отвечает 404.
+6. `Explanation.alternatives`: сначала допустимые по возрастанию `extra_km`, затем недопустимые. У закреплённого визита альтернатив нет. `summary` начинается с «Исполнитель <имя>.».
+7. Срочная заявка может прийти без `lat`/`lon`: backend геокодирует адрес. Если адрес не найден, заявка попадает в неназначенные с причиной `address_not_found`.
+8. Отмена визита, который уже начался к `now`, отклоняется с 422 и текстом «Заявка … уже в работе с HH:MM, отменить её нельзя.». Возврат заявки, окно которой закончилось раньше `now`, тоже 422.
+9. Загрузка файла «Контрольное распределение» завершается статусом `failed` с подсказкой загрузить «Синтетические данные».
+10. Swagger доступен по `/api/docs`, схема по `/api/openapi.json`.
+11. В `frontend/src/api/types.ts` контрактный `Request` называется `ServiceRequest`, `Event` называется `PlanEvent`, чтобы не затенять DOM-типы. Поля совпадают.
