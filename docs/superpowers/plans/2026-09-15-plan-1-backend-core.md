@@ -2695,7 +2695,7 @@ git commit -m "feat(solvers): OR-Tools VRPTW with skills, transport, shifts and 
   - `SynthConfig.load(path) -> SynthConfig` с полями `seed`, `event_time`, `regions: dict[str, RegionConfig(title, control, synthetic)]`, `skill_by_bk`, `default_duration_min`, `duration_jitter`, `duration_round_to`, `duration_by_hd`, `urgent_bk_types`, `urgent_control_statuses`, `cancelled_control_statuses`, `transport_required_rules: list[TransportRule(transport, skill, hd_contains)]`, `transport_mix`, `force_car_for_skills`, `transport_from_history: bool`, `engineer_start: "office" | "history_medoid"`, `shifts: list[ShiftTemplate(start, end)]`, `urgent_event: UrgentEventConfig(duration_min, window_min)`.
   - `synth_duration(cfg, request_id, type_hd) -> int`, `synth_transport_required(cfg, skill, type_hd) -> Transport | None`, `check_alignment(synthetic: RawFile, control: RawFile) -> None` (ValueError при расхождении), `build_requests(cfg, synthetic, control | None, geocode: Callable[[address, district], GeoResult]) -> list[Request]`.
   - `crew_histories(control) -> dict[crew, list[RawRequestRow]]`, `choose_shift(cfg, rows) -> ShiftTemplate`, `largest_remainder(shares, total) -> dict[Transport, int]`, `historical_car_crews(cfg, histories) -> set[crew]` (бригады, чьи реальные заявки по правилам конфига требовали автомобиль), `assign_transports(cfg, region, engineers: list[tuple[id, set[Skill]]], forced_car_ids: set[id] = frozenset()) -> dict[id, Transport]`, `history_medoid(rows, row_points: dict[row_index, (lat, lon)]) -> (lat, lon) | None`, `build_engineers(cfg, region, control, office, row_points=None) -> (list[Engineer], dict[crew_name, engineer_id])`. ID инженеров `E01`, `E02`… по алфавиту названий бригад. Старт инженера: офис или медоид истории бригады по `cfg.engineer_start`.
-  - `URGENT_REQUEST_ID = "URG-001"`, `build_demo_events(cfg, region, requests, control, synthetic, crew_to_engineer) -> list[Event]` в порядке: отмена, недоступность самой загруженной бригады, срочная заявка.
+  - `URGENT_REQUEST_ID = "URG-001"`, `build_demo_events(cfg, region, requests, control, synthetic, crew_to_engineer, plan: Plan | None = None) -> list[Event]` в порядке: отмена, недоступность инженера, срочная заявка. С планом отменяется отменённая в контроле заявка, стоящая в плане после времени события, а недоступным становится инженер с наибольшим числом визитов после этого времени, иначе события заметно не меняют план. Без плана берётся самая загруженная бригада по истории.
 
 - [ ] **Step 1: Создать конфиг**
 
@@ -2797,7 +2797,7 @@ from pathlib import Path
 import pytest
 
 from app.domain.enums import EventType, Priority, Skill, Transport
-from app.domain.models import Office
+from app.domain.models import Metrics, Office, Plan, Route, Visit
 from app.ingest.beeline_csv import RawFile, RawRequestRow
 from app.ingest.geocode import GeoResult
 from app.synth.config import ShiftTemplate, SynthConfig
@@ -3020,6 +3020,40 @@ def test_engineer_start_from_history_medoid(cfg):
     office_cfg = cfg.model_copy(update={"engineer_start": "office"})
     office_engineers, _ = build_engineers(office_cfg, "east", control, office, {0: (54.83, 38.15)})
     assert (office_engineers[0].start_lat, office_engineers[0].start_lon) == (55.7, 37.7)
+
+
+def test_demo_events_follow_the_optimized_plan(cfg):
+    synthetic = RawFile(
+        rows=[row(0, "1", ws=900, we=1020), row(1, "2", ws=900, we=1020), row(2, "3")],
+        office_address="x",
+        is_control=False,
+    )
+    control = RawFile(
+        rows=[
+            row(0, "305", status="Отменена", crew="Бригада А", ws=900, we=1020),
+            row(1, "306", status="Отменена", crew="Бригада А", ws=900, we=1020),
+            row(2, "307", crew="Бригада А"),
+        ],
+        office_address=None,
+        is_control=True,
+    )
+    requests = build_requests(cfg, synthetic, control, _fake_geo)
+
+    def visit(request_id, start):
+        return Visit(request_id=request_id, arrival=start, start=start, end=start + 30, leg_km=1.0, leg_min=5)
+
+    plan = Plan(
+        solver="ortools",
+        routes=[
+            Route(engineer_id="E01", visits=[visit("3", 600)]),
+            Route(engineer_id="E02", visits=[visit("2", 900)]),
+        ],
+        unassigned=[],
+        metrics=Metrics(engineers_used=2, km_per_engineer={}, total_km=2.0, assigned=2, unassigned=0),
+    )
+    events = build_demo_events(cfg, "east", requests, control, synthetic, {"Бригада А": "E01"}, plan)
+    assert events[0].request_id == "2"
+    assert events[1].engineer_id == "E02"
 ```
 
 - [ ] **Step 3: Убедиться, что тест падает**
@@ -3349,7 +3383,12 @@ def build_engineers(
 `backend/app/synth/events.py`:
 
 ```python
-"""Готовые события для демо: отмена, недоступность инженера, срочная заявка."""
+"""Готовые события для демо: отмена, недоступность инженера, срочная заявка.
+
+Если передан оптимизированный план, события выбираются так, чтобы менять его заметно:
+отменяется заявка, стоящая в плане после времени события, недоступным становится инженер
+с наибольшим числом визитов после этого времени.
+"""
 
 from __future__ import annotations
 
@@ -3357,7 +3396,7 @@ import random
 from collections import Counter
 
 from app.domain.enums import EventType, Priority, Skill, Transport
-from app.domain.models import Event, Request
+from app.domain.models import Event, Plan, Request
 from app.domain.timeutil import DAY_MIN
 from app.ingest.beeline_csv import RawFile
 from app.synth.config import SynthConfig
@@ -3372,6 +3411,7 @@ def build_demo_events(
     control: RawFile,
     synthetic: RawFile,
     crew_to_engineer: dict[str, str],
+    plan: Plan | None = None,
 ) -> list[Event]:
     at = cfg.event_time
     located = {r.id: r for r in requests if r.lat is not None}
@@ -3382,16 +3422,20 @@ def build_demo_events(
         for c, s in zip(control.rows, synthetic.rows, strict=True)
         if c.status_bk in cfg.cancelled_control_statuses and s.request_id in located
     ]
+    planned_start = {v.request_id: v.start for route in plan.routes for v in route.visits} if plan else {}
+    planned_later = [rid for rid in cancelled if planned_start.get(rid, -1) >= at]
     later = [rid for rid in cancelled if located[rid].window_start >= at]
-    if later or cancelled:
-        events.append(Event(type=EventType.CANCEL, time=at, request_id=(later or cancelled)[0]))
+    candidates = planned_later or later or cancelled
+    if candidates:
+        events.append(Event(type=EventType.CANCEL, time=at, request_id=candidates[0]))
 
-    crews = Counter(row.crew for row in control.rows if row.crew in crew_to_engineer)
-    if crews:
-        busiest = min(crews.items(), key=lambda item: (-item[1], item[0]))[0]
-        events.append(
-            Event(type=EventType.ENGINEER_UNAVAILABLE, time=at, engineer_id=crew_to_engineer[busiest])
-        )
+    engineer_id = _busiest_in_plan(plan, at) if plan is not None else None
+    if engineer_id is None:
+        crews = Counter(row.crew for row in control.rows if row.crew in crew_to_engineer)
+        if crews:
+            engineer_id = crew_to_engineer[min(crews.items(), key=lambda item: (-item[1], item[0]))[0]]
+    if engineer_id is not None:
+        events.append(Event(type=EventType.ENGINEER_UNAVAILABLE, time=at, engineer_id=engineer_id))
 
     if located:
         base = random.Random(f"{cfg.seed}:urgent:{region}").choice(
@@ -3420,12 +3464,20 @@ def build_demo_events(
             )
         )
     return events
+
+
+def _busiest_in_plan(plan: Plan, at: int) -> str | None:
+    counts = {route.engineer_id: sum(1 for v in route.visits if v.start >= at) for route in plan.routes}
+    if not counts:
+        return None
+    engineer_id, count = min(counts.items(), key=lambda item: (-item[1], item[0]))
+    return engineer_id if count > 0 else None
 ```
 
 - [ ] **Step 8: Убедиться, что тесты проходят**
 
 Run: `cd backend && uv run pytest tests/test_synth.py`
-Expected: `14 passed`
+Expected: `15 passed`
 
 - [ ] **Step 9: Commit**
 
@@ -3444,6 +3496,7 @@ git commit -m "feat(synth): config-driven synthesis of engineers, durations, pri
 - Consumes: всё из Tasks 2-11.
 - Produces:
   - `CONTROL_SOLVER = "dispatchers"`, `build_control_plan(problem, control, synthetic, crew_to_engineer) -> Plan`: заявки бригады в порядке окон, время и пробег по нашей модели, нарушения считаются, заявки без бригады неназначены с текстом «Диспетчер не назначил бригаду.».
+  - Демо-события строятся по оптимизированному плану: `build_demo_events(..., optimized)`.
   - `PrepareResult(bundle, fcfs, optimized, report, self_check_ok)`, `lexicographic(metrics) -> (unassigned, engineers_used, total_km)`, `self_check(fcfs, optimized) -> (bool, str)`, `render_report(...) -> str`, `prepare_region(region, cfg, *, repo_root, geocoder, osrm, cache, time_limit_s, traffic) -> PrepareResult`, `main(argv=None) -> int`.
   - CLI: `uv run python -m app.synth.prepare [--region all|east|south_east|south_center] [--osrm-url URL] [--geocoder nominatim|cache-only] [--time-limit N]`. Пишет `data/bundles/<region>/bundle.json` и `report.md`, обновляет `data/geocode_cache.json`, кэш матриц в `data/cache.sqlite`. Код выхода 1, если самопроверка не прошла хотя бы в одном регионе.
 
@@ -3729,7 +3782,7 @@ def prepare_region(
     fcfs = FcfsSolver().solve(problem)
     optimized = OrToolsSolver(time_limit_s=time_limit_s).solve(problem)
     control_plan = build_control_plan(problem, control, synthetic, crew_to_engineer)
-    events = build_demo_events(cfg, region, requests, control, synthetic, crew_to_engineer)
+    events = build_demo_events(cfg, region, requests, control, synthetic, crew_to_engineer, optimized)
     bundle = Bundle(
         region=region,
         office=office,
@@ -3808,7 +3861,7 @@ Expected: `2 passed`
 - [ ] **Step 6: Прогнать весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff check app tests`
-Expected: `80 passed`, затем `All checks passed!`
+Expected: `81 passed`, затем `All checks passed!`
 
 - [ ] **Step 7: Commit**
 
@@ -3854,14 +3907,23 @@ Expected: в каждом регионе строка `OK: Базовый вар
 
 - [ ] **Step 3: Проверить воспроизводимость**
 
+Заявки, инженеры и план диспетчеров детерминированы. Демо-события зависят от решения OR-Tools с лимитом времени и могут отличаться между запусками, поэтому сравниваются бандлы без поля `events`.
+
 Run:
 ```bash
 cd backend
-shasum ../data/bundles/*/bundle.json > /tmp/bundles_before.sha
+cat > /tmp/bundle_digest.py <<'PY'
+import hashlib, json, pathlib
+for path in sorted(pathlib.Path("../data/bundles").glob("*/bundle.json")):
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data.pop("events")
+    print(path.parent.name, hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16])
+PY
+uv run python /tmp/bundle_digest.py > /tmp/bundles_before.txt
 uv run python -m app.synth.prepare --region all --geocoder cache-only --time-limit 5 > /dev/null
-shasum -c /tmp/bundles_before.sha
+uv run python /tmp/bundle_digest.py | diff /tmp/bundles_before.txt - && echo "bundles reproducible"
 ```
-Expected: три строки `…/bundle.json: OK`. Бандл содержит заявки, инженеров, события и план диспетчеров, все они детерминированы; план OR-Tools в бандл не пишется, поэтому лимит времени поиска на файл не влияет.
+Expected: `bundles reproducible`.
 
 - [ ] **Step 4: Commit**
 
