@@ -2422,13 +2422,15 @@ git commit -m "feat(solvers): mandatory metrics, plan assembly and FCFS baseline
 
 Модель: у каждого активного инженера свой стартовый узел и общий фиктивный финиш (возврат не нужен). Время дуги = длительность работы в узле отправления плюс путь по транспорту инженера. Стоимость дуги = метры плюс штраф за перенос заявки к другому инженеру относительно предыдущего плана. Фиксированная стоимость инженера и штрафы за неназначение задают порядок целей: все заявки (срочные важнее), меньше инженеров, меньше километров. Матрицы времени и стоимости предвычисляются по каждому инженеру, чтобы колбэки не вызывали Python-логику на каждой дуге.
 
+У инженера с закреплёнными визитами (`problem.pinned`) фиксированная стоимость нулевая: он уже работал сегодня и в метрике учтён в любом случае. Без этого при перепланировании даже холостое событие перетасовывает заявки, чтобы «сэкономить» инженера, который уже отработал утро (проверено при планировании: 5 переносов на событии, которое ничего не меняет).
+
 **Files:**
 - Create: `backend/app/solvers/ortools_solver.py`
 - Test: `backend/tests/test_ortools_solver.py`
 
 **Interfaces:**
 - Consumes: `Problem`, `EngineerState`, `simulate_route`, `exclusion` из Task 7, `build_plan` из Task 9.
-- Produces: `ObjectiveWeights(vehicle_fixed_cost=1_000_000, drop_normal=10_000_000, drop_urgent=100_000_000, reassignment=20_000)`; `OrToolsSolver(time_limit_s: int = 3, weights: ObjectiveWeights | None = None)` с `name = "ortools"`, `sequences(problem) -> dict[str, list[str]]`, `solve(problem) -> Plan`. Warm start берётся из `problem.previous_order`, штраф за перенос из `problem.previous_assignment`.
+- Produces: `ObjectiveWeights(vehicle_fixed_cost=1_000_000, drop_normal=10_000_000, drop_urgent=100_000_000, reassignment=20_000)`; `OrToolsSolver(time_limit_s: int = 3, weights: ObjectiveWeights | None = None)` с `name = "ortools"`, `sequences(problem) -> dict[str, list[str]]`, `solve(problem) -> Plan`. Warm start берётся из `problem.previous_order`, штраф за перенос из `problem.previous_assignment`. Инженер с непустым `problem.pinned[engineer_id]` получает `SetFixedCostOfVehicle(0, v)`.
 
 - [ ] **Step 1: Написать падающий тест**
 
@@ -2492,6 +2494,30 @@ def test_inactive_engineer_gets_no_work():
     problem = problem_of([req("R1", 1, 0, "10:00", "12:00")], [eng("E1", available=False), eng("E2")])
     plan = OrToolsSolver(time_limit_s=1).solve(problem)
     assert _routes(plan) == {"E1": [], "E2": ["R1"]}
+
+
+def test_engineer_who_already_worked_today_has_no_fixed_cost():
+    from dataclasses import replace
+
+    from app.domain.models import Visit
+    from app.solvers.problem import EngineerState
+
+    base = problem_of(
+        [req("P", 4, 0, "09:00", "12:00"), req("R1", 0.5, 0, "10:00", "12:00")],
+        [eng("E1"), eng("E2")],
+    )
+    e1, e2 = base.states
+    pinned_visit = Visit(request_id="P", arrival=560, start=560, end=600, leg_km=5.2, leg_min=20, pinned=True)
+    problem = replace(
+        base,
+        states=[EngineerState(e1.engineer, base.request_node("P"), 600, e1.available_until), e2],
+        open_request_ids=["R1"],
+        pinned={"E1": [pinned_visit]},
+        now=600,
+    )
+    plan = OrToolsSolver(time_limit_s=1).solve(problem)
+    assert _routes(plan) == {"E1": ["P", "R1"], "E2": []}
+    assert plan.metrics.engineers_used == 1
 ```
 
 - [ ] **Step 2: Убедиться, что тест падает**
@@ -2508,7 +2534,8 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'app.solvers.ortools_solve
 
 Цель лексикографическая через веса: сначала назначить все заявки (срочные важнее),
 затем задействовать меньше инженеров, затем меньше километров. При перепланировании
-добавляется штраф за перенос заявки к другому инженеру.
+добавляется штраф за перенос заявки к другому инженеру, а у инженеров с закреплёнными
+визитами фиксированная стоимость нулевая.
 """
 
 from __future__ import annotations
@@ -2622,6 +2649,10 @@ class OrToolsSolver:
             time_dimension.CumulVar(routing.Start(v)).SetRange(state.available_from, state.available_until)
             time_dimension.CumulVar(routing.End(v)).SetRange(state.available_from, state.available_until)
         routing.SetFixedCostOfAllVehicles(weights.vehicle_fixed_cost)
+        for v, state in enumerate(vehicles):
+            if problem.pinned.get(state.engineer.id):
+                # Инженер уже работал сегодня и в метрике учтён в любом случае: не штрафуем за продолжение.
+                routing.SetFixedCostOfVehicle(0, v)
 
         params = pywrapcp.DefaultRoutingSearchParameters()
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
@@ -2672,7 +2703,7 @@ def _keep_feasible_prefix(problem: Problem, state: EngineerState, sequence: list
 - [ ] **Step 4: Убедиться, что тесты проходят**
 
 Run: `cd backend && uv run pytest tests/test_ortools_solver.py`
-Expected: `5 passed` (около 5 секунд из-за лимита времени поиска).
+Expected: `6 passed` (около 5 секунд из-за лимита времени поиска).
 
 - [ ] **Step 5: Commit**
 
@@ -3861,7 +3892,7 @@ Expected: `2 passed`
 - [ ] **Step 6: Прогнать весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff check app tests`
-Expected: `81 passed`, затем `All checks passed!`
+Expected: `82 passed`, затем `All checks passed!`
 
 - [ ] **Step 7: Commit**
 
