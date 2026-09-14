@@ -2420,7 +2420,9 @@ git commit -m "feat(solvers): mandatory metrics, plan assembly and FCFS baseline
 
 ### Task 10: Оптимизированный план на OR-Tools
 
-Модель: у каждого активного инженера свой стартовый узел и общий фиктивный финиш (возврат не нужен). Время дуги = длительность работы в узле отправления плюс путь по транспорту инженера. Стоимость дуги = метры плюс штраф за перенос заявки к другому инженеру относительно предыдущего плана. Фиксированная стоимость инженера и штрафы за неназначение задают порядок целей: все заявки (срочные важнее), меньше инженеров, меньше километров. Матрицы времени и стоимости предвычисляются по каждому инженеру, чтобы колбэки не вызывали Python-логику на каждой дуге.
+Модель: у каждого активного инженера свой стартовый узел и общий фиктивный финиш (возврат не нужен). Время дуги = длительность работы в узле отправления плюс путь по транспорту инженера. Стоимость дуги = метры плюс штраф за перенос заявки к другому инженеру относительно предыдущего плана. Фиксированная стоимость инженера и штрафы за неназначение задают порядок целей: все заявки (срочные важнее), меньше инженеров, меньше километров. Матрицы времени и стоимости предвычисляются по каждому инженеру и регистрируются через `routing.RegisterTransitMatrix`, поэтому поиск не вызывает Python на каждой дуге. При планировании это дало за тот же лимит времени план на одного инженера меньше на Востоке и Юго-востоке по сравнению с Python-колбэками.
+
+После поиска `repair_unassigned` жадно вставляет заявки, которые поиск не успел разместить за лимит времени: срочные первыми, в допустимую позицию с наименьшим приростом километров, предпочитая инженеров, у которых уже есть работа.
 
 У инженера с закреплёнными визитами (`problem.pinned`) фиксированная стоимость нулевая: он уже работал сегодня и в метрике учтён в любом случае. Без этого при перепланировании даже холостое событие перетасовывает заявки, чтобы «сэкономить» инженера, который уже отработал утро (проверено при планировании: 5 переносов на событии, которое ничего не меняет).
 
@@ -2430,7 +2432,7 @@ git commit -m "feat(solvers): mandatory metrics, plan assembly and FCFS baseline
 
 **Interfaces:**
 - Consumes: `Problem`, `EngineerState`, `simulate_route`, `exclusion` из Task 7, `build_plan` из Task 9.
-- Produces: `ObjectiveWeights(vehicle_fixed_cost=1_000_000, drop_normal=10_000_000, drop_urgent=100_000_000, reassignment=20_000)`; `OrToolsSolver(time_limit_s: int = 3, weights: ObjectiveWeights | None = None)` с `name = "ortools"`, `sequences(problem) -> dict[str, list[str]]`, `solve(problem) -> Plan`. Warm start берётся из `problem.previous_order`, штраф за перенос из `problem.previous_assignment`. Инженер с непустым `problem.pinned[engineer_id]` получает `SetFixedCostOfVehicle(0, v)`.
+- Produces: `ObjectiveWeights(vehicle_fixed_cost=1_000_000, drop_normal=10_000_000, drop_urgent=100_000_000, reassignment=20_000)`; `OrToolsSolver(time_limit_s: int = 3, weights: ObjectiveWeights | None = None)` с `name = "ortools"`, `sequences(problem) -> dict[str, list[str]]`, `solve(problem) -> Plan`. Warm start берётся из `problem.previous_order`, штраф за перенос из `problem.previous_assignment`. Инженер с непустым `problem.pinned[engineer_id]` получает `SetFixedCostOfVehicle(0, v)`. `repair_unassigned(problem: Problem, sequences: dict[str, list[str]]) -> dict[str, list[str]]` возвращает новые последовательности и вызывается в конце `sequences`.
 
 - [ ] **Step 1: Написать падающий тест**
 
@@ -2439,7 +2441,7 @@ git commit -m "feat(solvers): mandatory metrics, plan assembly and FCFS baseline
 ```python
 from app.domain.enums import Priority, ReasonCode, Transport
 from app.solvers.fcfs import FcfsSolver
-from app.solvers.ortools_solver import OrToolsSolver
+from app.solvers.ortools_solver import OrToolsSolver, repair_unassigned
 from tests.helpers import eng, problem_of, req
 
 
@@ -2518,6 +2520,24 @@ def test_engineer_who_already_worked_today_has_no_fixed_cost():
     plan = OrToolsSolver(time_limit_s=1).solve(problem)
     assert _routes(plan) == {"E1": ["P", "R1"], "E2": []}
     assert plan.metrics.engineers_used == 1
+
+
+def test_repair_inserts_left_out_request_preferring_working_engineer():
+    problem = problem_of(
+        [req("R1", 1, 0, "10:00", "12:00"), req("R2", 1.2, 0, "10:00", "12:00")], [eng("E1"), eng("E2")]
+    )
+    assert repair_unassigned(problem, {"E1": ["R1"], "E2": []}) == {"E1": ["R1", "R2"], "E2": []}
+
+
+def test_repair_puts_urgent_first_when_slots_are_scarce():
+    problem = problem_of(
+        [
+            req("N1", 1, 0, "10:00", "10:10", duration=60),
+            req("U1", 1, 0.1, "10:00", "10:10", duration=60, priority=Priority.URGENT),
+        ],
+        [eng("E1")],
+    )
+    assert repair_unassigned(problem, {"E1": []}) == {"E1": ["U1"]}
 ```
 
 - [ ] **Step 2: Убедиться, что тест падает**
@@ -2585,7 +2605,7 @@ class OrToolsSolver:
         solved = self._solve_model(problem, vehicles, candidates)
         for state, sequence in zip(vehicles, solved, strict=True):
             result[state.engineer.id] = _keep_feasible_prefix(problem, state, sequence)
-        return result
+        return repair_unassigned(problem, result)
 
     def _solve_model(
         self, problem: Problem, vehicles: list[EngineerState], candidates: list[str]
@@ -2623,14 +2643,9 @@ class OrToolsSolver:
                         cost += weights.reassignment
                     cost_matrix[a][b] = cost
 
-            def time_cb(from_index, to_index, matrix=time_matrix):
-                return matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
-
-            def cost_cb(from_index, to_index, matrix=cost_matrix):
-                return matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
-
-            time_callbacks.append(routing.RegisterTransitCallback(time_cb))
-            routing.SetArcCostEvaluatorOfVehicle(routing.RegisterTransitCallback(cost_cb), v)
+            # Матрицы регистрируются в C++: поиск не вызывает Python на каждой дуге и успевает больше.
+            time_callbacks.append(routing.RegisterTransitMatrix(time_matrix))
+            routing.SetArcCostEvaluatorOfVehicle(routing.RegisterTransitMatrix(cost_matrix), v)
 
         routing.AddDimensionWithVehicleTransits(time_callbacks, DAY_MIN, 2 * DAY_MIN, False, "Time")
         time_dimension = routing.GetDimensionOrDie("Time")
@@ -2698,12 +2713,45 @@ def _keep_feasible_prefix(problem: Problem, state: EngineerState, sequence: list
         if simulate_route(problem, state, kept + [request_id]).feasible:
             kept.append(request_id)
     return kept
+
+
+def repair_unassigned(problem: Problem, sequences: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Страховка от недосмотра поиска за лимит времени: жадно вставляет оставшиеся заявки.
+
+    Срочные заявки идут первыми. Для каждой берётся допустимая позиция с наименьшим приростом
+    километров, причём инженеры, у которых уже есть работа сегодня, предпочтительнее простаивающих.
+    """
+    result = {engineer_id: list(sequence) for engineer_id, sequence in sequences.items()}
+    placed = {request_id for sequence in result.values() for request_id in sequence}
+    pending = [request_id for request_id in problem.open_request_ids if request_id not in placed]
+    pending.sort(key=lambda request_id: problem.request(request_id).priority != Priority.URGENT)
+    for request_id in pending:
+        request = problem.request(request_id)
+        best: tuple[tuple[int, float], str, list[str]] | None = None
+        for state in problem.states:
+            if exclusion(request, state) is not None:
+                continue
+            engineer_id = state.engineer.id
+            sequence = result.get(engineer_id, [])
+            base_km = sum(visit.leg_km for visit in simulate_route(problem, state, sequence).visits)
+            idle = 0 if sequence or problem.pinned.get(engineer_id) else 1
+            for position in range(len(sequence) + 1):
+                candidate = sequence[:position] + [request_id] + sequence[position:]
+                sim = simulate_route(problem, state, candidate)
+                if not sim.feasible:
+                    continue
+                key = (idle, sum(visit.leg_km for visit in sim.visits) - base_km)
+                if best is None or key < best[0]:
+                    best = (key, engineer_id, candidate)
+        if best is not None:
+            result[best[1]] = best[2]
+    return result
 ```
 
 - [ ] **Step 4: Убедиться, что тесты проходят**
 
 Run: `cd backend && uv run pytest tests/test_ortools_solver.py`
-Expected: `6 passed` (около 5 секунд из-за лимита времени поиска).
+Expected: `8 passed` (около 5 секунд из-за лимита времени поиска).
 
 - [ ] **Step 5: Commit**
 
@@ -3892,7 +3940,7 @@ Expected: `2 passed`
 - [ ] **Step 6: Прогнать весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff check app tests`
-Expected: `82 passed`, затем `All checks passed!`
+Expected: `84 passed`, затем `All checks passed!`
 
 - [ ] **Step 7: Commit**
 
