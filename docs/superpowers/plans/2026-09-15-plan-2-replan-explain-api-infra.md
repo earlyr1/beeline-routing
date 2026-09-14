@@ -346,7 +346,7 @@ Expected: `3 passed`.
 - [ ] **Step 7: Весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff format --check app tests && uv run ruff check app tests`
-Expected: `83 passed`, `All checks passed!`.
+Expected: `87 passed`, `All checks passed!`.
 
 - [ ] **Step 8: Commit**
 
@@ -779,7 +779,7 @@ Expected: `9 passed` (около 15 секунд: каждый тест реша
 - [ ] **Step 6: Весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff format --check app tests && uv run ruff check app tests`
-Expected: `92 passed`, `All checks passed!`.
+Expected: `96 passed`, `All checks passed!`.
 
 - [ ] **Step 7: Commit**
 
@@ -1170,7 +1170,7 @@ Expected: `5 passed`.
 - [ ] **Step 5: Весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff format --check app tests && uv run ruff check app tests`
-Expected: `97 passed`, `All checks passed!`.
+Expected: `101 passed`, `All checks passed!`.
 
 - [ ] **Step 6: Commit**
 
@@ -1620,7 +1620,7 @@ Expected: `4 passed`.
 - [ ] **Step 9: Весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff format --check app tests && uv run ruff check app tests`
-Expected: `101 passed`, `All checks passed!`.
+Expected: `105 passed`, `All checks passed!`.
 
 - [ ] **Step 10: Commit**
 
@@ -2479,7 +2479,7 @@ OK
 - [ ] **Step 12: Весь набор и линтер**
 
 Run: `cd backend && uv run pytest && uv run ruff format --check app tests scripts && uv run ruff check app tests scripts`
-Expected: `108 passed`, `All checks passed!`.
+Expected: `112 passed`, `All checks passed!`.
 
 - [ ] **Step 13: Commit**
 
