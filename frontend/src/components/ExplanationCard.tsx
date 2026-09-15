@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getExplanation } from '../api/client';
 import type { Explanation } from '../api/types';
+import { REQUEST_CLOCK_LABELS, requestClockStatus } from '../lib/clock';
 import { brigadeName, formatKm, formatSigned, requestWindowPhrase, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
-import { byId } from '../lib/planView';
+import { assignmentIndex, byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 import { EngineerLink } from './EngineerLink';
 import { RequestActions } from './RequestActions';
@@ -14,6 +15,7 @@ export function ExplanationCard() {
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const selectRequest = useAppStore((s) => s.selectRequest);
   const showPrevious = useAppStore((s) => s.showPrevious);
+  const clock = useAppStore((s) => s.clock);
   const version = state?.version ?? 0;
   const [explanation, setExplanation] = useState<Explanation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -51,6 +53,11 @@ export function ExplanationCard() {
     engineerId ? <EngineerLink engineerId={engineerId} name={engineers.get(engineerId)?.name ?? engineerId} /> : '—';
   // Карточка открыта поверх страницы бригады: ссылка возвращает на неё, выбранная бригада остаётся.
   const brigade = selectedEngineerId ? engineers.get(selectedEngineerId) : undefined;
+  // Что с заявкой к времени на часах: объяснение всегда о текущем плане, визит берём из него же.
+  const clockStatus =
+    request && request.status !== 'cancelled'
+      ? requestClockStatus(assignmentIndex(state.plan).get(selectedRequestId)?.visit, clock)
+      : null;
 
   return (
     <section className="explanation" aria-label="Объяснение по заявке">
@@ -61,7 +68,10 @@ export function ExplanationCard() {
       )}
       <header className="explanation__head">
         <div>
-          <h3>Заявка {selectedRequestId}</h3>
+          <div className="explanation__title">
+            <h3>Заявка {selectedRequestId}</h3>
+            {clockStatus && <span className={`badge badge--clock-${clockStatus}`}>{REQUEST_CLOCK_LABELS[clockStatus]}</span>}
+          </div>
           {request && (
             <p className="muted">
               {shortAddress(request.address)} · {requestWindowPhrase(request)} ·{' '}

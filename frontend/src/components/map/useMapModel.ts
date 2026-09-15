@@ -1,12 +1,21 @@
 import { useMemo } from 'react';
-import { buildMapModel, type MapModel, type MarkerTarget } from '../../lib/mapModel';
+import { buildMapModel, NO_CLOCK_LEGS, withClockLegs, type ClockLayer, type MapModel, type MarkerTarget } from '../../lib/mapModel';
 import { displayedPlan } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
+import { useClockLayer } from './useClockLayer';
 import { useRouteGeometries } from './useRouteGeometries';
 import type { LngLat } from './yandexLoader';
 
-/** Маркеры и линии текущего состояния для любой подложки: Яндекс Карт или OpenStreetMap. */
-export function useMapModel(): MapModel | null {
+/** Что рисует карта: план и поверх него слой часов дня. */
+export interface MapLayers {
+  /** Маркеры и линии плана; проеханные отрезки уже приглушены, текущий отдан слою часов. */
+  model: MapModel;
+  /** Где инженеры сейчас; null — плана нет. */
+  clock: ClockLayer | null;
+}
+
+/** Слои текущего состояния для любой подложки: Яндекс Карт или OpenStreetMap. */
+export function useMapLayers(): MapLayers | null {
   const state = useAppStore((s) => s.state);
   const datasetId = useAppStore((s) => s.datasetId);
   const showPrevious = useAppStore((s) => s.showPrevious);
@@ -14,11 +23,20 @@ export function useMapModel(): MapModel | null {
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const plan = state ? displayedPlan(state, showPrevious) : null;
   const legs = useRouteGeometries(datasetId, state, plan, showPrevious ? 'previous' : 'current');
+  const clock = useClockLayer(state, plan, legs);
 
-  return useMemo(
+  // Часы в эту модель не входят: пока диспетчер двигает их внутри одного перегона, план не пересобирается.
+  const base = useMemo(
     () => (state && plan ? buildMapModel({ state, plan, legs, showPrevious, selectedRequestId, selectedEngineerId }) : null),
     [state, plan, legs, showPrevious, selectedRequestId, selectedEngineerId],
   );
+  const clockLegs = clock?.legs;
+  const model = useMemo(
+    () => (base ? { ...base, polylines: withClockLegs(base.polylines, clockLegs ?? NO_CLOCK_LEGS) } : null),
+    [base, clockLegs],
+  );
+
+  return model ? { model, clock } : null;
 }
 
 /** Клик по маркеру закрывает меню карты. В режиме выбора точки маркеры ничего не выбирают. */

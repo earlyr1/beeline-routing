@@ -1,4 +1,5 @@
 import type { ServiceRequest } from '../../api/types';
+import { REQUEST_CLOCK_LABELS, requestClockStatus } from '../../lib/clock';
 import { engineerColor } from '../../lib/colors';
 import { capitalize, requestWindowPhrase, shortAddress } from '../../lib/format';
 import {
@@ -22,6 +23,7 @@ export function RequestsTab() {
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const selectRequest = useAppStore((s) => s.selectRequest);
   const selectEngineer = useAppStore((s) => s.selectEngineer);
+  const clock = useAppStore((s) => s.clock);
   if (!state) return null;
 
   const plan = displayedPlan(state, showPrevious);
@@ -62,6 +64,8 @@ export function RequestsTab() {
           const badge = mark ? diffBadge(mark, request.id, state.last_diff, engineers, showPrevious) : null;
           const cancelled = request.status === 'cancelled';
           const pinned = Boolean(info?.visit.pinned);
+          // Что с заявкой к времени на часах: у отменённой заявки работ нет.
+          const clockStatus = cancelled ? null : requestClockStatus(info?.visit, clock);
           const classes = [
             'request-row',
             request.id === selectedRequestId ? 'request-row--selected' : '',
@@ -84,6 +88,7 @@ export function RequestsTab() {
                   <span>{engineer ? <EngineerLink engineerId={engineer.id} name={engineer.name} /> : '—'}</span>
                 </div>
                 <div className="badges">
+                  {clockStatus && <span className={`badge badge--clock-${clockStatus}`}>{REQUEST_CLOCK_LABELS[clockStatus]}</span>}
                   {request.priority === 'urgent' && <span className="badge badge--urgent">Срочная</span>}
                   {request.asap && <span className="badge badge--asap">Как можно скорее</span>}
                   {cancelled && <span className="badge badge--cancelled">Отменена</span>}

@@ -205,6 +205,22 @@ h4 {
   color: var(--warn);
 }
 
+/* Что с заявкой к времени на часах дня. */
+.badge--clock-done {
+  background: #e7f5ec;
+  color: var(--ok);
+}
+
+.badge--clock-working {
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.badge--clock-driving {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 /* Экран загрузки */
 .upload-screen {
   min-height: 100vh;
@@ -830,6 +846,25 @@ h4 {
   opacity: 0.35;
 }
 
+/* Где бригада сейчас: кружок в её цвете поверх маркеров заявок. */
+.marker--now {
+  min-width: 26px;
+  height: 26px;
+  border-radius: 13px;
+  border-width: 3px;
+  font-size: 13px;
+  line-height: 1;
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.7),
+    0 2px 6px rgba(0, 0, 0, 0.35);
+}
+
+.marker--now-before,
+.marker--now-waiting,
+.marker--now-lunch {
+  font-size: 11px;
+}
+
 /* Правая панель */
 .panel {
   display: flex;
@@ -1052,6 +1087,14 @@ h4 {
   max-height: 55%;
   overflow: auto;
   background: #fbfcfd;
+}
+
+/* Номер заявки и её состояние на часах дня стоят в одной строке. */
+.explanation__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .explanation__head {

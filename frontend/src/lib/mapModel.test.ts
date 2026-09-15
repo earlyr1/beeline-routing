@@ -2,7 +2,18 @@ import { describe, expect, it } from 'vitest';
 import type { RouteLeg } from '../api/types';
 import { makePlanningState, makeRouteGeometry } from '../test/fixtures';
 import { ENGINEER_PALETTE, UNASSIGNED_COLOR } from './colors';
-import { buildMapModel, DIMMED_ROUTE_OPACITY, type MapModelInput } from './mapModel';
+import {
+  buildClockLayer,
+  buildMapModel,
+  DIMMED_ROUTE_OPACITY,
+  legKey,
+  NO_CLOCK_LEGS,
+  NOW_MARKER_Z_INDEX,
+  PASSED_ROUTE_OPACITY,
+  withClockLegs,
+  type ClockLayerInput,
+  type MapModelInput,
+} from './mapModel';
 import { straightLegs, byId } from './planView';
 
 function input(patch: Partial<MapModelInput> = {}): MapModelInput {
@@ -121,6 +132,7 @@ describe('buildMapModel', () => {
     expect(model.polylines.find((line) => line.engineerId === 'E02')).toEqual({
       key: 'E02-0-84627',
       engineerId: 'E02',
+      toRequestId: '84627',
       coordinates: makeRouteGeometry().legs[0].coordinates,
       color: ENGINEER_PALETTE[1],
       stroke: ENGINEER_PALETTE[1],
@@ -134,5 +146,94 @@ describe('buildMapModel', () => {
     const model = buildMapModel(input({ plan: state.previous_plan ?? state.plan, showPrevious: true }));
     expect(model.markers.some((marker) => marker.className.includes('marker--changed'))).toBe(false);
     expect(markerOf(model, 'URG-001')).toMatchObject({ className: 'marker marker--unassigned marker--urgent', label: '!' });
+  });
+});
+
+function clockInput(patch: Partial<ClockLayerInput> = {}): ClockLayerInput {
+  const base = input();
+  return { state: base.state, plan: base.plan, legs: base.legs, clock: '13:20', selectedEngineerId: null, ...patch };
+}
+
+describe('buildClockLayer', () => {
+  it('ставит маркер «где сейчас» каждому инженеру с визитами и никому без них', () => {
+    const layer = buildClockLayer(clockInput());
+    expect(layer.markers.map((marker) => marker.key)).toEqual(['now-E01', 'now-E02']);
+    expect(layer.markers[0]).toMatchObject({
+      target: { kind: 'engineer', engineerId: 'E01' },
+      zIndex: NOW_MARKER_Z_INDEX,
+      className: 'marker marker--now marker--now-driving',
+      style: { background: ENGINEER_PALETTE[0], borderColor: ENGINEER_PALETTE[0] },
+      title: 'Бригада Арташкин: в пути к 50104',
+    });
+    // Инженер едет от 86160 к 50104 и проехал 20 минут из 35.
+    expect(layer.markers[0].coordinates[0]).toBeCloseTo(37.7026, 3);
+    expect(layer.markers[0].coordinates[1]).toBeCloseTo(55.7306, 3);
+    expect(layer.markers[1]).toMatchObject({
+      key: 'now-E02',
+      className: 'marker marker--now marker--now-onSite',
+      title: 'Бригада Белузин: работает у URG-001',
+      coordinates: [37.809, 55.712],
+    });
+  });
+
+  it('режет отрезок, по которому инженер едет, на проеханную и оставшуюся части', () => {
+    const layer = buildClockLayer(clockInput());
+    expect(layer.polylines.map((line) => line.key)).toEqual(['now-passed-E01', 'now-rest-E01']);
+    const [passed, rest] = layer.polylines;
+    expect(passed.coordinates[0]).toEqual([37.6612, 55.7431]);
+    expect(passed.coordinates.at(-1)).toEqual(rest.coordinates[0]);
+    expect(rest.coordinates.at(-1)).toEqual([37.7336, 55.7212]);
+    expect(passed.opacity).toBeCloseTo(PASSED_ROUTE_OPACITY, 6);
+    expect(passed.stroke).toBe(`${ENGINEER_PALETTE[0]}40`);
+    expect(rest).toMatchObject({ engineerId: 'E01', opacity: 1, stroke: ENGINEER_PALETTE[0], width: 3 });
+  });
+
+  it('в начале пути рисует только оставшуюся часть отрезка', () => {
+    // В 13:00 инженер только выезжает к 50104: приезд 13:35 минус 35 минут дороги.
+    const layer = buildClockLayer(clockInput({ clock: '13:00' }));
+    expect(layer.polylines.map((line) => line.key)).toEqual(['now-rest-E01', 'now-passed-E02', 'now-rest-E02']);
+  });
+
+  it('называет проеханные отрезки и текущий: базовые линии рисуются по ним', () => {
+    const layer = buildClockLayer(clockInput());
+    expect([...layer.legs.passed].sort()).toEqual(['E01:74198', 'E01:86160', 'E02:84627', 'E02:URG-001']);
+    expect([...layer.legs.split]).toEqual([legKey('E01', '50104')]);
+  });
+
+  it('затемняет маркер и линии инженеров, которых не выбрали', () => {
+    const layer = buildClockLayer(clockInput({ selectedEngineerId: 'E01' }));
+    expect(layer.markers[1].className).toBe('marker marker--now marker--now-onSite marker--dimmed');
+    expect(layer.markers[0].className).toBe('marker marker--now marker--now-driving');
+    expect(layer.polylines.every((line) => line.width === 6)).toBe(true);
+  });
+});
+
+describe('withClockLegs', () => {
+  it('гасит проеханные отрезки и убирает тот, который рисует слой часов', () => {
+    const model = buildMapModel(input());
+    const layer = buildClockLayer(clockInput());
+    const lines = withClockLegs(model.polylines, layer.legs);
+
+    expect(model.polylines).toHaveLength(6);
+    expect(lines.map((line) => line.key)).toEqual(['E01-0-74198', 'E01-1-86160', 'E01-3-46393', 'E02-0-84627', 'E02-1-URG-001']);
+    const passed = lines.filter((line) => line.key !== 'E01-3-46393');
+    for (const line of passed) {
+      expect(line.opacity).toBeCloseTo(PASSED_ROUTE_OPACITY, 6);
+      expect(line.stroke).toBe(`${line.color}40`);
+    }
+    expect(lines.find((line) => line.key === 'E01-3-46393')).toMatchObject({ opacity: 1, stroke: ENGINEER_PALETTE[0] });
+  });
+
+  it('перемножает прозрачность проеханного отрезка и затемнения чужого маршрута', () => {
+    const model = buildMapModel(input({ selectedEngineerId: 'E01' }));
+    const layer = buildClockLayer(clockInput({ selectedEngineerId: 'E01' }));
+    const line = withClockLegs(model.polylines, layer.legs).find((item) => item.engineerId === 'E02');
+    expect(line?.opacity).toBeCloseTo(PASSED_ROUTE_OPACITY * DIMMED_ROUTE_OPACITY, 6);
+    expect(line?.stroke).toBe(`${ENGINEER_PALETTE[1]}10`);
+  });
+
+  it('без часов оставляет линии как есть', () => {
+    const model = buildMapModel(input());
+    expect(withClockLegs(model.polylines, NO_CLOCK_LEGS)).toBe(model.polylines);
   });
 });

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../store/useAppStore';
 import { makeAsapState, makePlanningState } from '../../test/fixtures';
@@ -100,6 +100,23 @@ describe('RequestsTab', () => {
     const windowed = rowOf('URG-001');
     expect(within(windowed).getByText('Окно 13:00–15:00')).toBeInTheDocument();
     expect(within(windowed).queryByText('Как можно скорее')).not.toBeInTheDocument();
+  });
+
+  it('показывает, что с заявкой происходит на время часов', () => {
+    render(<RequestsTab />);
+    // Часы на 13:30: к 50104 инженер выехал в 13:00 и приедет в 13:35, у URG-001 работы идут с 13:05.
+    expect(within(rowOf('50104')).getByText('В пути')).toHaveClass('badge', 'badge--clock-driving');
+    expect(within(rowOf('URG-001')).getByText('В работе')).toHaveClass('badge--clock-working');
+    expect(within(rowOf('74198')).getByText('Выполнена')).toHaveClass('badge--clock-done');
+    expect(within(rowOf('46393')).queryByText(/^(Выполнена|В работе|В пути)$/)).not.toBeInTheDocument();
+    expect(within(rowOf('18754')).queryByText(/^(Выполнена|В работе|В пути)$/)).not.toBeInTheDocument();
+  });
+
+  it('двигает статусы заявок вместе с часами', () => {
+    render(<RequestsTab />);
+    act(() => useAppStore.getState().setClock('14:10'));
+    expect(within(rowOf('50104')).getByText('В работе')).toBeInTheDocument();
+    expect(within(rowOf('50104')).queryByText('В пути')).not.toBeInTheDocument();
   });
 
   it('disables editing while an event is being applied', () => {

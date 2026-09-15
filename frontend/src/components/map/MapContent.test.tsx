@@ -8,6 +8,7 @@ vi.mock('../../api/client', async (importOriginal) => {
 });
 
 import * as api from '../../api/client';
+import { ENGINEER_PALETTE } from '../../lib/colors';
 import { useAppStore } from '../../store/useAppStore';
 import { makePlanningState, makeRouteGeometry } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
@@ -89,6 +90,19 @@ describe('MapContent', () => {
     );
   });
 
+  it('не берёт геометрию, посчитанную для плана на другое время', async () => {
+    // Пока шёл запрос, часы перевели план: такие линии относятся к другому плану и на карту не попадают.
+    vi.mocked(api.getRouteGeometry).mockImplementation(async (_datasetId, engineerId) => {
+      if (engineerId === 'E02') return { ...makeRouteGeometry(), version: 99 };
+      throw new Error('offline');
+    });
+    render(<MapContent components={fake} />);
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
+
+    const road = JSON.stringify(makeRouteGeometry().legs[0].coordinates);
+    expect(screen.getAllByTestId('feature').some((feature) => feature.getAttribute('data-coordinates') === road)).toBe(false);
+  });
+
   it('selects requests and engineers from markers and picks a point in pick mode', async () => {
     render(<MapContent components={fake} />);
     fireEvent.click(screen.getByTitle(/^50104:/));
@@ -168,6 +182,33 @@ describe('MapContent', () => {
     act(() => useAppStore.setState({ showPrevious: false, busy: true }));
     expect(within(menu()).getByRole('button', { name: 'Добавить заявку здесь' })).toBeDisabled();
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalled());
+  });
+
+  it('показывает, где инженеры сейчас, и ведёт их по маршруту вместе с часами', async () => {
+    render(<MapContent components={fake} />);
+    expect(screen.getByTitle('Бригада Арташкин: в пути к 50104')).toHaveClass('marker--now');
+    const coordinatesOf = (title: string) => screen.getByTitle(title).parentElement?.getAttribute('data-coordinates');
+    const started = coordinatesOf('Бригада Белузин: в пути к URG-001');
+
+    act(() => useAppStore.getState().setClock('13:02'));
+    expect(coordinatesOf('Бригада Белузин: в пути к URG-001')).not.toBe(started);
+
+    act(() => useAppStore.getState().setClock('14:10'));
+    expect(screen.getByTitle('Бригада Арташкин: работает у 50104')).toBeInTheDocument();
+    expect(screen.getByTitle('Бригада Белузин: обед')).toBeInTheDocument();
+    // Проеханные отрезки рисуются цветом инженера с прозрачностью.
+    expect(screen.getAllByTestId('feature').some((line) => line.getAttribute('data-color') === `${ENGINEER_PALETTE[0]}40`)).toBe(true);
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
+  });
+
+  it('не перезапрашивает геометрию, пока диспетчер тянет ползунок часов', async () => {
+    render(<MapContent components={fake} />);
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
+
+    act(() => useAppStore.getState().startDrag());
+    for (const time of ['13:30', '14:00', '15:30']) act(() => useAppStore.getState().setClock(time));
+    expect(api.getRouteGeometry).toHaveBeenCalledTimes(2);
+    expect(screen.getByTitle('Бригада Арташкин: работает у 46393')).toBeInTheDocument();
   });
 
   it('opens on an overview of the whole plan and returns to it after a request is closed', async () => {

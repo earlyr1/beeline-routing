@@ -28,7 +28,7 @@ export function useRouteGeometries(
     const requests = byId(state.requests);
     const engineers = byId(state.engineers);
     const routes = plan.routes.filter((route) => route.visits.length > 0);
-    const keyOf = (engineerId: string) => `${datasetId}:${state.version}:${planKind}:${engineerId}`;
+    const keyOf = (engineerId: string, version: number = state.version) => `${datasetId}:${version}:${planKind}:${engineerId}`;
 
     const initial = new Map<string, RouteLeg[]>();
     for (const route of routes) {
@@ -43,7 +43,9 @@ export function useRouteGeometries(
         if (cache.has(key)) return;
         try {
           const geometry = await getRouteGeometry(datasetId, route.engineer_id, planKind);
-          cache.set(key, geometry.legs);
+          // Пока шёл запрос, часы могли перевести план на другое время: линии запоминаются под версию ответа,
+          // и линии чужого плана на карту не попадают. Сервер без версии в ответе считается ответившим про этот план.
+          cache.set(keyOf(route.engineer_id, geometry.version ?? state.version), geometry.legs);
         } catch {
           // остаются прямые отрезки
         }

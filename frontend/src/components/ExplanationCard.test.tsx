@@ -151,6 +151,21 @@ describe('ExplanationCard', () => {
     expect(within(card()).queryByText(/· окно /)).not.toBeInTheDocument();
   });
 
+  it('показывает статус заявки на время часов рядом с её номером', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '14:10' });
+    const view = render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(within(card()).getByText('В работе')).toHaveClass('badge', 'badge--clock-working');
+    view.unmount();
+
+    // В 11:30 инженер ещё не выехал к 50104: статуса нет.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '11:30' });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(within(card()).queryByText('В работе')).not.toBeInTheDocument();
+  });
+
   it('renders nothing without a selection', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState() });
     const { container } = render(<ExplanationCard />);
