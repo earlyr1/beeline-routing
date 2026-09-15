@@ -32,6 +32,6 @@ describe('App', () => {
     expect(screen.getByText('2 из 3')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeInTheDocument();
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Заявки', 'Таймлайн', 'Неназначенные1', 'Сравнение', 'Рекомендуемые изменения']);
-    expect(await screen.findByText('Карта отключена')).toBeInTheDocument();
+    expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
   });
 });
