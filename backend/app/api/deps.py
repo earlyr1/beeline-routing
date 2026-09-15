@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from app.api.ingest_service import BundleStore, IngestDeps
@@ -10,12 +11,27 @@ from app.api.registry import DatasetRegistry
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.geo.osrm import OsrmClient
-from app.ingest.geocode import Geocoder, GeoResult, JsonGeocodeCache, NominatimGeocoder, geocode_address
+from app.ingest.geocode import (
+    NO_ADDRESS,
+    Geocoder,
+    GeoResult,
+    JsonGeocodeCache,
+    NominatimGeocoder,
+    ReverseAddress,
+    ReverseGeocodeCache,
+    ReverseGeocoder,
+    geocode_address,
+    reverse_geocode,
+)
 from app.llm.client import LlmClient, OpenAiLlmClient
 from app.llm.store import ProposalStore
 from app.planning.session import PlanningContext
 from app.settings import BACKEND_DIR, Settings
 from app.synth.config import SynthConfig
+
+
+def _without_reverse(lat: float, lon: float) -> ReverseAddress:
+    return NO_ADDRESS
 
 
 @dataclass
@@ -27,6 +43,8 @@ class AppDeps:
     kv: KVCache
     llm: LlmClient | None = None
     proposals: ProposalStore = field(default_factory=ProposalStore)
+    # Адрес точки на карте: (lat, lon) -> короткий адрес и точность.
+    reverse_geocode: Callable[[float, float], ReverseAddress] = _without_reverse
 
 
 def build_llm(settings: Settings) -> LlmClient | None:
@@ -42,10 +60,14 @@ def build_llm(settings: Settings) -> LlmClient | None:
 
 
 def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) -> AppDeps:
+    """Геокодер из geocoder_override ищет и по точке, если у него есть метод reverse."""
     kv = KVCache(settings.cache_path)
     osrm = OsrmClient(settings.osrm_url) if settings.osrm_url else None
     geocoder = geocoder_override or (NominatimGeocoder() if settings.geocoder == "nominatim" else None)
+    reverse_geocoder = geocoder if isinstance(geocoder, ReverseGeocoder) else None
     cache = JsonGeocodeCache(settings.geocode_cache_path)
+    reverse_cache = ReverseGeocodeCache()
+    # Одна блокировка на поиск по адресу и по точке: к Nominatim идёт не больше одного запроса за раз.
     lock = threading.Lock()
 
     def geocode(address: str, district: str) -> GeoResult:
@@ -54,6 +76,10 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
                 return geocode_address(address, district, geocoder, cache)
             finally:
                 cache.save()
+
+    def reverse(lat: float, lon: float) -> ReverseAddress:
+        with lock:
+            return reverse_geocode(lat, lon, reverse_geocoder, reverse_cache)
 
     planning = PlanningContext(
         model=TravelModel(),
@@ -76,4 +102,5 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         osrm=osrm,
         kv=kv,
         llm=build_llm(settings),
+        reverse_geocode=reverse,
     )

@@ -83,6 +83,13 @@ class RouteGeometry(BaseModel):
     legs: list[RouteLeg]
 
 
+class PointAddress(BaseModel):
+    """Адрес точки на карте для ручной заявки; address — null, если адрес неизвестен."""
+
+    address: str | None
+    precision: Literal["house", "street", "locality", "none"]
+
+
 class ClientConfig(BaseModel):
     yandex_maps_api_key: str | None
     llm_enabled: bool
