@@ -23,3 +23,16 @@ export function overviewBounds(state: PlanningState, padding = 0.08): [LngLat, L
     [maxLon + padLon, minLat - padLat],
   ];
 }
+
+/** [широта, долгота]: порядок координат Leaflet. */
+export function toLatLng([lon, lat]: LngLat): [number, number] {
+  return [lat, lon];
+}
+
+/** Прямоугольник [верхний левый, нижний правый] в формате Leaflet: [юго-запад, северо-восток]. */
+export function toLatLngBounds([[left, top], [right, bottom]]: [LngLat, LngLat]): [[number, number], [number, number]] {
+  return [
+    [bottom, left],
+    [top, right],
+  ];
+}
