@@ -1,11 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Skill, Transport } from '../../api/types';
-import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type UrgentForm } from '../../lib/events';
+import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type PickedPoint, type UrgentForm } from '../../lib/events';
 import { isValidTime, laterTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 
 const SKILLS: Skill[] = ['emergency', 'connection', 'local'];
 const TRANSPORTS: Transport[] = ['car', 'foot', 'bike', 'public'];
+
+const samePoint = (a: PickedPoint | null, b: PickedPoint | null) => a?.lat === b?.lat && a?.lon === b?.lon;
 
 export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const state = useAppStore((s) => s.state);
@@ -44,12 +46,26 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   }, [ownPoint]);
   const point = ownPoint ?? form.point;
 
+  // Адрес, который диалог сам подставил по точке из меню карты; null — такого адреса в поле нет.
+  const autoAddress = useRef<string | null>(null);
   // Точка из меню карты: пока ищем её адрес, прежний найденный адрес к ней не относится; ничего не нашли — поле пустое.
   useEffect(() => {
     if (addressTyped || addressLookup === 'idle') return;
     const address = addressLookup === 'done' ? (suggestedAddress ?? '') : '';
+    autoAddress.current = address || null;
     setForm((prev) => ({ ...prev, address }));
   }, [addressLookup, suggestedAddress, addressTyped]);
+
+  // Диспетчер указал на карте другую точку: подставленный адрес прежней точки к ней не относится и стирается.
+  const shownPoint = useRef(point);
+  useEffect(() => {
+    if (samePoint(shownPoint.current, point)) return;
+    shownPoint.current = point;
+    const stale = autoAddress.current;
+    autoAddress.current = null;
+    if (stale === null || addressTyped) return;
+    setForm((prev) => (prev.address === stale ? { ...prev, address: '' } : prev));
+  }, [point, addressTyped]);
 
   const update = <K extends keyof UrgentForm>(key: K, value: UrgentForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
 

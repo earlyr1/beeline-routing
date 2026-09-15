@@ -57,7 +57,7 @@ export interface AppData {
   /** Заявка, открытая в диалоге «Изменить заявку»; null, когда диалог закрыт. */
   editingRequestId: string | null;
   delayDialogOpen: boolean;
-  /** Инженер, выбранный на странице бригады для диалога «Задержка инженера»; null — выбрать в диалоге. */
+  /** Инженер со страницы бригады для диалога «Задержка инженера»; null, когда диалог закрыт. */
   delayEngineerId: string | null;
   /** Диалог смены транспорта или недоступности для инженера со страницы бригады; null, когда закрыт. */
   engineerDialog: EngineerDialog | null;
@@ -91,8 +91,8 @@ export interface AppActions {
   /** Открыть диалог изменения заявки; точка, выбранная для прежнего изменения, сбрасывается. */
   startEdit(requestId: string): void;
   closeEdit(): void;
-  /** Открыть диалог задержки; engineerId со страницы бригады, null — инженера выберут в диалоге. */
-  startDelay(engineerId: string | null): void;
+  /** Открыть диалог задержки для инженера со страницы бригады. */
+  startDelay(engineerId: string): void;
   closeDelay(): void;
   /** Открыть смену транспорта или недоступность для инженера со страницы бригады. */
   openEngineerDialog(kind: EngineerDialogKind, engineerId: string): void;
@@ -178,7 +178,7 @@ function saveDatasetId(datasetId: string | null): void {
 let generation = 0;
 const isCurrent = (value: number) => value === generation;
 
-/** Номер поиска адреса по точке: ответ на прежнюю точку или для закрытого диалога не подставляется. */
+/** Номер поиска адреса по точке: ответ на заменённую точку или для закрытого диалога не подставляется. */
 let addressLookup = 0;
 
 export const useAppStore = create<AppState>()((set, get) => ({
@@ -327,7 +327,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   startPick(owner) {
     // Клик по карте теперь выбирает точку, а не открывает меню, поэтому прежнее меню закрывается.
-    set({ pickMode: true, pickedPoint: null, pickFor: owner ?? null, mapMenu: null });
+    // Новая точка срочной заявки заменяет точку из меню: адрес, найденный для прежней точки, к ней не относится.
+    const newUrgentPoint = owner === 'urgent';
+    if (newUrgentPoint) addressLookup += 1;
+    set({ pickMode: true, pickedPoint: null, pickFor: owner ?? null, mapMenu: null, ...(newUrgentPoint ? NO_ADDRESS_LOOKUP : {}) });
   },
 
   finishPick(point) {

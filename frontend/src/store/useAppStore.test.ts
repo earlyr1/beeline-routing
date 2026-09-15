@@ -242,10 +242,10 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ pickMode: false, pickFor: null });
   });
 
-  it('opens the delay dialog for any engineer or for a chosen one and closes it', () => {
+  it('opens the delay dialog for the engineer of the brigade page and closes it', () => {
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
-    useAppStore.getState().startDelay(null);
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: null });
+    useAppStore.getState().startDelay('E01');
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E01' });
     useAppStore.getState().startDelay('E02');
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E02' });
     useAppStore.getState().closeDelay();
@@ -395,6 +395,36 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ toolbarDialog: null, urgentAddressLookup: 'idle', urgentSuggestedAddress: null });
   });
 
+  it('forgets the address lookup of the menu point once the dispatcher picks another point for the urgent request', async () => {
+    const lookup = deferred<ReverseGeocode>();
+    vi.mocked(api.getReverseGeocode).mockReturnValueOnce(lookup.promise);
+    const menuPoint = { lat: 55.71, lon: 37.8 };
+    const picked = { lat: 55.76, lon: 37.62 };
+    const adding = useAppStore.getState().addRequestAt(menuPoint);
+
+    // Точку для изменения заявки выбирают отдельно: поиск адреса срочной заявки продолжается.
+    useAppStore.getState().startPick('edit');
+    expect(useAppStore.getState().urgentAddressLookup).toBe('loading');
+
+    useAppStore.getState().startPick('urgent');
+    expect(useAppStore.getState()).toMatchObject({ urgentAddressLookup: 'idle', urgentSuggestedAddress: null });
+    useAppStore.getState().finishPick(picked);
+    lookup.resolve({ address: 'Москва, Перовская улица, 42к1', precision: 'house' });
+    await adding;
+    expect(useAppStore.getState()).toMatchObject({
+      toolbarDialog: 'urgent',
+      pickedPoint: picked,
+      urgentAddressLookup: 'idle',
+      urgentSuggestedAddress: null,
+    });
+
+    vi.mocked(api.getReverseGeocode).mockResolvedValueOnce({ address: 'Москва, Тверская улица, 7', precision: 'house' });
+    await useAppStore.getState().addRequestAt(menuPoint);
+    expect(useAppStore.getState()).toMatchObject({ urgentAddressLookup: 'done', urgentSuggestedAddress: 'Москва, Тверская улица, 7' });
+    useAppStore.getState().startPick('urgent');
+    expect(useAppStore.getState()).toMatchObject({ urgentAddressLookup: 'idle', urgentSuggestedAddress: null });
+  });
+
   it('keeps only one of the delay and request edit dialogs open', () => {
     useAppStore.getState().startEdit('50104');
     useAppStore.getState().startPick('edit');
@@ -413,7 +443,7 @@ describe('useAppStore', () => {
     const point = { lat: 55.71, lon: 37.8 };
     useAppStore.getState().startPick('urgent');
     useAppStore.getState().finishPick(point);
-    useAppStore.getState().startDelay(null);
+    useAppStore.getState().startDelay('E01');
     expect(useAppStore.getState()).toMatchObject({ pickFor: 'urgent', pickedPoint: point });
   });
 

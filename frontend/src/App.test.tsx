@@ -221,6 +221,35 @@ describe('App', () => {
     expect(useAppStore.getState().error).toBeNull();
   });
 
+  it('does not label a point picked again on the map with the address of the menu point', async () => {
+    const lookup = deferred<ReverseGeocode>();
+    vi.mocked(api.getReverseGeocode).mockReturnValue(lookup.promise);
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), applyEvent });
+    const { container } = render(<App />);
+    const menu = await openMapMenu(container);
+    fireEvent.click(within(menu).getByRole('button', { name: 'Добавить заявку здесь' }));
+    const dialog = screen.getByRole('dialog', { name: 'Срочная заявка' });
+    const menuPoint = useAppStore.getState().pickedPoint;
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Указать точку на карте' }));
+    expect(within(dialog).queryByText('Ищем адрес…')).not.toBeInTheDocument();
+    fireEvent.click(container.querySelector('.leaflet-container') as HTMLElement, { clientX: MAP_WIDTH / 4, clientY: MAP_HEIGHT / 4 });
+    const picked = useAppStore.getState().pickedPoint as { lat: number; lon: number };
+    expect(picked).not.toBeNull();
+    expect(picked).not.toEqual(menuPoint);
+
+    await act(async () => lookup.resolve({ address: 'Москва, Перовская улица, 42к1', precision: 'house' }));
+    expect(within(dialog).getByLabelText('Адрес')).toHaveValue('');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Добавить и перепланировать' }));
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({
+      address: `Точка на карте ${picked.lat.toFixed(5)}, ${picked.lon.toFixed(5)}`,
+      lat: picked.lat,
+      lon: picked.lon,
+    });
+  });
+
   it('reopens the saved plan after a page reload', async () => {
     sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
     vi.mocked(api.getPlanningState).mockResolvedValue(makePlanningState());

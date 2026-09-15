@@ -178,6 +178,59 @@ describe('UrgentRequestDialog', () => {
   });
 });
 
+describe('UrgentRequestDialog address of a point picked again', () => {
+  const menuPoint = { lat: 55.71234, lon: 37.80123 };
+
+  beforeEach(() => {
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState(),
+      eventTime: '13:00',
+      pickFor: 'urgent',
+      pickedPoint: menuPoint,
+      urgentAddressLookup: 'done',
+      urgentSuggestedAddress: 'Москва, Перовская улица, 42к1',
+    });
+  });
+
+  it('drops the address found for the menu point once the dispatcher picks another point', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    // Пока новая точка не выбрана, прежняя точка и её адрес остаются вместе.
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к1');
+    expect(screen.getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
+
+    act(() => useAppStore.getState().finishPick({ lat: 55.76, lon: 37.62 }));
+    expect(screen.getByText('Точка: 55.76000, 37.62000')).toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить и перепланировать' }));
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ address: 'Точка на карте 55.76000, 37.62000', lat: 55.76, lon: 37.62 });
+  });
+
+  it('hides the address search when the dispatcher picks another point before the answer', () => {
+    useAppStore.setState({ urgentAddressLookup: 'loading', urgentSuggestedAddress: null });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    expect(screen.getByText('Ищем адрес…')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    expect(screen.queryByText('Ищем адрес…')).not.toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('');
+  });
+
+  it('keeps an address the dispatcher corrected by hand when another point is picked', () => {
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Москва, Перовская улица, 42к2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    act(() => useAppStore.getState().finishPick({ lat: 55.76, lon: 37.62 }));
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к2');
+  });
+});
+
 describe('map point ownership', () => {
   const noop = () => undefined;
   const dialog = (name: string) => within(screen.getByRole('dialog', { name }));
@@ -232,10 +285,10 @@ describe('EngineerDelayDialog', () => {
   const submitButton = () => screen.getByRole('button', { name: 'Перепланировать' });
 
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', delayDialogOpen: true });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', delayDialogOpen: true, delayEngineerId: 'E01' });
   });
 
-  it('preselects the busiest engineer, sets the minutes from presets and submits the delay', async () => {
+  it('opens for the engineer of the brigade page, sets the minutes from presets and submits the delay', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
     render(<EngineerDelayDialog />);
@@ -272,7 +325,7 @@ describe('EngineerDelayDialog', () => {
     });
   });
 
-  it('preselects the engineer of the route card and keeps it when the time changes', () => {
+  it('preselects the engineer of the brigade page and keeps it when the time changes', () => {
     resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true, delayEngineerId: 'E01' });
     render(<EngineerDelayDialog />);
     expect(valueOf('Инженер')).toBe('E01');
@@ -280,8 +333,8 @@ describe('EngineerDelayDialog', () => {
     expect(valueOf('Инженер')).toBe('E01');
   });
 
-  it('follows the busiest engineer when the time changes until the dispatcher picks one', () => {
-    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true });
+  it('falls back to the busiest engineer for a brigade that is already unavailable and follows the time until the dispatcher picks one', () => {
+    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true, delayEngineerId: 'E03' });
     render(<EngineerDelayDialog />);
     expect(valueOf('Инженер')).toBe('E02');
     expect(screen.getByRole('option', { name: 'Бригада Белузин (визитов после 13:00: 3)' })).toBeInTheDocument();
