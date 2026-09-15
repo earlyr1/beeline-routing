@@ -45,6 +45,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   cancel: 'Отмена заявки',
   restore: 'Возврат заявки',
   engineer_unavailable: 'Инженер недоступен',
+  engineer_transport_changed: 'Смена транспорта',
 };
 
 export const REASON_LABELS: Record<ReasonCode, string> = {

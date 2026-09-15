@@ -1,5 +1,5 @@
 import type { Engineer, HHMM, Plan, PlanEvent, ServiceRequest, Skill, Transport } from '../api/types';
-import { addMinutes, isValidTime, laterTime, toMinutes } from './format';
+import { addMinutes, isValidTime, laterTime, toMinutes, TRANSPORT_LABELS } from './format';
 
 /** Длина окна срочной заявки по умолчанию, минут. */
 export const URGENT_WINDOW_MIN = 120;
@@ -73,6 +73,24 @@ export function busiestEngineerId(engineers: Engineer[], plan: Plan, time: HHMM)
   return ranked[0]?.engineer.id ?? null;
 }
 
+/** Транспорт, который предлагаем при смене: без машины обычно пересаживаются на велосипед, иначе выдают машину. */
+export function defaultNewTransport(current: Transport): Transport {
+  return current === 'car' ? 'bike' : 'car';
+}
+
+/** Сколько визитов инженера, начинающихся в указанное время или позже, требуют автомобиль. */
+export function carRequiredVisitsFrom(plan: Plan, requests: ServiceRequest[], engineerId: string, time: HHMM): number {
+  const carOnly = new Set(requests.filter((request) => request.transport_required === 'car').map((request) => request.id));
+  const from = toMinutes(time);
+  const route = plan.routes.find((item) => item.engineer_id === engineerId);
+  return route ? route.visits.filter((visit) => toMinutes(visit.start) >= from && carOnly.has(visit.request_id)).length : 0;
+}
+
+/** Подсказка диспетчеру, когда инженер остаётся без машины, а в его маршруте есть заявки только для автомобиля. */
+export function carDowngradeHint(count: number, time: HHMM): string {
+  return `Заявок с требованием «${TRANSPORT_LABELS.car}» после ${time}: ${count}, их перераспределит оптимизатор`;
+}
+
 export function newUrgentId(timestamp: number): string {
   return `URG-${timestamp.toString(36).toUpperCase()}`;
 }
@@ -125,8 +143,26 @@ export const unavailableEvent = (engineerId: string, time: HHMM): PlanEvent => (
   engineer_id: engineerId,
 });
 
+/** Смена транспорта: клиент передаёт только новый транспорт, прежний сервер берёт у инженера сам. */
+export const transportChangeEvent = (engineerId: string, transport: Transport, time: HHMM): PlanEvent => ({
+  type: 'engineer_transport_changed',
+  time,
+  request: null,
+  request_id: null,
+  engineer_id: engineerId,
+  transport,
+});
+
 export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>): string {
   switch (event.type) {
+    case 'engineer_transport_changed': {
+      const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
+      const next = event.transport ? TRANSPORT_LABELS[event.transport] : 'другой транспорт';
+      if (event.previous_transport) {
+        return `Смена транспорта: ${name}, ${TRANSPORT_LABELS[event.previous_transport]} → ${next} с ${event.time}`;
+      }
+      return `Смена транспорта: ${name} на ${next} с ${event.time}`;
+    }
     case 'urgent':
       return `Срочная заявка ${event.request?.id ?? ''} в ${event.time}`;
     case 'cancel':

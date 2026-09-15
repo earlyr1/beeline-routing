@@ -1,4 +1,5 @@
 import type { PlanDiff, PlanningState, Proposal, ProposalStatus } from '../api/types';
+import { carDowngradeHint, carRequiredVisitsFrom } from './events';
 import { formatKm, formatWindow, shortAddress, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from './format';
 import { byId } from './planView';
 
@@ -39,6 +40,21 @@ export function proposalDetails(proposal: Proposal, state: PlanningState): strin
     const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
     if (affected === 0) return [`У ${name} нет заявок после ${event.time}`];
     return [`В маршруте после ${event.time}: ${affected} ${plural(affected, 'заявка', 'заявки', 'заявок')}, их перераспределит оптимизатор`];
+  }
+
+  if (event.type === 'engineer_transport_changed') {
+    const engineer = engineers.get(event.engineer_id ?? '');
+    const name = engineer?.name ?? event.engineer_id;
+    // У применённого события прежний транспорт уже записан сервером, у инженера в состоянии он сменился.
+    const from = event.previous_transport ?? engineer?.transport ?? null;
+    const to = event.transport ?? null;
+    const toLabel = to ? TRANSPORT_LABELS[to] : 'другой транспорт';
+    const details = [from ? `${name}: ${TRANSPORT_LABELS[from]} → ${toLabel} с ${event.time}` : `${name}: на ${toLabel} с ${event.time}`];
+    if (from === 'car' && to !== 'car' && event.engineer_id) {
+      const carOnly = carRequiredVisitsFrom(state.plan, state.requests, event.engineer_id, event.time);
+      if (carOnly > 0) details.push(carDowngradeHint(carOnly, event.time));
+    }
+    return details;
   }
 
   const request = requests.get(event.request_id ?? '');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makePlanningState } from '../test/fixtures';
+import { makePlanningState, makeTransportChangeEvent } from '../test/fixtures';
 import { makeProposal, makeUrgentProposal } from '../test/proposalFixtures';
 import { formatKm } from './format';
 import { diffSummary, plural, proposalDetails, upsertProposal } from './proposals';
@@ -19,6 +19,29 @@ describe('proposals view helpers', () => {
     expect(proposalDetails(proposal, state)).toEqual(['В маршруте после 13:30: 2 заявки, их перераспределит оптимизатор']);
     const late = makeProposal({ event: { type: 'engineer_unavailable', time: '21:00', request: null, request_id: null, engineer_id: 'E01' } });
     expect(proposalDetails(late, state)).toEqual(['У Бригада Арташкин нет заявок после 21:00']);
+  });
+
+  it('describes a transport change from the current transport and counts car-only requests on a downgrade', () => {
+    const downgrade = makeProposal({ event: makeTransportChangeEvent({ previous_transport: null }) });
+    expect(proposalDetails(downgrade, state)).toEqual([
+      'Бригада Арташкин: Автомобиль → Велосипед с 13:30',
+      'Заявок с требованием «Автомобиль» после 13:30: 1, их перераспределит оптимизатор',
+    ]);
+    const late = makeProposal({ event: makeTransportChangeEvent({ time: '16:00', previous_transport: null }) });
+    expect(proposalDetails(late, state)).toEqual(['Бригада Арташкин: Автомобиль → Велосипед с 16:00']);
+    const upgrade = makeProposal({
+      event: makeTransportChangeEvent({ engineer_id: 'E03', transport: 'car', previous_transport: null }),
+    });
+    expect(proposalDetails(upgrade, state)).toEqual(['Бригада Комарь: Пешеход → Автомобиль с 13:30']);
+  });
+
+  it('keeps the old transport of an applied transport change after the engineer switched', () => {
+    const switched = {
+      ...state,
+      engineers: state.engineers.map((engineer) => (engineer.id === 'E01' ? { ...engineer, transport: 'bike' as const } : engineer)),
+    };
+    const approved = makeProposal({ status: 'approved', event: makeTransportChangeEvent({ time: '16:00' }) });
+    expect(proposalDetails(approved, switched)).toEqual(['Бригада Арташкин: Автомобиль → Велосипед с 16:00']);
   });
 
   it('describes an urgent request with window, skill and transport', () => {

@@ -4,17 +4,21 @@ import {
   buildUrgentEvent,
   busiestEngineerId,
   cancelEvent,
+  carRequiredVisitsFrom,
+  defaultNewTransport,
   defaultUrgentWindow,
   describeEvent,
   earliestShiftStart,
   newUrgentId,
   restoreEvent,
   timeError,
+  transportChangeEvent,
   unavailableEvent,
   validateUrgentForm,
   visitsFrom,
   type UrgentForm,
 } from './events';
+import { EVENT_LABELS } from './format';
 import { byId } from './planView';
 
 const form: UrgentForm = {
@@ -100,5 +104,42 @@ describe('events', () => {
     const engineers = byId(makePlanningState().engineers);
     expect(describeEvent(unavailableEvent('E03', '13:00'), engineers)).toBe('Инженер недоступен: Бригада Комарь с 13:00');
     expect(describeEvent(cancelEvent('10135', '09:30'), engineers)).toBe('Отмена заявки 10135 в 09:30');
+  });
+
+  it('builds a transport change event with the new transport only', () => {
+    expect(transportChangeEvent('E01', 'bike', '14:00')).toEqual({
+      type: 'engineer_transport_changed',
+      time: '14:00',
+      request: null,
+      request_id: null,
+      engineer_id: 'E01',
+      transport: 'bike',
+    });
+    expect(EVENT_LABELS.engineer_transport_changed).toBe('Смена транспорта');
+  });
+
+  it('describes a transport change with and without the previous transport', () => {
+    const engineers = byId(makePlanningState().engineers);
+    const applied = { ...transportChangeEvent('E01', 'bike', '13:30'), previous_transport: 'car' as const };
+    expect(describeEvent(applied, engineers)).toBe('Смена транспорта: Бригада Арташкин, Автомобиль → Велосипед с 13:30');
+    expect(describeEvent(transportChangeEvent('E03', 'public', '14:00'), engineers)).toBe(
+      'Смена транспорта: Бригада Комарь на Общественный транспорт с 14:00',
+    );
+  });
+
+  it('suggests a bike instead of a car and a car instead of anything else', () => {
+    expect(defaultNewTransport('car')).toBe('bike');
+    expect((['foot', 'bike', 'public'] as const).map(defaultNewTransport)).toEqual(['car', 'car', 'car']);
+  });
+
+  it('counts the visits of an engineer from a time that require a car', () => {
+    const { plan, requests } = makePlanningState();
+    expect(carRequiredVisitsFrom(plan, requests, 'E01', '13:00')).toBe(1);
+    expect(carRequiredVisitsFrom(plan, requests, 'E01', '15:10')).toBe(1);
+    expect(carRequiredVisitsFrom(plan, requests, 'E01', '15:11')).toBe(0);
+    expect(carRequiredVisitsFrom(plan, requests, 'E02', '13:00')).toBe(1);
+    expect(carRequiredVisitsFrom(plan, requests, 'E02', '14:00')).toBe(0);
+    expect(carRequiredVisitsFrom(plan, requests, 'E03', '00:00')).toBe(0);
+    expect(carRequiredVisitsFrom(plan, requests, 'E99', '00:00')).toBe(0);
   });
 });

@@ -6,7 +6,7 @@ export type Skill = 'local' | 'connection' | 'emergency';
 export type Transport = 'car' | 'foot' | 'bike' | 'public';
 export type Priority = 'normal' | 'urgent';
 export type RequestStatus = 'active' | 'cancelled';
-export type EventType = 'urgent' | 'cancel' | 'restore' | 'engineer_unavailable';
+export type EventType = 'urgent' | 'cancel' | 'restore' | 'engineer_unavailable' | 'engineer_transport_changed';
 export type ReasonCode =
   | 'no_skill'
   | 'no_transport'
@@ -67,6 +67,10 @@ export interface PlanEvent {
   request: ServiceRequest | null;
   request_id: string | null;
   engineer_id: string | null;
+  /** Новый транспорт для engineer_transport_changed. */
+  transport?: Transport | null;
+  /** Транспорт до смены; заполняет сервер у применённого события, клиентское значение игнорируется. */
+  previous_transport?: Transport | null;
 }
 
 export interface Visit {

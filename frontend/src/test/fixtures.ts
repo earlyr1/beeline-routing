@@ -3,6 +3,7 @@ import type {
   Engineer,
   Explanation,
   Metrics,
+  PlanEvent,
   PlanningState,
   Route,
   RouteGeometry,
@@ -83,7 +84,9 @@ function requests(): ServiceRequest[] {
     request('74198', 'Город Москва, пр-кт.Волгоградский, д. 128 к 5', 55.7008, 37.7822, 'connection', '10:00', '12:00', 60),
     request('86160', 'Город Москва, пер.Маяковского, д. 2', 55.7431, 37.6612, 'connection', '12:00', '14:00', 60),
     request('50104', 'Город Москва, ул.Грайвороновская, д. 10 к 2', 55.7212, 37.7336, 'local', '14:00', '16:00', 45),
-    request('46393', 'Город Москва, ул.Шарикоподшипниковская, д. 14', 55.7195, 37.68, 'local', '15:00', '17:00', 45),
+    request('46393', 'Город Москва, ул.Шарикоподшипниковская, д. 14', 55.7195, 37.68, 'local', '15:00', '17:00', 45, {
+      transport_required: 'car',
+    }),
     request('10135', 'Город Москва, ул.3-я Карачаровская, д. 5 к 2', 55.735, 37.751, 'local', '10:00', '12:00', 45, {
       status: 'cancelled',
     }),
@@ -201,6 +204,20 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       },
     ],
     matrix_source: 'osrm',
+    ...overrides,
+  };
+}
+
+/** Смена транспорта Бригады Арташкин с автомобиля на велосипед, как её возвращает сервер после применения. */
+export function makeTransportChangeEvent(overrides: Partial<PlanEvent> = {}): PlanEvent {
+  return {
+    type: 'engineer_transport_changed',
+    time: '13:30',
+    request: null,
+    request_id: null,
+    engineer_id: 'E01',
+    transport: 'bike',
+    previous_transport: 'car',
     ...overrides,
   };
 }
