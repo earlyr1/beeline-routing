@@ -14,6 +14,7 @@ from app.geo.osrm import OsrmClient
 from app.ingest.geocode import GeoResult
 from app.planning.diff import compute_diff
 from app.planning.models import AppliedEvent, PlanDiff
+from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import EngineerState, Problem, make_problem
@@ -29,7 +30,7 @@ class PlanningContext:
     traffic: TrafficProfile
     osrm: OsrmClient | None = None
     cache: KVCache | None = None
-    time_limit_s: int = 3
+    time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S
     geocode: Callable[[str, str], GeoResult] | None = None
 
 
@@ -87,9 +88,28 @@ def start_session(
     )
 
 
+def _on_the_way(problem: Problem, state: EngineerState, visit: Visit, now: int, open_ids: set[str]) -> bool:
+    """Инженер выехал к визиту раньше now, и выезд в now задержал бы начало работы.
+
+    Отменённая заявка и недоступный инженер не закрепляются: визит возвращается в пул.
+    """
+    if visit.request_id not in open_ids or not state.engineer.available or state.available_until <= now:
+        return False
+    if visit.arrival - visit.leg_min >= now:
+        return False
+    window_start = problem.request(visit.request_id).window_start
+    return max(now + visit.leg_min, window_start) > visit.start
+
+
 def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
-    """Закрепляет визиты, начатые до now, и переносит старт инженеров в текущую точку."""
+    """Закрепляет визиты, начатые до now, и визит, к которому инженер уже едет.
+
+    Инженер продолжает день из точки последнего закреплённого визита в его время окончания.
+    Visit.pinned остаётся True только у начатой работы: для диспетчера «закреплена» значит «уже
+    в работе, отменить нельзя». Визит в пути солвер не трогает, но отменить его можно до начала работы.
+    """
     routes = {route.engineer_id: route for route in plan.routes}
+    open_ids = set(problem.open_request_ids)
     pinned: dict[str, list[Visit]] = {}
     previous_assignment: dict[str, str] = {}
     previous_order: dict[str, list[str]] = {}
@@ -99,12 +119,15 @@ def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
         engineer_id = state.engineer.id
         visits = routes[engineer_id].visits if engineer_id in routes else []
         done = [visit for visit in visits if visit.start < now]
-        rest = [visit.request_id for visit in visits if visit.start >= now]
+        upcoming = [visit for visit in visits if visit.start >= now]
+        if upcoming and _on_the_way(problem, state, upcoming[0], now, open_ids):
+            done.append(upcoming.pop(0))
+        rest = [visit.request_id for visit in upcoming]
         start_node, available_from = state.start_node, max(state.available_from, now)
         if done:
             start_node = problem.request_node(done[-1].request_id)
             available_from = max(available_from, done[-1].end)
-        pinned[engineer_id] = [visit.model_copy(update={"pinned": True}) for visit in done]
+        pinned[engineer_id] = [visit.model_copy(update={"pinned": visit.start < now}) for visit in done]
         pinned_ids.update(visit.request_id for visit in done)
         previous_order[engineer_id] = rest
         previous_assignment.update({request_id: engineer_id for request_id in rest})
@@ -118,6 +141,24 @@ def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
         previous_order=previous_order,
         now=now,
     )
+
+
+def _located(request: Request, ctx: PlanningContext) -> Request:
+    if (request.lat is not None and request.lon is not None) or ctx.geocode is None:
+        return request
+    geo = ctx.geocode(request.address, request.district)
+    return request.model_copy(update={"lat": geo.lat, "lon": geo.lon, "geocode_precision": geo.precision})
+
+
+def geocode_urgent(event: Event, ctx: PlanningContext) -> Event:
+    """Координаты срочной заявки по адресу, если их не передали. Другие события не меняются.
+
+    Геокодер может отвечать долго, поэтому API вызывает функцию до блокировки датасета.
+    """
+    if event.type != EventType.URGENT or event.request is None:
+        return event
+    located = _located(event.request, ctx)
+    return event if located is event.request else event.model_copy(update={"request": located})
 
 
 def _started_visits(plan: Plan, now: int) -> dict[str, Visit]:
@@ -176,9 +217,7 @@ def _apply_to_inputs(
             f"Окно срочной заявки заканчивается в {fmt_hhmm(new.window_end)}, это раньше времени события "
             f"{fmt_hhmm(now)}."
         )
-    if (new.lat is None or new.lon is None) and ctx.geocode is not None:
-        geo = ctx.geocode(new.address, new.district)
-        new = new.model_copy(update={"lat": geo.lat, "lon": geo.lon, "geocode_precision": geo.precision})
+    new = _located(new, ctx)
     requests.append(new)
     return requests, engineers, event.model_copy(update={"request": new})
 

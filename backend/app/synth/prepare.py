@@ -19,6 +19,7 @@ from app.geo.osrm import OsrmClient
 from app.ingest.beeline_csv import RawFile, parse_beeline_csv
 from app.ingest.bundle import save_bundle
 from app.ingest.geocode import Geocoder, JsonGeocodeCache, NominatimGeocoder, geocode_address
+from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import make_problem
@@ -176,14 +177,21 @@ def prepare_region(
     return PrepareResult(bundle=bundle, fcfs=fcfs, optimized=optimized, report=report, self_check_ok=check[0])
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Готовит бандлы данных по регионам из выгрузки Билайна")
     parser.add_argument("--region", default="all", help="east | south_east | south_center | all")
     parser.add_argument(
         "--osrm-url", default=os.environ.get("OSRM_URL"), help="например http://localhost:5000"
     )
     parser.add_argument("--geocoder", choices=["nominatim", "cache-only"], default="nominatim")
-    parser.add_argument("--time-limit", type=int, default=3, help="секунд на OR-Tools")
+    parser.add_argument(
+        "--time-limit", type=int, default=DEFAULT_SOLVER_TIME_LIMIT_S, help="секунд на OR-Tools"
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
 
     cfg = SynthConfig.load(BACKEND_DIR / "config" / "synth_config.yaml")

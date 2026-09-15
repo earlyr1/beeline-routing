@@ -21,9 +21,15 @@ class Insertion:
     start: int
 
 
-def _open_sequence(plan: Plan, engineer_id: str) -> list[str]:
+def _held_ids(problem: Problem, engineer_id: str) -> set[str]:
+    """Визиты, которые солвер не трогает: начатая работа и визит, к которому инженер уже едет."""
+    return {visit.request_id for visit in problem.pinned.get(engineer_id, [])}
+
+
+def _open_sequence(problem: Problem, plan: Plan, engineer_id: str) -> list[str]:
     route = next((r for r in plan.routes if r.engineer_id == engineer_id), None)
-    return [visit.request_id for visit in route.visits if not visit.pinned] if route else []
+    held = _held_ids(problem, engineer_id)
+    return [visit.request_id for visit in route.visits if visit.request_id not in held] if route else []
 
 
 def _route_km(problem: Problem, state: EngineerState, sequence: list[str]) -> float:
@@ -70,7 +76,7 @@ def _alternative(
             engineer_id=engineer.id, feasible=False, reason=f"Инженер недоступен{since}"
         ), False
 
-    sequence = [rid for rid in _open_sequence(plan, engineer.id) if rid != request.id]
+    sequence = [rid for rid in _open_sequence(problem, plan, engineer.id) if rid != request.id]
     idle = not sequence and not problem.pinned.get(engineer.id)
     insertion = best_insertion(problem, state, sequence, request.id)
     if insertion is None:
@@ -82,13 +88,26 @@ def _alternative(
         )
         return Alternative(engineer_id=engineer.id, feasible=False, reason=text), idle
     note = ", но придётся задействовать ещё одного инженера" if idle else ""
+    mileage = (
+        "пробег почти не растёт"
+        if insertion.extra_km <= KM_EPSILON
+        else f"пробег +{insertion.extra_km:.1f} км"
+    )
     return Alternative(
         engineer_id=engineer.id,
         feasible=True,
         extra_km=insertion.extra_km,
         start=insertion.start,
-        reason=f"Может взять: пробег +{insertion.extra_km:.1f} км, начало {fmt_hhmm(insertion.start)}{note}",
+        reason=f"Может взять: {mileage}, начало {fmt_hhmm(insertion.start)}{note}",
     ), idle
+
+
+def _shown(alternative: Alternative) -> Alternative:
+    """Дорожные расстояния не всегда подчиняются неравенству треугольника, и прирост пробега бывает
+    чуть меньше нуля. Сортировка идёт по сырому значению, диспетчеру показываем не меньше нуля."""
+    if alternative.extra_km is None or alternative.extra_km >= 0:
+        return alternative
+    return alternative.model_copy(update={"extra_km": 0.0})
 
 
 def _window_detail(request: Request, visit: Visit) -> str:
@@ -103,7 +122,9 @@ def _window_detail(request: Request, visit: Visit) -> str:
     return text + f", запас до конца окна {request.window_end - visit.start} мин"
 
 
-def _assigned_constraints(request: Request, engineer: Engineer, visit: Visit) -> list[ConstraintCheck]:
+def _assigned_constraints(
+    request: Request, engineer: Engineer, visit: Visit, held: bool
+) -> list[ConstraintCheck]:
     required = request.transport_required
     if required is None:
         transport_detail = f"Требований к транспорту нет, у инженера «{TRANSPORT_RU[engineer.transport]}»"
@@ -112,7 +133,7 @@ def _assigned_constraints(request: Request, engineer: Engineer, visit: Visit) ->
             f"Нужен «{TRANSPORT_RU[required]}», у инженера «{TRANSPORT_RU[engineer.transport]}»"
         )
     until = engineer.shift_end
-    if not engineer.available and engineer.unavailable_from is not None and not visit.pinned:
+    if not engineer.available and engineer.unavailable_from is not None and not held:
         until = min(until, engineer.unavailable_from)
     return [
         ConstraintCheck(
@@ -192,7 +213,9 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
     if assigned is None:
         item = next((u for u in plan.unassigned if u.request_id == request.id), None)
         located = problem.has_request(request.id)
-        alternatives = [_alternative(problem, plan, s, request)[0] for s in problem.states] if located else []
+        alternatives = (
+            [_shown(_alternative(problem, plan, s, request)[0]) for s in problem.states] if located else []
+        )
         return Explanation(
             request_id=request.id,
             status="unassigned",
@@ -204,20 +227,32 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
 
     engineer_id, visit = assigned
     engineer = problem.state(engineer_id).engineer
-    constraints = _assigned_constraints(request, engineer, visit)
-    if visit.pinned:
+    held = request.id in _held_ids(problem, engineer_id)
+    constraints = _assigned_constraints(request, engineer, visit, held)
+    if held:
+        if visit.pinned:
+            summary = f"Исполнитель {engineer.name} начал работу в {fmt_hhmm(visit.start)}, визит закреплён."
+            factor = "Работа уже началась к моменту последнего события, поэтому заявка не переназначается."
+        else:
+            summary = (
+                f"Исполнитель {engineer.name} уже в пути к заявке, работа начнётся в {fmt_hhmm(visit.start)}."
+            )
+            factor = (
+                "Инженер уже выехал к заявке, поэтому она не переназначается. "
+                "Отменить заявку можно до начала работы."
+            )
         return Explanation(
             request_id=request.id,
             status="assigned",
             engineer_id=engineer_id,
-            summary=f"Исполнитель {engineer.name} начал работу в {fmt_hhmm(visit.start)}, визит закреплён.",
-            factors=["Работа уже началась к моменту последнего события, поэтому заявка не переназначается."],
+            summary=summary,
+            factors=[factor],
             constraints=constraints,
             visit=visit,
         )
 
     state = problem.state(engineer_id)
-    own_sequence = _open_sequence(plan, engineer_id)
+    own_sequence = _open_sequence(problem, plan, engineer_id)
     without = [rid for rid in own_sequence if rid != request.id]
     own_extra = round(_route_km(problem, state, own_sequence) - _route_km(problem, state, without), 2)
 
@@ -255,6 +290,11 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
         f"В плане задействовано инженеров: {plan.metrics.engineers_used}, суммарный пробег "
         f"{plan.metrics.total_km:.1f} км."
     )
+    added = (
+        "заявка почти не удлиняет маршрут"
+        if own_extra <= KM_EPSILON
+        else f"заявка добавляет к маршруту {own_extra:.1f} км"
+    )
     return Explanation(
         request_id=request.id,
         status="assigned",
@@ -262,10 +302,10 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
         summary=(
             f"Исполнитель {engineer.name}. Навык и транспорт подходят, работа начнётся в "
             f"{fmt_hhmm(visit.start)} в окне {fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}, "
-            f"заявка добавляет к маршруту {own_extra:.1f} км."
+            f"{added}."
         ),
         factors=factors,
         constraints=constraints,
         visit=visit,
-        alternatives=[pair[0] for pair in feasible] + [pair[0] for pair in infeasible],
+        alternatives=[_shown(pair[0]) for pair in feasible] + [pair[0] for pair in infeasible],
     )

@@ -1,8 +1,9 @@
 """Готовые события для демо: отмена, недоступность инженера, срочная заявка.
 
 Если передан оптимизированный план, события выбираются так, чтобы менять его заметно:
-отменяется заявка, стоящая в плане после времени события, недоступным становится инженер
-с наибольшим числом визитов после этого времени.
+отменяется заявка с окном не раньше времени события, стоящая в плане, недоступным становится
+инженер с наибольшим числом визитов после этого времени. Заявку с таким окном не начнут до события
+ни при каком лимите поиска, поэтому отмену примут и в демо с другим лимитом.
 """
 
 from __future__ import annotations
@@ -38,9 +39,9 @@ def build_demo_events(
         if c.status_bk in cfg.cancelled_control_statuses and s.request_id in located
     ]
     planned_start = {v.request_id: v.start for route in plan.routes for v in route.visits} if plan else {}
-    planned_later = [rid for rid in cancelled if planned_start.get(rid, -1) >= at]
     later = [rid for rid in cancelled if located[rid].window_start >= at]
-    candidates = planned_later or later or cancelled
+    planned_later = [rid for rid in cancelled if planned_start.get(rid, -1) >= at]
+    candidates = [rid for rid in later if rid in planned_start] or later or planned_later or cancelled
     if candidates:
         events.append(Event(type=EventType.CANCEL, time=at, request_id=candidates[0]))
 

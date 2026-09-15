@@ -11,6 +11,8 @@ BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = BACKEND_DIR.parent
 GEOCODERS = ("nominatim", "cache-only")
 LLM_TOOL_MODES = ("auto", "tools", "json")
+# С этим лимитом посчитаны бандлы и таблица результатов в README.
+DEFAULT_SOLVER_TIME_LIMIT_S = 5
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,6 @@ class Settings:
             llm_api_key=optional("LLM_API_KEY"),
             llm_model=optional("LLM_MODEL"),
             geocoder=geocoder,
-            solver_time_limit_s=int(optional("SOLVER_TIME_LIMIT_S") or 3),
+            solver_time_limit_s=int(optional("SOLVER_TIME_LIMIT_S") or DEFAULT_SOLVER_TIME_LIMIT_S),
             llm_tool_mode=llm_tool_mode,
         )

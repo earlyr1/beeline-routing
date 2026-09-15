@@ -15,6 +15,10 @@ from app.ingest.address import parse_address, query_variants
 
 # min_lat, min_lon, max_lat, max_lon: Москва и Московская область
 MOSCOW_REGION_BBOX = (54.2, 35.1, 57.0, 40.3)
+NOMINATIM_TIMEOUT_S = 5.0
+# После сетевой ошибки геокодер не вызывается минуту: адреса ищутся только в кэше и не ждут таймаутов.
+NETWORK_RETRY_S = 60.0
+_network_down_until: float | None = None
 
 
 @dataclass(frozen=True)
@@ -54,7 +58,7 @@ class NominatimGeocoder:
         self._base_url = base_url.rstrip("/")
         self._user_agent = user_agent
         self._min_interval_s = min_interval_s
-        self._client = client or httpx.Client(timeout=20.0)
+        self._client = client or httpx.Client(timeout=NOMINATIM_TIMEOUT_S)
         self._sleep = sleep
         self._clock = clock
         self._last_call: float | None = None
@@ -111,14 +115,32 @@ class JsonGeocodeCache:
         )
 
 
-def geocode_address(raw: str, district: str, geocoder: Geocoder | None, cache: JsonGeocodeCache) -> GeoResult:
+def _network_down(clock: Callable[[], float]) -> bool:
+    return _network_down_until is not None and clock() < _network_down_until
+
+
+def geocode_address(
+    raw: str,
+    district: str,
+    geocoder: Geocoder | None,
+    cache: JsonGeocodeCache,
+    clock: Callable[[], float] = time.monotonic,
+) -> GeoResult:
+    """Перебирает варианты запроса от точного к грубому; ошибки сети и сервиса не кэшируются.
+
+    После сетевой ошибки оставшиеся варианты и следующие адреса NETWORK_RETRY_S секунд ищутся только в кэше.
+    """
+    global _network_down_until
     for query, precision in query_variants(parse_address(raw), district):
         found, hit = cache.get(query)
         if not found:
-            if geocoder is None:
+            if geocoder is None or _network_down(clock):
                 continue
             try:
                 hit = geocoder.lookup(query)
+            except httpx.TransportError:
+                _network_down_until = clock() + NETWORK_RETRY_S
+                continue
             except httpx.HTTPError:
                 continue
             cache.put(query, hit)

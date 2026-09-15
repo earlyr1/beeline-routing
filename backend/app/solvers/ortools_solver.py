@@ -14,6 +14,7 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from app.domain.enums import Priority
 from app.domain.models import Plan
+from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.assemble import build_plan
 from app.solvers.eligibility import exclusion
 from app.solvers.problem import EngineerState, Problem
@@ -33,7 +34,9 @@ class ObjectiveWeights:
 class OrToolsSolver:
     name = "ortools"
 
-    def __init__(self, time_limit_s: int = 3, weights: ObjectiveWeights | None = None) -> None:
+    def __init__(
+        self, time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S, weights: ObjectiveWeights | None = None
+    ) -> None:
         self.time_limit_s = time_limit_s
         self.weights = weights or ObjectiveWeights()
 

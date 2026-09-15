@@ -28,6 +28,7 @@ def test_parses_cp1251_synthetic_file_and_finds_office():
     assert (first.window_start, first.window_end) == (1200, 1320)
     assert (second.window_start, second.window_end) == (1, 1439)
     assert second.row_index == 1
+    assert (first.line_no, second.line_no) == (2, 3)
     assert raw.skipped == ["строка 5: нет номера заявки или временного окна"]
 
 

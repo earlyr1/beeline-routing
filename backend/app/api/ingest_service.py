@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -13,7 +13,7 @@ from pydantic import ValidationError
 from app.api.registry import DatasetRecord, PreparedDay
 from app.api.schemas import GeocodingCounts, NotFoundAddress, UploadReport
 from app.domain.models import Bundle, Request
-from app.ingest.beeline_csv import RawFile, parse_beeline_csv
+from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
 from app.ingest.bundle import load_bundle
 from app.ingest.geocode import GeoResult
 from app.planning.session import PlanningContext, start_session
@@ -106,6 +106,22 @@ def _geocode_missing(record: DatasetRecord, requests: list[Request], geocode: Ge
     return result
 
 
+def _drop_repeated_ids(raw: RawFile) -> RawFile:
+    """Оставляет первую строку с каждым номером заявки, повторы попадают в отчёт о пропущенных строках."""
+    seen: set[str] = set()
+    rows: list[RawRequestRow] = []
+    skipped = list(raw.skipped)
+    for row in raw.rows:
+        if row.request_id in seen:
+            skipped.append(
+                f"строка {row.line_no}: номер заявки {row.request_id} повторяется, строка пропущена"
+            )
+            continue
+        seen.add(row.request_id)
+        rows.append(replace(row, row_index=len(rows)))
+    return replace(raw, rows=rows, skipped=skipped)
+
+
 def _read_upload(
     record: DatasetRecord, filename: str, data: bytes, deps: IngestDeps
 ) -> tuple[PreparedDay, str, list[str]]:
@@ -115,7 +131,9 @@ def _read_upload(
         except ValidationError as error:
             first = error.errors()[0]
             location = ".".join(str(part) for part in first["loc"])
-            raise ValueError(f"JSON не соответствует схеме бандла: {location}: {first['msg']}") from error
+            message = str(first["msg"]).removeprefix("Value error, ")
+            detail = f"{location}: {message}" if location else message
+            raise ValueError(f"JSON не соответствует схеме бандла: {detail}") from error
         requests = _geocode_missing(record, bundle.requests, deps.geocode)
         day = PreparedDay(
             bundle.region, bundle.office.title, bundle.office, requests, bundle.engineers, bundle.control_plan
@@ -131,6 +149,7 @@ def _read_upload(
     if [row.request_id for row in raw.rows] == [request.id for request in reference.requests]:
         requests, control = list(reference.requests), reference.control_plan
     else:
+        raw = _drop_repeated_ids(raw)
         _set(record, stage="geocoding", done=0, total=len(raw.rows))
         requests = build_requests(deps.synth_config, raw, None, _counting_geocoder(record, deps.geocode))
         control = None

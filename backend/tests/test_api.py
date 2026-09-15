@@ -1,5 +1,11 @@
+import json
+import threading
+
 from app.api.registry import DatasetRecord
+from app.domain.models import Bundle
+from app.ingest.geocode import GeoHit
 from tests.api_helpers import csv_bytes, make_client, sample_bundle, upload
+from tests.planning_helpers import OFFICE, day_engineers, transit_requests
 
 
 def _ready_dataset(client):
@@ -134,3 +140,95 @@ def test_upload_errors(tmp_path):
     pending = deps.registry.create()
     assert isinstance(pending, DatasetRecord)
     assert client.get(f"/api/datasets/{pending.dataset_id}/state").status_code == 409
+
+
+def test_bundle_with_repeated_request_ids_is_rejected(tmp_path):
+    client, _ = make_client(tmp_path)
+    data = sample_bundle().model_dump(mode="json")
+    data["requests"].append(dict(data["requests"][0], lat=55.8))
+    dataset_id = upload(client, "bundle.json", json.dumps(data).encode())
+    status = client.get(f"/api/datasets/{dataset_id}").json()
+    assert status["status"] == "failed"
+    assert status["error"] == "JSON не соответствует схеме бандла: повторяются номера заявок: R1"
+
+
+def test_csv_with_repeated_request_ids_keeps_first_row_and_reports_the_rest(tmp_path):
+    client, _ = make_client(tmp_path)
+    rows = [
+        ("N1", "10:00", "12:00", "Город Москва, ул.Таганская, д. 1"),
+        ("N1", "14:00", "16:00", "Город Москва, ул.Таганская, д. 3"),
+        ("N2", "14:00", "16:00", "Город Москва, ул.Марксистская, д. 5"),
+    ]
+    dataset_id = upload(client, "new.csv", csv_bytes(rows, office=None))
+    status = client.get(f"/api/datasets/{dataset_id}").json()
+    assert status["status"] == "ready", status
+    assert status["report"]["requests"] == 2
+    assert status["report"]["skipped_rows"] == ["строка 3: номер заявки N1 повторяется, строка пропущена"]
+    state = client.post(f"/api/datasets/{dataset_id}/plan").json()
+    planned = [visit["request_id"] for route in state["plan"]["routes"] for visit in route["visits"]]
+    unassigned = [item["request_id"] for item in state["plan"]["unassigned"]]
+    assert sorted(planned + unassigned) == ["N1", "N2"]
+
+
+class LockProbeGeocoder:
+    """Проверяет из другого потока, свободна ли блокировка датасета во время геокодирования."""
+
+    def __init__(self):
+        self.record = None
+        self.lock_free = []
+
+    def lookup(self, query):
+        def probe():
+            if self.record.lock.acquire(blocking=False):
+                self.record.lock.release()
+                self.lock_free.append(True)
+            else:
+                self.lock_free.append(False)
+
+        thread = threading.Thread(target=probe)
+        thread.start()
+        thread.join()
+        return GeoHit(55.75, 37.61, "building")
+
+
+def test_urgent_address_is_geocoded_before_taking_dataset_lock(tmp_path):
+    geocoder = LockProbeGeocoder()
+    client, deps = make_client(tmp_path, geocoder=geocoder)
+    dataset_id = _ready_dataset(client)
+    geocoder.record = deps.registry.get(dataset_id)
+    request = {
+        "id": "U1",
+        "address": "Город Москва, ул.Таганская, д. 1",
+        "district": "Таганский",
+        "duration_min": 30,
+        "window_start": "13:00",
+        "window_end": "15:00",
+        "skill": "emergency",
+    }
+    response = client.post(
+        f"/api/datasets/{dataset_id}/events", json={"type": "urgent", "time": "13:00", "request": request}
+    )
+    assert response.status_code == 200, response.text
+    assert geocoder.lock_free == [True]
+    stored = geocoder.record.session.events[0].event.request
+    assert (stored.lat, stored.lon, stored.geocode_precision) == (55.75, 37.61, "house")
+
+
+def test_visit_on_the_way_is_not_shown_as_started_and_can_be_cancelled(tmp_path):
+    """В 09:10 инженеры уже выехали к первым заявкам, но работа ещё не началась."""
+    requests = [r.model_copy(update={"district": "Таганский"}) for r in transit_requests()]
+    bundle = Bundle(region="t", office=OFFICE, requests=requests, engineers=day_engineers())
+    client, _ = make_client(tmp_path, bundle=bundle)
+    base = f"/api/datasets/{upload(client, 'bundle.json', bundle.model_dump_json().encode())}"
+    plan = client.post(f"{base}/plan").json()["plan"]
+    starts = {v["request_id"]: v["start"] for route in plan["routes"] for v in route["visits"]}
+    assert sorted(starts) == ["A", "B", "C"] and min(starts.values()) > "09:10"
+
+    response = client.post(f"{base}/events", json={"type": "cancel", "time": "09:10", "request_id": "C"})
+    assert response.status_code == 200, response.text
+    visits = [v for route in response.json()["plan"]["routes"] for v in route["visits"]]
+    assert {v["request_id"]: v["start"] for v in visits} == {"A": starts["A"], "B": starts["B"]}
+    assert [v["pinned"] for v in visits] == [False, False]
+
+    cancelled = client.post(f"{base}/events", json={"type": "cancel", "time": "09:20", "request_id": "B"})
+    assert cancelled.status_code == 200, cancelled.text
