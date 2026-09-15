@@ -1,19 +1,19 @@
 import { useEffect, useState } from 'react';
 import { getExplanation } from '../api/client';
 import type { Explanation } from '../api/types';
-import { isWorkStarted } from '../lib/events';
-import { formatKm, formatSigned, formatWindow, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
-import { assignmentIndex, byId } from '../lib/planView';
+import { brigadeName, formatKm, formatSigned, formatWindow, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
+import { byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
+import { EngineerLink } from './EngineerLink';
+import { RequestActions } from './RequestActions';
 
 export function ExplanationCard() {
   const datasetId = useAppStore((s) => s.datasetId);
   const state = useAppStore((s) => s.state);
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
+  const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const selectRequest = useAppStore((s) => s.selectRequest);
   const showPrevious = useAppStore((s) => s.showPrevious);
-  const busy = useAppStore((s) => s.busy);
-  const startEdit = useAppStore((s) => s.startEdit);
   const version = state?.version ?? 0;
   const [explanation, setExplanation] = useState<Explanation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -47,12 +47,18 @@ export function ExplanationCard() {
   if (!state || !selectedRequestId) return null;
   const request = state.requests.find((item) => item.id === selectedRequestId);
   const engineers = byId(state.engineers);
-  const nameOf = (engineerId: string | null) => (engineerId ? (engineers.get(engineerId)?.name ?? engineerId) : '—');
-  // Те же правила, что у кнопок в списке заявок; начатую работу проверяем по текущему плану.
-  const started = request ? isWorkStarted(request, assignmentIndex(state.plan).get(request.id)?.visit) : false;
+  const engineerLink = (engineerId: string | null) =>
+    engineerId ? <EngineerLink engineerId={engineerId} name={engineers.get(engineerId)?.name ?? engineerId} /> : '—';
+  // Карточка открыта поверх страницы бригады: ссылка возвращает на неё, выбранная бригада остаётся.
+  const brigade = selectedEngineerId ? engineers.get(selectedEngineerId) : undefined;
 
   return (
     <section className="explanation" aria-label="Объяснение по заявке">
+      {brigade && (
+        <button type="button" className="link-button explanation__back" onClick={() => selectRequest(null)}>
+          {`← ${brigadeName(brigade.name)}`}
+        </button>
+      )}
       <header className="explanation__head">
         <div>
           <h3>Заявка {selectedRequestId}</h3>
@@ -66,17 +72,8 @@ export function ExplanationCard() {
           )}
         </div>
         <div className="explanation__actions">
-          {request && (
-            <button
-              type="button"
-              className="btn btn-small"
-              disabled={busy || showPrevious || started}
-              title={started ? 'Работа уже началась, изменить нельзя' : undefined}
-              onClick={() => startEdit(request.id)}
-            >
-              Изменить
-            </button>
-          )}
+          {/* Те же кнопки и правила, что в строке списка заявок. */}
+          {request && <RequestActions request={request} />}
           <button type="button" className="btn btn-ghost btn-small" onClick={() => selectRequest(null)} aria-label="Закрыть объяснение">
             ✕
           </button>
@@ -90,7 +87,7 @@ export function ExplanationCard() {
           <p className="explanation__summary">{explanation.summary}</p>
           {explanation.visit && (
             <p className="muted">
-              {nameOf(explanation.engineer_id)}: приезд {explanation.visit.arrival}, начало {explanation.visit.start}, окончание{' '}
+              {engineerLink(explanation.engineer_id)}: приезд {explanation.visit.arrival}, начало {explanation.visit.start}, окончание{' '}
               {explanation.visit.end}, в пути {explanation.visit.leg_min} мин ({formatKm(explanation.visit.leg_km)})
             </p>
           )}
@@ -130,7 +127,7 @@ export function ExplanationCard() {
                 <tbody>
                   {explanation.alternatives.map((alternative) => (
                     <tr key={alternative.engineer_id}>
-                      <td>{nameOf(alternative.engineer_id)}</td>
+                      <td>{engineerLink(alternative.engineer_id)}</td>
                       <td>{alternative.feasible ? 'да' : 'нет'}</td>
                       <td>{alternative.start ?? '—'}</td>
                       <td>{alternative.extra_km === null ? '—' : `${formatSigned(alternative.extra_km, 1)} км`}</td>

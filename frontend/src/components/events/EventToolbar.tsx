@@ -1,19 +1,17 @@
 import { timeError } from '../../lib/events';
 import { useAppStore } from '../../store/useAppStore';
-import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
-import { TransportChangeDialog } from './TransportChangeDialog';
 import { UrgentRequestDialog } from './UrgentRequestDialog';
 
+/** Панель событий: время события и срочная заявка. События инженера открываются со страницы бригады. */
 export function EventToolbar() {
   const state = useAppStore((s) => s.state);
   const eventTime = useAppStore((s) => s.eventTime);
   const setEventTime = useAppStore((s) => s.setEventTime);
   const busy = useAppStore((s) => s.busy);
   const showPrevious = useAppStore((s) => s.showPrevious);
-  const startDelay = useAppStore((s) => s.startDelay);
-  // Открытый диалог хранит стор: главный экран сдвигает по нему диалоги изменения заявки и задержки.
-  const dialog = useAppStore((s) => s.toolbarDialog);
-  const setDialog = useAppStore((s) => s.openToolbarDialog);
+  // Открытый диалог хранит стор: главный экран сдвигает по нему плавающие диалоги, а меню карты открывает его с точкой.
+  const urgentOpen = useAppStore((s) => s.toolbarDialog === 'urgent');
+  const openDialog = useAppStore((s) => s.openToolbarDialog);
   const closeDialog = useAppStore((s) => s.closeToolbarDialog);
   if (!state) return null;
 
@@ -25,22 +23,10 @@ export function EventToolbar() {
         <input type="time" value={eventTime} min={state.now} onChange={(event) => setEventTime(event.target.value)} aria-invalid={error !== null} />
       </label>
       {error && <span className="error-text">{error}</span>}
-      <button type="button" className="btn btn-danger" disabled={busy || showPrevious} onClick={() => setDialog('urgent')}>
+      <button type="button" className="btn btn-danger" disabled={busy || showPrevious} onClick={() => openDialog('urgent')}>
         Срочная заявка
       </button>
-      <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => setDialog('transport')}>
-        Смена транспорта
-      </button>
-      {/* Диалог задержки один на экран: его открывает и карточка маршрута, поэтому он живёт в MainScreen. */}
-      <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => startDelay(null)}>
-        Задержка
-      </button>
-      <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => setDialog('unavailable')}>
-        Инженер недоступен
-      </button>
-      {dialog === 'urgent' && <UrgentRequestDialog onClose={closeDialog} />}
-      {dialog === 'transport' && <TransportChangeDialog onClose={closeDialog} />}
-      {dialog === 'unavailable' && <EngineerUnavailableDialog onClose={closeDialog} />}
+      {urgentOpen && <UrgentRequestDialog onClose={closeDialog} />}
     </div>
   );
 }

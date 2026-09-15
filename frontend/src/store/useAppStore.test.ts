@@ -10,11 +10,12 @@ vi.mock('../api/client', async (importOriginal) => {
     buildPlan: vi.fn(),
     getPlanningState: vi.fn(),
     postEvent: vi.fn(),
+    getReverseGeocode: vi.fn(),
   };
 });
 
 import * as api from '../api/client';
-import type { DatasetStatus, PlanningState } from '../api/types';
+import type { DatasetStatus, PlanningState, ReverseGeocode } from '../api/types';
 import { cancelEvent } from '../lib/events';
 import { makeDatasetStatus, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
@@ -255,18 +256,143 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
   });
 
-  it('remembers the open event toolbar dialog next to the request edit and forgets it on a new session', () => {
-    useAppStore.getState().openToolbarDialog('transport');
-    useAppStore.getState().startEdit('50104');
-    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: 'transport', editingRequestId: '50104' });
+  it('remembers the open urgent request dialog next to a floating dialog and forgets it on a new session', () => {
     useAppStore.getState().openToolbarDialog('urgent');
-    expect(useAppStore.getState().toolbarDialog).toBe('urgent');
+    useAppStore.getState().startEdit('50104');
+    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: 'urgent', editingRequestId: '50104' });
+    useAppStore.getState().openEngineerDialog('transport', 'E01');
+    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: 'urgent', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
     useAppStore.getState().closeToolbarDialog();
-    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: null, editingRequestId: '50104' });
+    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: null, engineerDialog: { kind: 'transport', engineerId: 'E01' } });
 
-    useAppStore.getState().openToolbarDialog('unavailable');
+    useAppStore.getState().openToolbarDialog('urgent');
     useAppStore.getState().reset();
     expect(useAppStore.getState().toolbarDialog).toBeNull();
+  });
+
+  it('opens the transport change and unavailability dialogs for an engineer and closes them', () => {
+    expect(useAppStore.getState().engineerDialog).toBeNull();
+    useAppStore.getState().openEngineerDialog('transport', 'E02');
+    expect(useAppStore.getState().engineerDialog).toEqual({ kind: 'transport', engineerId: 'E02' });
+    useAppStore.getState().openEngineerDialog('unavailable', 'E01');
+    expect(useAppStore.getState().engineerDialog).toEqual({ kind: 'unavailable', engineerId: 'E01' });
+    useAppStore.getState().closeEngineerDialog();
+    expect(useAppStore.getState().engineerDialog).toBeNull();
+
+    useAppStore.getState().openEngineerDialog('transport', 'E01');
+    useAppStore.getState().reset();
+    expect(useAppStore.getState().engineerDialog).toBeNull();
+  });
+
+  it('keeps only one floating dialog open: request edit, delay, transport change or unavailability', () => {
+    useAppStore.getState().startEdit('50104');
+    useAppStore.getState().startPick('edit');
+    useAppStore.getState().openEngineerDialog('transport', 'E02');
+    expect(useAppStore.getState()).toMatchObject({
+      engineerDialog: { kind: 'transport', engineerId: 'E02' },
+      editingRequestId: null,
+      delayDialogOpen: false,
+      pickMode: false,
+      pickFor: null,
+    });
+
+    useAppStore.getState().startDelay('E01');
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E01', engineerDialog: null });
+
+    useAppStore.getState().openEngineerDialog('unavailable', 'E01');
+    expect(useAppStore.getState()).toMatchObject({ engineerDialog: { kind: 'unavailable' }, delayDialogOpen: false, delayEngineerId: null });
+
+    useAppStore.getState().startEdit('46393');
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: '46393', engineerDialog: null, delayDialogOpen: false });
+
+    const point = { lat: 55.71, lon: 37.8 };
+    useAppStore.getState().startPick('urgent');
+    useAppStore.getState().finishPick(point);
+    useAppStore.getState().openEngineerDialog('transport', 'E01');
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: null, pickFor: 'urgent', pickedPoint: point });
+  });
+
+  it('opens the map menu at a point and closes it when a dialog opens, a pick starts or the session ends', () => {
+    const point = { lat: 55.71, lon: 37.8 };
+    const store = () => useAppStore.getState();
+    store().openMapMenu(point);
+    expect(store().mapMenu).toEqual(point);
+    store().closeMapMenu();
+    expect(store().mapMenu).toBeNull();
+
+    const closers = [
+      () => store().startEdit('50104'),
+      () => store().startDelay('E01'),
+      () => store().openEngineerDialog('transport', 'E01'),
+      () => store().openEngineerDialog('unavailable', 'E01'),
+      () => store().openToolbarDialog('urgent'),
+      () => store().startPick('edit'),
+      () => store().reset(),
+    ];
+    for (const close of closers) {
+      store().openMapMenu(point);
+      close();
+      expect(store().mapMenu).toBeNull();
+    }
+  });
+
+  it('adds a request at a map point: the urgent dialog gets the point and the address found for it', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    const lookup = deferred<ReverseGeocode>();
+    vi.mocked(api.getReverseGeocode).mockReturnValue(lookup.promise);
+    const point = { lat: 55.71, lon: 37.8 };
+    useAppStore.getState().openMapMenu(point);
+
+    const adding = useAppStore.getState().addRequestAt(point);
+    expect(useAppStore.getState()).toMatchObject({
+      mapMenu: null,
+      toolbarDialog: 'urgent',
+      pickMode: false,
+      pickFor: 'urgent',
+      pickedPoint: point,
+      urgentAddressLookup: 'loading',
+      urgentSuggestedAddress: null,
+    });
+    expect(api.getReverseGeocode).toHaveBeenCalledWith(55.71, 37.8);
+
+    lookup.resolve({ address: 'Москва, Перовская улица, 42к1', precision: 'house' });
+    await adding;
+    expect(useAppStore.getState()).toMatchObject({ urgentAddressLookup: 'done', urgentSuggestedAddress: 'Москва, Перовская улица, 42к1' });
+
+    useAppStore.getState().closeToolbarDialog();
+    expect(useAppStore.getState()).toMatchObject({ urgentAddressLookup: 'idle', urgentSuggestedAddress: null });
+  });
+
+  it('leaves the address empty when the lookup fails or finds nothing, without an error toast', async () => {
+    const point = { lat: 55.71, lon: 37.8 };
+    vi.mocked(api.getReverseGeocode).mockRejectedValueOnce(new api.ApiError(422, 'Точка вне Москвы и Московской области.'));
+    await useAppStore.getState().addRequestAt(point);
+    expect(useAppStore.getState()).toMatchObject({ urgentAddressLookup: 'done', urgentSuggestedAddress: null, error: null, pickedPoint: point });
+
+    vi.mocked(api.getReverseGeocode).mockResolvedValueOnce({ address: null, precision: 'none' });
+    await useAppStore.getState().addRequestAt(point);
+    expect(useAppStore.getState()).toMatchObject({ urgentAddressLookup: 'done', urgentSuggestedAddress: null });
+  });
+
+  it('ignores an address lookup for a point the dispatcher already replaced or a dialog already closed', async () => {
+    const first = deferred<ReverseGeocode>();
+    const second = deferred<ReverseGeocode>();
+    vi.mocked(api.getReverseGeocode).mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
+    const near = { lat: 55.71, lon: 37.8 };
+    const far = { lat: 55.76, lon: 37.62 };
+    const adding = [useAppStore.getState().addRequestAt(near), useAppStore.getState().addRequestAt(far)];
+    second.resolve({ address: 'Москва, Тверская улица, 7', precision: 'house' });
+    first.resolve({ address: 'Москва, Ташкентская улица, 16к2', precision: 'house' });
+    await Promise.all(adding);
+    expect(useAppStore.getState()).toMatchObject({ pickedPoint: far, urgentSuggestedAddress: 'Москва, Тверская улица, 7' });
+
+    const late = deferred<ReverseGeocode>();
+    vi.mocked(api.getReverseGeocode).mockReturnValueOnce(late.promise);
+    const pending = useAppStore.getState().addRequestAt(near);
+    useAppStore.getState().closeToolbarDialog();
+    late.resolve({ address: 'Москва, Ташкентская улица, 16к2', precision: 'house' });
+    await pending;
+    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: null, urgentAddressLookup: 'idle', urgentSuggestedAddress: null });
   });
 
   it('keeps only one of the delay and request edit dialogs open', () => {
@@ -310,9 +436,12 @@ describe('session after a page reload', () => {
     expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
 
     useAppStore.getState().setPlanningState(makePlanningState());
+    useAppStore.getState().openEngineerDialog('unavailable', 'E01');
+    useAppStore.getState().openMapMenu({ lat: 55.71, lon: 37.8 });
     vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus({ dataset_id: 'd_new' }));
     await useAppStore.getState().upload(new File(['x'], 'south.csv'));
     expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    expect(useAppStore.getState()).toMatchObject({ engineerDialog: null, mapMenu: null });
   });
 
   it('restores the saved plan', async () => {

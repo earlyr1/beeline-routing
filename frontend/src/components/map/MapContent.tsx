@@ -1,3 +1,5 @@
+import { useAppStore } from '../../store/useAppStore';
+import { MAP_MENU_Z_INDEX, MapMenu } from './MapMenu';
 import { MapOverviewButton } from './MapOverviewButton';
 import { useMapLocation } from './useMapLocation';
 import { activateMarker, pickPoint, useMapModel } from './useMapModel';
@@ -7,6 +9,7 @@ export function MapContent({ components }: { components: YMapsComponents }) {
   const { YMap, YMapDefaultSchemeLayer, YMapDefaultFeaturesLayer, YMapMarker, YMapFeature, YMapListener } = components;
   const model = useMapModel();
   const { location, showWholePlan } = useMapLocation();
+  const mapMenu = useAppStore((s) => s.mapMenu);
 
   if (!model) return null;
 
@@ -42,7 +45,16 @@ export function MapContent({ components }: { components: YMapsComponents }) {
             </div>
           </YMapMarker>
         ))}
-        <YMapListener layer="any" onClick={(_object: unknown, event: { coordinates: LngLat }) => pickPoint(event.coordinates)} />
+        {mapMenu && (
+          <YMapMarker key="map-menu" coordinates={[mapMenu.lon, mapMenu.lat]} zIndex={MAP_MENU_Z_INDEX}>
+            <MapMenu />
+          </YMapMarker>
+        )}
+        {/* Объект под курсором приходит первым аргументом: клик по маркеру или по меню карты меню не открывает. */}
+        <YMapListener
+          layer="any"
+          onClick={(object: unknown, event: { coordinates: LngLat }) => pickPoint(event.coordinates, object === undefined)}
+        />
       </YMap>
     </>
   );

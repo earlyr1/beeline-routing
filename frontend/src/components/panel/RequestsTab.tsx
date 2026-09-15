@@ -1,7 +1,6 @@
 import type { ServiceRequest } from '../../api/types';
 import { engineerColor } from '../../lib/colors';
-import { cancelEvent, isWorkStarted, restoreEvent } from '../../lib/events';
-import { formatWindow, isValidTime, laterTime, shortAddress } from '../../lib/format';
+import { formatWindow, shortAddress } from '../../lib/format';
 import {
   assignmentIndex,
   byId,
@@ -13,6 +12,8 @@ import {
   sortRequestsForList,
 } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
+import { EngineerLink } from '../EngineerLink';
+import { RequestActions } from '../RequestActions';
 
 export function RequestsTab() {
   const state = useAppStore((s) => s.state);
@@ -21,10 +22,6 @@ export function RequestsTab() {
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const selectRequest = useAppStore((s) => s.selectRequest);
   const selectEngineer = useAppStore((s) => s.selectEngineer);
-  const applyEvent = useAppStore((s) => s.applyEvent);
-  const startEdit = useAppStore((s) => s.startEdit);
-  const eventTime = useAppStore((s) => s.eventTime);
-  const busy = useAppStore((s) => s.busy);
   if (!state) return null;
 
   const plan = displayedPlan(state, showPrevious);
@@ -34,7 +31,6 @@ export function RequestsTab() {
   const ids = engineerIdsOf(state);
   // Отметки изменений видны и в плане до события: там бейдж говорит, что произойдёт с заявкой.
   const marks = diffMarks(state.last_diff);
-  const time = isValidTime(eventTime) ? laterTime(eventTime, state.now) : state.now;
   const rows = selectedEngineerId
     ? routeRequestIds(plan, selectedEngineerId)
         .map((id) => requests.get(id))
@@ -66,8 +62,6 @@ export function RequestsTab() {
           const badge = mark ? diffBadge(mark, request.id, state.last_diff, engineers, showPrevious) : null;
           const cancelled = request.status === 'cancelled';
           const pinned = Boolean(info?.visit.pinned);
-          const started = isWorkStarted(request, info?.visit);
-          const locked = busy || showPrevious || started;
           const classes = [
             'request-row',
             request.id === selectedRequestId ? 'request-row--selected' : '',
@@ -87,7 +81,7 @@ export function RequestsTab() {
                 <div className="request-row__meta">
                   <span>Окно {formatWindow(request.window_start, request.window_end)}</span>
                   <span>{info ? `Начало ${info.visit.start}` : cancelled ? 'Отменена' : 'Не назначена'}</span>
-                  <span>{engineer ? engineer.name : '—'}</span>
+                  <span>{engineer ? <EngineerLink engineerId={engineer.id} name={engineer.name} /> : '—'}</span>
                 </div>
                 <div className="badges">
                   {request.priority === 'urgent' && <span className="badge badge--urgent">Срочная</span>}
@@ -101,30 +95,7 @@ export function RequestsTab() {
                 </div>
               </div>
               <div className="request-row__actions">
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  disabled={locked}
-                  title={started ? 'Работа уже началась, изменить нельзя' : undefined}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    startEdit(request.id);
-                  }}
-                >
-                  Изменить
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-small"
-                  disabled={locked}
-                  title={started ? 'Работа уже началась, отменить нельзя' : undefined}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void applyEvent(cancelled ? restoreEvent(request.id, time) : cancelEvent(request.id, time));
-                  }}
-                >
-                  {cancelled ? 'Вернуть' : 'Отменить'}
-                </button>
+                <RequestActions request={request} />
               </div>
             </li>
           );

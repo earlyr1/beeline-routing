@@ -289,6 +289,13 @@ export interface ApproveAllResponse {
   state: PlanningState;
 }
 
+/** Адрес по точке на карте: ответ GET /api/geocode/reverse. */
+export interface ReverseGeocode {
+  /** Короткий адрес, который разбирает геокодер backend, например «Москва, Перовская улица, 42к1»; null — по точке ничего не известно. */
+  address: string | null;
+  precision: GeocodePrecision;
+}
+
 export interface ClientConfig {
   yandex_maps_api_key: string | null;
   llm_enabled: boolean;

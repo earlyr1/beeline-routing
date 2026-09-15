@@ -12,9 +12,11 @@ import {
   delayEvent,
   describeEvent,
   earliestShiftStart,
+  effectiveEventTime,
   forecastLines,
   isWorkStarted,
   newUrgentId,
+  requestActionState,
   requestChanges,
   requestEditForm,
   requestUpdateEvent,
@@ -283,6 +285,36 @@ describe('request update', () => {
     expect(isWorkStarted(requestOf('50104'), visitOf('50104'))).toBe(false);
     expect(isWorkStarted({ ...requestOf('74198'), status: 'cancelled' }, visitOf('74198'))).toBe(false);
     expect(isWorkStarted(requestOf('18754'), undefined)).toBe(false);
+  });
+
+  it('uses the toolbar time for events but never a time earlier than now or an invalid one', () => {
+    expect(effectiveEventTime('13:30', '13:00')).toBe('13:30');
+    expect(effectiveEventTime('12:00', '13:00')).toBe('13:00');
+    expect(effectiveEventTime('', '13:00')).toBe('13:00');
+  });
+
+  it('shares one rule for the edit, cancel and restore buttons of a request', () => {
+    const visits = assignmentIndex(state.plan);
+    const idle = { busy: false, showPrevious: false, eventTime: '13:30', now: '13:00' };
+    const actionsOf = (id: string, patch = {}) => requestActionState(requestOf(id), visits.get(id)?.visit, { ...idle, ...patch });
+
+    expect(actionsOf('50104')).toEqual({
+      cancelled: false,
+      disabled: false,
+      editTitle: undefined,
+      cancelTitle: undefined,
+      cancelLabel: 'Отменить',
+      cancelEvent: cancelEvent('50104', '13:30'),
+    });
+    expect(actionsOf('10135')).toMatchObject({ cancelled: true, disabled: false, cancelLabel: 'Вернуть', cancelEvent: restoreEvent('10135', '13:30') });
+    expect(actionsOf('50104', { eventTime: '12:00' }).cancelEvent.time).toBe('13:00');
+    expect(actionsOf('74198')).toMatchObject({
+      disabled: true,
+      editTitle: 'Работа уже началась, изменить нельзя',
+      cancelTitle: 'Работа уже началась, отменить нельзя',
+    });
+    expect(actionsOf('50104', { busy: true })).toMatchObject({ disabled: true, editTitle: undefined, cancelTitle: undefined });
+    expect(actionsOf('50104', { showPrevious: true }).disabled).toBe(true);
   });
 
   it('describes an applied request update with its changes and a client event without them', () => {

@@ -131,6 +131,50 @@ export function isWorkStarted(request: ServiceRequest, visit: Visit | undefined)
   return Boolean(visit?.pinned) && request.status !== 'cancelled';
 }
 
+/** Время события из панели: не раньше текущего времени плана, а вместо неверного значения текущее время. */
+export function effectiveEventTime(eventTime: string, now: HHMM): HHMM {
+  return isValidTime(eventTime) ? laterTime(eventTime, now) : now;
+}
+
+export interface RequestActionContext {
+  busy: boolean;
+  showPrevious: boolean;
+  /** Время события из панели, как его ввёл диспетчер. */
+  eventTime: string;
+  now: HHMM;
+}
+
+/** Кнопки «Изменить» и «Отменить» или «Вернуть» у заявки: одно правило для списка заявок и карточки заявки. */
+export interface RequestActionState {
+  cancelled: boolean;
+  /** Кнопки недоступны: идёт перепланирование, показан план до события или работа уже началась. */
+  disabled: boolean;
+  editTitle: string | undefined;
+  cancelTitle: string | undefined;
+  cancelLabel: string;
+  /** Что отправит кнопка «Отменить» или «Вернуть». */
+  cancelEvent: PlanEvent;
+}
+
+/** Правило кнопок заявки; visit берётся из текущего плана, потому что события меняют именно его. */
+export function requestActionState(
+  request: ServiceRequest,
+  visit: Visit | undefined,
+  { busy, showPrevious, eventTime, now }: RequestActionContext,
+): RequestActionState {
+  const cancelled = request.status === 'cancelled';
+  const started = isWorkStarted(request, visit);
+  const time = effectiveEventTime(eventTime, now);
+  return {
+    cancelled,
+    disabled: busy || showPrevious || started,
+    editTitle: started ? 'Работа уже началась, изменить нельзя' : undefined,
+    cancelTitle: started ? 'Работа уже началась, отменить нельзя' : undefined,
+    cancelLabel: cancelled ? 'Вернуть' : 'Отменить',
+    cancelEvent: cancelled ? restoreEvent(request.id, time) : cancelEvent(request.id, time),
+  };
+}
+
 export function newUrgentId(timestamp: number): string {
   return `URG-${timestamp.toString(36).toUpperCase()}`;
 }

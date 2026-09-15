@@ -7,12 +7,12 @@ import { useAppStore } from '../../store/useAppStore';
 /** Задержка по умолчанию, минут: типичная пробка или затянувшаяся работа на объекте. */
 const DEFAULT_DELAY_MIN = 30;
 
-/** Диалог «Задержка инженера»: один на экран, открывается из панели событий и из карточки маршрута. */
+/** Диалог «Задержка инженера»: один на экран, открывается со страницы бригады. */
 export function EngineerDelayDialog() {
   const state = useAppStore((s) => s.state);
   const delayEngineerId = useAppStore((s) => s.delayEngineerId);
   if (!state) return null;
-  // Ключ по инженеру: кнопка в карточке другого маршрута заполняет форму заново.
+  // Ключ по инженеру: кнопка на странице другой бригады заполняет форму заново.
   return <DelayForm key={delayEngineerId ?? ''} state={state} chosenEngineerId={delayEngineerId} />;
 }
 
@@ -30,7 +30,7 @@ function DelayForm({ state, chosenEngineerId }: { state: PlanningState; chosenEn
   const [engineerId, setEngineerId] = useState(() =>
     engineers.some((engineer) => engineer.id === chosenEngineerId) && chosenEngineerId ? chosenEngineerId : busiest(initialTime),
   );
-  // Инженера из карточки маршрута диспетчер уже выбрал сам, поэтому смена времени его не меняет.
+  // Инженера со страницы бригады диспетчер уже выбрал сам, поэтому смена времени его не меняет.
   const [engineerTouched, setEngineerTouched] = useState(() => engineers.some((engineer) => engineer.id === chosenEngineerId));
   const [minutes, setMinutes] = useState(String(DEFAULT_DELAY_MIN));
   const [errors, setErrors] = useState<string[]>([]);

@@ -1,6 +1,7 @@
 import type { ComponentType } from 'react';
 import { displayedPlan } from '../../lib/planView';
 import type { AppState } from '../../store/useAppStore';
+import { BrigadesTab } from './BrigadesTab';
 import { ComparisonTab } from './ComparisonTab';
 import { ProposalsTab } from './ProposalsTab';
 import { RequestsTab } from './RequestsTab';
@@ -17,6 +18,7 @@ export interface PanelTab {
 
 export const PANEL_TABS: PanelTab[] = [
   { id: 'requests', title: 'Заявки', component: RequestsTab },
+  { id: 'brigades', title: 'Бригады', component: BrigadesTab },
   { id: 'timeline', title: 'Таймлайн', component: TimelineTab },
   {
     id: 'unassigned',

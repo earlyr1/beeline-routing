@@ -2,8 +2,10 @@ import { useAppStore } from '../store/useAppStore';
 import { DiffBanner } from './DiffBanner';
 import { ErrorToast } from './ErrorToast';
 import { EngineerDelayDialog } from './events/EngineerDelayDialog';
+import { EngineerUnavailableDialog } from './events/EngineerUnavailableDialog';
 import { EventToolbar } from './events/EventToolbar';
 import { RequestEditDialog } from './events/RequestEditDialog';
+import { TransportChangeDialog } from './events/TransportChangeDialog';
 import { MapView } from './map/MapView';
 import { MetricsStrip } from './MetricsStrip';
 import { RightPanel } from './panel/RightPanel';
@@ -13,7 +15,8 @@ export function MainScreen() {
   const pickFor = useAppStore((s) => s.pickFor);
   const editingRequestId = useAppStore((s) => s.editingRequestId);
   const delayDialogOpen = useAppStore((s) => s.delayDialogOpen);
-  // Диалог панели событий и диалог изменения заявки или задержки открыты вместе: второй стоит левее, чтобы не закрыть первый.
+  const engineerDialog = useAppStore((s) => s.engineerDialog?.kind ?? null);
+  // Срочная заявка и плавающий диалог открыты вместе: плавающий стоит левее, чтобы не закрыть срочную заявку.
   const toolbarDialogOpen = useAppStore((s) => s.toolbarDialog !== null);
   // Подсказка называет диалог, который начал выбор точки: оба диалога могут быть открыты одновременно.
   const pickHint =
@@ -36,8 +39,11 @@ export function MainScreen() {
         </section>
         <RightPanel />
       </div>
+      {/* Плавающие диалоги открываются на одном месте; стор держит открытым только один из них. */}
       {editingRequestId && <RequestEditDialog />}
       {delayDialogOpen && <EngineerDelayDialog />}
+      {engineerDialog === 'transport' && <TransportChangeDialog />}
+      {engineerDialog === 'unavailable' && <EngineerUnavailableDialog />}
       <ErrorToast />
     </div>
   );

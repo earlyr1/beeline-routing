@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   addMinutes,
+  brigadeName,
   formatDuration,
   formatKm,
   formatSigned,
@@ -49,6 +50,12 @@ describe('format', () => {
     expect(formatDuration(45)).toBe('45 мин');
     expect(formatDuration(60)).toBe('1 ч');
     expect(formatDuration(365)).toBe('6 ч 5 мин');
+  });
+
+  it('names a brigade without repeating the word «Бригада»', () => {
+    expect(brigadeName('Бригада Белузин')).toBe('Бригада Белузин');
+    expect(brigadeName('бригада Белузин')).toBe('бригада Белузин');
+    expect(brigadeName('Белузин')).toBe('Бригада Белузин');
   });
 
   it('shortens Moscow addresses and drops the flat', () => {

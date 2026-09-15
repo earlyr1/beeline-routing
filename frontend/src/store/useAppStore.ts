@@ -1,5 +1,14 @@
 import { create } from 'zustand';
-import { ApiError, buildPlan, getConfig, getDatasetStatus, getPlanningState, postEvent, uploadFile } from '../api/client';
+import {
+  ApiError,
+  buildPlan,
+  getConfig,
+  getDatasetStatus,
+  getPlanningState,
+  getReverseGeocode,
+  postEvent,
+  uploadFile,
+} from '../api/client';
 import type { ClientConfig, DatasetStatus, HHMM, PlanEvent, PlanningState } from '../api/types';
 import type { PickedPoint } from '../lib/events';
 import { isValidTime, laterTime } from '../lib/format';
@@ -15,8 +24,19 @@ export const DEFAULT_EVENT_TIME: HHMM = '13:00';
 /** Диалог, для которого диспетчер указывает точку на карте. */
 export type PickOwner = 'urgent' | 'edit';
 
-/** Диалог панели событий; из них одновременно открыт только один. */
-export type ToolbarDialog = 'urgent' | 'transport' | 'unavailable';
+/** Диалог панели событий: на панели осталась только срочная заявка. */
+export type ToolbarDialog = 'urgent';
+
+/** Диалог инженера, который открывает страница бригады. */
+export type EngineerDialogKind = 'transport' | 'unavailable';
+
+export interface EngineerDialog {
+  kind: EngineerDialogKind;
+  engineerId: string;
+}
+
+/** Поиск адреса по точке срочной заявки: idle — не искали, loading — ждём ответ, done — ответ пришёл. */
+export type AddressLookup = 'idle' | 'loading' | 'done';
 
 export interface AppData {
   config: ClientConfig | null;
@@ -37,10 +57,17 @@ export interface AppData {
   /** Заявка, открытая в диалоге «Изменить заявку»; null, когда диалог закрыт. */
   editingRequestId: string | null;
   delayDialogOpen: boolean;
-  /** Инженер, выбранный в карточке маршрута для диалога «Задержка инженера»; null — выбрать в диалоге. */
+  /** Инженер, выбранный на странице бригады для диалога «Задержка инженера»; null — выбрать в диалоге. */
   delayEngineerId: string | null;
-  /** Открытый диалог панели событий; пока он открыт, диалоги изменения заявки и задержки стоят левее него. */
+  /** Диалог смены транспорта или недоступности для инженера со страницы бригады; null, когда закрыт. */
+  engineerDialog: EngineerDialog | null;
+  /** Открытый диалог панели событий; пока он открыт, плавающие диалоги стоят левее него. */
   toolbarDialog: ToolbarDialog | null;
+  /** Точка, где открыто меню карты после клика по пустому месту; null — меню закрыто. */
+  mapMenu: PickedPoint | null;
+  urgentAddressLookup: AddressLookup;
+  /** Адрес, найденный по точке срочной заявки; null — не нашли или не искали. */
+  urgentSuggestedAddress: string | null;
 }
 
 export interface AppActions {
@@ -64,11 +91,18 @@ export interface AppActions {
   /** Открыть диалог изменения заявки; точка, выбранная для прежнего изменения, сбрасывается. */
   startEdit(requestId: string): void;
   closeEdit(): void;
-  /** Открыть диалог задержки; engineerId из карточки маршрута, null — инженера выберут в диалоге. */
+  /** Открыть диалог задержки; engineerId со страницы бригады, null — инженера выберут в диалоге. */
   startDelay(engineerId: string | null): void;
   closeDelay(): void;
+  /** Открыть смену транспорта или недоступность для инженера со страницы бригады. */
+  openEngineerDialog(kind: EngineerDialogKind, engineerId: string): void;
+  closeEngineerDialog(): void;
   openToolbarDialog(dialog: ToolbarDialog): void;
   closeToolbarDialog(): void;
+  openMapMenu(point: PickedPoint): void;
+  closeMapMenu(): void;
+  /** «Добавить заявку здесь»: срочная заявка с точкой из меню карты и адресом, найденным по этой точке. */
+  addRequestAt(point: PickedPoint): Promise<void>;
   clearError(): void;
   reset(): void;
 }
@@ -93,8 +127,22 @@ export const initialAppData: AppData = {
   editingRequestId: null,
   delayDialogOpen: false,
   delayEngineerId: null,
+  engineerDialog: null,
   toolbarDialog: null,
+  mapMenu: null,
+  urgentAddressLookup: 'idle',
+  urgentSuggestedAddress: null,
 };
+
+/** Плавающие диалоги открываются на одном месте, поэтому открытый диалог закрывает остальные. */
+const NO_FLOATING_DIALOG = {
+  editingRequestId: null,
+  delayDialogOpen: false,
+  delayEngineerId: null,
+  engineerDialog: null,
+} satisfies Partial<AppData>;
+
+const NO_ADDRESS_LOOKUP = { urgentAddressLookup: 'idle', urgentSuggestedAddress: null } satisfies Partial<AppData>;
 
 const OFFLINE_CONFIG: ClientConfig = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: false };
 
@@ -130,6 +178,9 @@ function saveDatasetId(datasetId: string | null): void {
 let generation = 0;
 const isCurrent = (value: number) => value === generation;
 
+/** Номер поиска адреса по точке: ответ на прежнюю точку или для закрытого диалога не подставляется. */
+let addressLookup = 0;
+
 export const useAppStore = create<AppState>()((set, get) => ({
   ...initialAppData,
 
@@ -152,10 +203,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
       state: null,
       selectedRequestId: null,
       selectedEngineerId: null,
-      editingRequestId: null,
-      delayDialogOpen: false,
-      delayEngineerId: null,
+      ...NO_FLOATING_DIALOG,
       toolbarDialog: null,
+      mapMenu: null,
+      ...NO_ADDRESS_LOOKUP,
     });
     try {
       let status = await uploadFile(file);
@@ -275,7 +326,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   startPick(owner) {
-    set({ pickMode: true, pickedPoint: null, pickFor: owner ?? null });
+    // Клик по карте теперь выбирает точку, а не открывает меню, поэтому прежнее меню закрывается.
+    set({ pickMode: true, pickedPoint: null, pickFor: owner ?? null, mapMenu: null });
   },
 
   finishPick(point) {
@@ -287,8 +339,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   startEdit(requestId) {
-    // Диалоги задержки и изменения заявки открываются на одном месте: одновременно открыт только один.
-    set({ editingRequestId: requestId, delayDialogOpen: false, delayEngineerId: null });
+    set({ ...NO_FLOATING_DIALOG, editingRequestId: requestId, mapMenu: null });
     get().clearPick('edit');
   },
 
@@ -298,7 +349,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   startDelay(engineerId) {
-    set({ delayDialogOpen: true, delayEngineerId: engineerId, editingRequestId: null });
+    set({ ...NO_FLOATING_DIALOG, delayDialogOpen: true, delayEngineerId: engineerId, mapMenu: null });
     get().clearPick('edit');
   },
 
@@ -306,12 +357,52 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ delayDialogOpen: false, delayEngineerId: null });
   },
 
+  openEngineerDialog(kind, engineerId) {
+    set({ ...NO_FLOATING_DIALOG, engineerDialog: { kind, engineerId }, mapMenu: null });
+    get().clearPick('edit');
+  },
+
+  closeEngineerDialog() {
+    set({ engineerDialog: null });
+  },
+
   openToolbarDialog(dialog) {
-    set({ toolbarDialog: dialog });
+    set({ toolbarDialog: dialog, mapMenu: null });
   },
 
   closeToolbarDialog() {
-    set({ toolbarDialog: null });
+    addressLookup += 1;
+    set({ toolbarDialog: null, ...NO_ADDRESS_LOOKUP });
+  },
+
+  openMapMenu(point) {
+    set({ mapMenu: point });
+  },
+
+  closeMapMenu() {
+    set({ mapMenu: null });
+  },
+
+  async addRequestAt(point) {
+    const lookup = ++addressLookup;
+    const current = generation;
+    set({
+      mapMenu: null,
+      toolbarDialog: 'urgent',
+      pickMode: false,
+      pickFor: 'urgent',
+      pickedPoint: point,
+      urgentAddressLookup: 'loading',
+      urgentSuggestedAddress: null,
+    });
+    let address: string | null = null;
+    try {
+      address = (await getReverseGeocode(point.lat, point.lon)).address?.trim() || null;
+    } catch {
+      // Точка вне области, геокодер выключен или недоступен: адрес останется пустым, заявка уйдёт с точкой.
+    }
+    if (lookup !== addressLookup || !isCurrent(current)) return;
+    set({ urgentAddressLookup: 'done', urgentSuggestedAddress: address });
   },
 
   clearError() {
@@ -320,6 +411,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   reset() {
     generation += 1;
+    addressLookup += 1;
     saveDatasetId(null);
     set({ ...initialAppData, config: get().config });
   },

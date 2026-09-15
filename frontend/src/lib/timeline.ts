@@ -1,4 +1,4 @@
-import type { Engineer, Plan, PlanningState } from '../api/types';
+import type { Engineer, Plan, PlanningState, ServiceRequest } from '../api/types';
 import { toMinutes } from './format';
 
 /** Ось по умолчанию 08:00–23:00, расширяется под данные, но не дальше 00:00–24:00. */
@@ -59,40 +59,49 @@ export function hourTicks(scale: TimeScale): number[] {
   return ticks;
 }
 
-export function timelineRows(state: PlanningState, plan: Plan, scale: TimeScale): TimelineRow[] {
-  const requests = new Map(state.requests.map((request) => [request.id, request]));
-  return state.engineers.map((engineer) => {
-    const route = plan.routes.find((item) => item.engineer_id === engineer.id);
-    const shiftStart = percent(scale, toMinutes(engineer.shift_start));
-    const shiftEnd = percent(scale, toMinutes(engineer.shift_end));
-    const bars = (route?.visits ?? []).map((visit) => {
-      const request = requests.get(visit.request_id);
-      const start = toMinutes(visit.start);
-      const end = toMinutes(visit.end);
-      const left = percent(scale, start);
-      const right = percent(scale, end);
-      const windowLeft = percent(scale, toMinutes(request?.window_start ?? visit.start));
-      const windowRight = percent(scale, toMinutes(request?.window_end ?? visit.end));
-      return {
-        requestId: visit.request_id,
-        left: Math.min(left, 99.5),
-        width: Math.max(0.5, right - left),
-        windowLeft,
-        windowWidth: windowRight - windowLeft,
-        pinned: visit.pinned,
-        urgent: request?.priority === 'urgent',
-        late: visit.late_min > 0,
-        clipped: start < scale.from || end > scale.to,
-        label: `${visit.start}–${visit.end}`,
-      };
-    });
-    const unavailableFrom = engineer.available ? null : (engineer.unavailable_from ?? engineer.shift_start);
+function buildRow(engineer: Engineer, plan: Plan, scale: TimeScale, requests: Map<string, ServiceRequest>): TimelineRow {
+  const route = plan.routes.find((item) => item.engineer_id === engineer.id);
+  const shiftStart = percent(scale, toMinutes(engineer.shift_start));
+  const shiftEnd = percent(scale, toMinutes(engineer.shift_end));
+  const bars = (route?.visits ?? []).map((visit) => {
+    const request = requests.get(visit.request_id);
+    const start = toMinutes(visit.start);
+    const end = toMinutes(visit.end);
+    const left = percent(scale, start);
+    const right = percent(scale, end);
+    const windowLeft = percent(scale, toMinutes(request?.window_start ?? visit.start));
+    const windowRight = percent(scale, toMinutes(request?.window_end ?? visit.end));
     return {
-      engineer,
-      shiftLeft: shiftStart,
-      shiftWidth: shiftEnd - shiftStart,
-      unavailableLeft: unavailableFrom === null ? null : percent(scale, toMinutes(unavailableFrom)),
-      bars,
+      requestId: visit.request_id,
+      left: Math.min(left, 99.5),
+      width: Math.max(0.5, right - left),
+      windowLeft,
+      windowWidth: windowRight - windowLeft,
+      pinned: visit.pinned,
+      urgent: request?.priority === 'urgent',
+      late: visit.late_min > 0,
+      clipped: start < scale.from || end > scale.to,
+      label: `${visit.start}–${visit.end}`,
     };
   });
+  const unavailableFrom = engineer.available ? null : (engineer.unavailable_from ?? engineer.shift_start);
+  return {
+    engineer,
+    shiftLeft: shiftStart,
+    shiftWidth: shiftEnd - shiftStart,
+    unavailableLeft: unavailableFrom === null ? null : percent(scale, toMinutes(unavailableFrom)),
+    bars,
+  };
+}
+
+const requestIndex = (state: PlanningState) => new Map(state.requests.map((request) => [request.id, request]));
+
+export function timelineRows(state: PlanningState, plan: Plan, scale: TimeScale): TimelineRow[] {
+  const requests = requestIndex(state);
+  return state.engineers.map((engineer) => buildRow(engineer, plan, scale, requests));
+}
+
+/** Строка одного инженера для личного таймлайна на странице бригады: та же, что у него в общем таймлайне. */
+export function timelineRow(state: PlanningState, plan: Plan, scale: TimeScale, engineer: Engineer): TimelineRow {
+  return buildRow(engineer, plan, scale, requestIndex(state));
 }

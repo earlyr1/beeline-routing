@@ -8,6 +8,7 @@ import type {
   PlanEvent,
   PlanningState,
   Proposal,
+  ReverseGeocode,
   RouteGeometry,
 } from './types';
 
@@ -86,6 +87,10 @@ export const getExplanation = (datasetId: string, requestId: string) =>
 
 export const getRouteGeometry = (datasetId: string, engineerId: string, plan: 'current' | 'previous' = 'current') =>
   request<RouteGeometry>(`${dataset(datasetId)}/routes/${encodeURIComponent(engineerId)}/geometry?plan=${plan}`);
+
+/** Адрес по точке на карте: подставляется в срочную заявку, добавленную кликом по карте. */
+export const getReverseGeocode = (lat: number, lon: number) =>
+  request<ReverseGeocode>(`/geocode/reverse?${new URLSearchParams({ lat: String(lat), lon: String(lon) })}`);
 
 const proposal = (datasetId: string, proposalId: string) =>
   `${dataset(datasetId)}/proposals/${encodeURIComponent(proposalId)}`;
