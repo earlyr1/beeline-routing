@@ -400,6 +400,15 @@ h4 {
   border-radius: var(--radius);
 }
 
+.map-overview-button {
+  position: absolute;
+  z-index: 20;
+  top: 12px;
+  right: 12px;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+}
+
 .map-placeholder {
   height: 100%;
   display: flex;

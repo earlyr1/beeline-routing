@@ -18,7 +18,11 @@ import type { LngLat, LineStyle, MapLocation, YMapsComponents } from './yandexLo
 // Фейковые компоненты вместо Яндекс Карт: те же пропсы, обычный DOM.
 const fake: YMapsComponents = {
   YMap: ({ location, children }: { location: MapLocation; children?: ReactNode }) => (
-    <div data-testid="map" data-center={location.center.join(',')}>
+    <div
+      data-testid="map"
+      data-center={'center' in location ? location.center.join(',') : ''}
+      data-bounds={'bounds' in location ? JSON.stringify(location.bounds) : ''}
+    >
       {children}
     </div>
   ),
@@ -88,6 +92,22 @@ describe('MapContent', () => {
     act(() => useAppStore.getState().startPick());
     fireEvent.click(screen.getByRole('button', { name: 'map-click' }));
     expect(useAppStore.getState()).toMatchObject({ pickMode: false, pickedPoint: { lat: 55.71, lon: 37.8 } });
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalled());
+  });
+  it('opens on an overview of the whole plan and returns to it after a request is closed', async () => {
+    vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
+    render(<MapContent components={fake} />);
+    const map = screen.getByTestId('map');
+    expect(map.getAttribute('data-bounds')).not.toBe('');
+    expect(map).toHaveAttribute('data-center', '');
+
+    fireEvent.click(screen.getByTitle(/^50104:/));
+    expect(map).toHaveAttribute('data-center', '37.7336,55.7212');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Весь план' }));
+    expect(useAppStore.getState().selectedRequestId).toBeNull();
+    expect(map.getAttribute('data-bounds')).not.toBe('');
+    expect(map).toHaveAttribute('data-center', '');
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalled());
   });
 });

@@ -54,6 +54,15 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ error: 'В файле нет колонок: Адрес', busy: false });
   });
 
+  it('defaults event time to the middle of the day but never earlier than now', () => {
+    resetStore({ datasetId: 'd_test' });
+    expect(useAppStore.getState().eventTime).toBe('13:00');
+    useAppStore.getState().setPlanningState(makePlanningState({ now: '00:00' }));
+    expect(useAppStore.getState().eventTime).toBe('13:00');
+    useAppStore.getState().setPlanningState(makePlanningState({ now: '15:20' }));
+    expect(useAppStore.getState().eventTime).toBe('15:20');
+  });
+
   it('builds a plan and keeps event time not earlier than now', async () => {
     resetStore({ datasetId: 'd_test', eventTime: '10:00' });
     vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState());

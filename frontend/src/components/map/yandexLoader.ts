@@ -5,11 +5,10 @@ import type { ComponentType, ReactNode } from 'react';
 /** [lon, lat] */
 export type LngLat = [number, number];
 
-export interface MapLocation {
-  center: LngLat;
-  zoom: number;
-  duration?: number;
-}
+/** Центр и масштаб либо прямоугольник [верхний левый, нижний правый], как LngLatBounds в JS API v3. */
+export type MapLocation =
+  | { center: LngLat; zoom: number; duration?: number }
+  | { bounds: [LngLat, LngLat]; duration?: number };
 
 export interface LineStyle {
   stroke: { color: string; width: number }[];

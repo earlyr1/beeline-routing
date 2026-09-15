@@ -5,6 +5,8 @@ import type { PickedPoint } from '../lib/events';
 import { isValidTime, laterTime } from '../lib/format';
 
 export const POLL_INTERVAL_MS = 1000;
+/** Время события по умолчанию для демо: середина рабочего дня, но не раньше текущего времени плана. */
+export const DEFAULT_EVENT_TIME: HHMM = '13:00';
 
 export interface AppData {
   config: ClientConfig | null;
@@ -50,7 +52,7 @@ export const initialAppData: AppData = {
   selectedEngineerId: null,
   activeTab: 'requests',
   showPrevious: false,
-  eventTime: '00:00',
+  eventTime: DEFAULT_EVENT_TIME,
   busy: false,
   error: null,
   pickMode: false,
