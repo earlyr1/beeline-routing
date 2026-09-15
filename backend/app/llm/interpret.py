@@ -15,11 +15,17 @@ from app.domain.enums import TRANSPORT_RU, EventType, Priority, Skill, Transport
 from app.domain.models import Event, Request
 from app.domain.timeutil import HHMM
 from app.llm.client import LlmResult, ToolCall
-from app.planning.session import EventRejected, PlanningContext, PlanningSession, check_event
+from app.planning.session import (
+    EDITABLE_REQUEST_FIELDS,
+    EventRejected,
+    PlanningContext,
+    PlanningSession,
+    check_event,
+)
 
 NOTHING_FOUND = (
     "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена или возврат заявки, "
-    "срочная заявка, недоступность инженера или смена транспорта."
+    "срочная заявка, изменение заявки, недоступность инженера или смена транспорта."
 )
 
 
@@ -65,6 +71,16 @@ class UrgentArgs(_TimedArgs):
     transport_required: Literal["car", "foot", "bike", "public", "none"] | None = None
 
 
+class RequestUpdateArgs(RequestArgs):
+    address: str | None = Field(default=None, min_length=3)
+    window_start: HHMM | None = None
+    window_end: HHMM | None = None
+    duration_min: int | None = Field(default=None, gt=0, le=600)
+    skill: Skill | None = None
+    priority: Priority | None = None
+    transport_required: Literal["car", "foot", "bike", "public", "none"] | None = None
+
+
 class ClarifyArgs(BaseModel):
     question: str = Field(min_length=1)
 
@@ -75,6 +91,7 @@ ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "propose_restore": RequestArgs,
     "propose_engineer_unavailable": EngineerArgs,
     "propose_engineer_transport_change": TransportChangeArgs,
+    "propose_request_update": RequestUpdateArgs,
     "ask_clarification": ClarifyArgs,
 }
 
@@ -93,7 +110,7 @@ class Interpretation:
 
 
 class Unresolved(ValueError):
-    """Модель назвала инженера или заявку, которых нельзя однозначно найти."""
+    """Модель назвала инженера или заявку, которых нельзя однозначно найти, или не сказала, что менять."""
 
 
 def resolve_engineer(session: PlanningSession, value: str) -> str:
@@ -129,10 +146,31 @@ def _validation_text(error: ValidationError) -> str:
     return f"{location}: {message}" if location else message
 
 
+def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:
+    """Текущая заявка с полями, которые назвала модель. У нового адреса координаты сбрасываются: их найдёт геокодер."""
+    changes = args.model_dump(include=EDITABLE_REQUEST_FIELDS, exclude_none=True)
+    if not changes:
+        raise Unresolved(
+            f"Не понял, что изменить в заявке {stored.id}. Уточните окно, длительность, адрес или другое поле."
+        )
+    if "transport_required" in changes:
+        required = changes["transport_required"]
+        changes["transport_required"] = None if required == "none" else Transport(required)
+    if "address" in changes:
+        changes["address"] = changes["address"].strip()
+        if changes["address"] != stored.address:
+            changes.update(lat=None, lon=None)
+    return stored.model_copy(update=changes)
+
+
 def _build_event(
     name: str, args: BaseModel, session: PlanningSession, new_request_id: Callable[[], str]
 ) -> Event:
     time = args.time if args.time is not None else session.now
+    if name == "propose_request_update":
+        request_id = resolve_request(session, args.request_id)
+        request = _updated_request(session.request(request_id), args)
+        return Event(type=EventType.REQUEST_UPDATED, time=time, request_id=request_id, request=request)
     if name == "propose_cancel":
         return Event(type=EventType.CANCEL, time=time, request_id=resolve_request(session, args.request_id))
     if name == "propose_restore":
@@ -204,14 +242,13 @@ def _interpret_call(
         return
 
     request = event.request
-    key = (
-        event.type,
-        event.request_id,
-        event.engineer_id,
-        event.transport,
-        event.time,
-        request.address if request else None,
-    )
+    if request is None:
+        described = None
+    elif event.type == EventType.URGENT:
+        described = request.address  # номер срочной заявки у каждого вызова новый
+    else:
+        described = request.model_dump_json()
+    key = (event.type, event.request_id, event.engineer_id, event.transport, event.time, described)
     if key in seen:
         return
     seen.add(key)
@@ -222,7 +259,11 @@ def _interpret_call(
     except EventRejected as error:
         out.drafts.append(ProposalDraft(event=event, rationale=rationale, error=str(error)))
         return
-    if stored.request is not None and (stored.request.lat is None or stored.request.lon is None):
+    if (
+        stored.type == EventType.URGENT
+        and stored.request is not None
+        and (stored.request.lat is None or stored.request.lon is None)
+    ):
         out.drafts.append(
             ProposalDraft(
                 event=stored,

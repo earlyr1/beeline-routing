@@ -208,7 +208,8 @@ def test_csv_with_repeated_request_ids_keeps_first_row_and_reports_the_rest(tmp_
 class LockProbeGeocoder:
     """Проверяет из другого потока, свободна ли блокировка датасета во время геокодирования."""
 
-    def __init__(self):
+    def __init__(self, category="building"):
+        self.category = category
         self.record = None
         self.lock_free = []
 
@@ -223,7 +224,7 @@ class LockProbeGeocoder:
         thread = threading.Thread(target=probe)
         thread.start()
         thread.join()
-        return GeoHit(55.75, 37.61, "building")
+        return GeoHit(55.75, 37.61, self.category)
 
 
 def test_urgent_address_is_geocoded_before_taking_dataset_lock(tmp_path):
@@ -247,6 +248,100 @@ def test_urgent_address_is_geocoded_before_taking_dataset_lock(tmp_path):
     assert geocoder.lock_free == [True]
     stored = geocoder.record.session.events[0].event.request
     assert (stored.lat, stored.lon, stored.geocode_precision) == (55.75, 37.61, "house")
+
+
+def _request_of(state, request_id):
+    return next(request for request in state["requests"] if request["id"] == request_id)
+
+
+def test_request_update_event_replaces_request_and_explanation(tmp_path):
+    client, _ = make_client(tmp_path)
+    base = f"/api/datasets/{_ready_dataset(client)}"
+    before = _request_of(client.get(f"{base}/state").json(), "R2")
+    event = {"type": "request_updated", "time": "13:00", "request_id": "R2"}
+    sent = {
+        **before,
+        "window_start": "16:00",
+        "window_end": "18:00",
+        "duration_min": 60,
+        "lat": None,
+        "lon": None,
+    }
+
+    response = client.post(f"{base}/events", json={**event, "request": sent, "previous_request": sent})
+    assert response.status_code == 200, response.text
+    state = response.json()
+    stored = _request_of(state, "R2")
+    assert stored == {**before, "window_start": "16:00", "window_end": "18:00", "duration_min": 60}
+    applied = state["events"][0]["event"]
+    assert (applied["type"], applied["request_id"]) == ("request_updated", "R2")
+    assert (applied["previous_request"], applied["request"]) == (before, stored)
+    assert (applied["transport"], applied["previous_transport"]) == (None, None)
+    assert state["version"] == 2 and state["now"] == "13:00" and state["last_diff"] is not None
+    assert _request_of(client.get(f"{base}/state").json(), "R2") == stored
+    explanation = client.get(f"{base}/explain/R2").json()
+    assert "в окне 16:00–18:00" in explanation["summary"]
+
+    same = client.post(f"{base}/events", json={**event, "time": "13:30", "request": stored})
+    assert same.status_code == 422 and same.json()["detail"] == "В заявке R2 ничего не изменилось."
+    early = client.post(
+        f"{base}/events",
+        json={
+            **event,
+            "time": "13:30",
+            "request": {**stored, "window_start": "11:00", "window_end": "12:00"},
+        },
+    )
+    assert early.status_code == 422
+    assert early.json()["detail"] == "Окно заявки R2 заканчивается в 12:00, это раньше времени события 13:30."
+
+    mismatch = client.post(f"{base}/events", json={**event, "request_id": "R3", "request": stored})
+    assert mismatch.status_code == 422
+    assert (
+        mismatch.json()["detail"]
+        == "Некорректный запрос: номер заявки в request_id и request.id не совпадает"
+    )
+    incomplete = client.post(f"{base}/events", json=event)
+    assert incomplete.status_code == 422
+    assert (
+        incomplete.json()["detail"] == "Некорректный запрос: для изменения заявки нужны request_id и request"
+    )
+    assert client.get(f"{base}/state").json()["version"] == 2
+
+
+def test_new_request_address_is_geocoded_before_taking_dataset_lock(tmp_path):
+    geocoder = LockProbeGeocoder(category="highway")
+    client, deps = make_client(tmp_path, geocoder=geocoder)
+    dataset_id = _ready_dataset(client)
+    geocoder.record = deps.registry.get(dataset_id)
+    before = _request_of(client.get(f"/api/datasets/{dataset_id}/state").json(), "R2")
+    request = {**before, "address": "Город Москва, ул.Таганская, д. 7", "lat": None, "lon": None}
+
+    response = client.post(
+        f"/api/datasets/{dataset_id}/events",
+        json={"type": "request_updated", "time": "13:00", "request_id": "R2", "request": request},
+    )
+
+    assert response.status_code == 200, response.text
+    assert geocoder.lock_free == [True]
+    stored = geocoder.record.session.request("R2")
+    assert (stored.address, stored.lat, stored.lon, stored.geocode_precision) == (
+        "Город Москва, ул.Таганская, д. 7",
+        55.75,
+        37.61,
+        "street",
+    )
+    assert geocoder.record.session.events[0].event.request == stored
+
+    point = {**request, "address": "Точка на карте", "lat": 55.7601, "lon": 37.6202}
+    moved = client.post(
+        f"/api/datasets/{dataset_id}/events",
+        json={"type": "request_updated", "time": "13:10", "request_id": "R2", "request": point},
+    )
+    assert moved.status_code == 200, moved.text
+    assert geocoder.lock_free == [True]
+    placed = _request_of(moved.json(), "R2")
+    assert (placed["lat"], placed["lon"], placed["geocode_precision"]) == (55.7601, 37.6202, "house")
 
 
 def test_visit_on_the_way_is_not_shown_as_started_and_can_be_cancelled(tmp_path):

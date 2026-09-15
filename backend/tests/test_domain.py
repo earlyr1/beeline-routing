@@ -106,6 +106,30 @@ def test_other_events_accept_missing_transport():
     assert unavailable.transport is None
 
 
+def test_request_update_event_needs_request_id_and_matching_request():
+    text = "для изменения заявки нужны request_id и request"
+    with pytest.raises(ValidationError, match=text):
+        Event(type=EventType.REQUEST_UPDATED, time="13:00", request_id="R1")
+    with pytest.raises(ValidationError, match=text):
+        Event(type="request_updated", time="13:00", request=_request())
+    with pytest.raises(ValidationError, match="номер заявки в request_id и request.id не совпадает"):
+        Event(type="request_updated", time="13:00", request_id="R2", request=_request())
+    event = Event(type="request_updated", time="13:00", request_id="R1", request=_request(duration_min=45))
+    assert (event.type, event.request.duration_min, event.previous_request) == (
+        EventType.REQUEST_UPDATED,
+        45,
+        None,
+    )
+
+
+def test_other_events_have_no_previous_request():
+    event = Event(type=EventType.CANCEL, time="13:00", request_id="R1")
+    assert event.previous_request is None
+    assert event.model_dump(mode="json")["previous_request"] is None
+    urgent = Event(type=EventType.URGENT, time="13:00", request=_request(id="U1"), request_id="R1")
+    assert (urgent.request.id, urgent.request_id) == ("U1", "R1")
+
+
 def test_bundle_json_roundtrip():
     bundle = Bundle(
         region="east",

@@ -72,6 +72,8 @@ class Event(BaseModel):
     # Смена транспорта: transport — новый транспорт от клиента, previous_transport заполняет backend.
     transport: Transport | None = None
     previous_transport: Transport | None = None
+    # Изменение заявки: request — заявка с желаемыми значениями, previous_request (до изменения) заполняет backend.
+    previous_request: Request | None = None
 
     @model_validator(mode="after")
     def _payload(self) -> Event:
@@ -85,6 +87,11 @@ class Event(BaseModel):
             not self.engineer_id or self.transport is None
         ):
             raise ValueError("для смены транспорта нужны engineer_id и transport")
+        if self.type == EventType.REQUEST_UPDATED:
+            if not self.request_id or self.request is None:
+                raise ValueError("для изменения заявки нужны request_id и request")
+            if self.request.id != self.request_id:
+                raise ValueError("номер заявки в request_id и request.id не совпадает")
         return self
 
 
