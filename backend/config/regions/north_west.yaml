@@ -1,0 +1,65 @@
+# Сгенерированный регион «Северо-Запад»: реальных выгрузок по нему нет.
+# Адреса — жилые дома OpenStreetMap (© участники OpenStreetMap, ODbL), бригады и их распределение выдуманы.
+# Логистика сложнее, чем в трёх исходных регионах: петли Москвы-реки с редкими мостами (Строгино, Мнёвники,
+# Терехово, Крылатское), Химкинское водохранилище и канал имени Москвы (Тушино, Левобережный), река Сходня
+# (Куркино, Митино), Рижское, Смоленское и Октябрьское направления железной дороги и МЦК.
+#
+#   cd backend
+#   python -m app.synth.generate_region --spec config/regions/north_west.yaml --fetch   # обновить адреса из Overpass
+#   python -m app.synth.generate_region --spec config/regions/north_west.yaml           # CSV из сохранённых адресов
+region: north_west
+title: Северо-Запад
+date: "17.08.2026"
+seed: 20260917
+# Рамка северо-запада Москвы: у районов бывают тёзки в других городах (Левобережный район есть и в Дубне)
+bbox: {south: 55.69, west: 37.28, north: 55.93, east: 37.62}
+# Заявок без бригады со статусом «Не отправлена», как в реальных выгрузках
+not_sent: 1
+addresses_file: data/sources/north_west_addresses.json
+control_file: data/raw/north_west_control.csv
+synthetic_file: data/raw/north_west_synthetic.csv
+# Типы заявок, окна, статусы и колонки подключения берутся из распределения реальных контрольных файлов
+empirical_from:
+  - data/raw/east_control.csv
+  - data/raw/south_east_control.csv
+  - data/raw/south_center_control.csv
+
+office:
+  district: shchukino
+  street: улица Маршала Бирюзова
+
+# count — сколько заявок генерируется в районе (сумма 72, как у реальных регионов 56–83)
+districts:
+  - {id: khoroshevo_mnevniki, name: Хорошево-Мневники, osm_area: район Хорошёво-Мнёвники, count: 9}
+  # Терехово: улица Нижние Мнёвники внутри петли Москвы-реки, одна дорога внутрь
+  - {id: terekhovo, name: Хорошево-Мневники, around: {lat: 55.7484, lon: 37.4550, radius_m: 700}, count: 3}
+  - {id: strogino, name: Строгино, osm_area: район Строгино, count: 7}
+  - {id: shchukino, name: Щукино, osm_area: район Щукино, count: 6}
+  - {id: pokrovskoe_streshnevo, name: Покровское-Стрешнево, osm_area: район Покровское-Стрешнево, count: 4}
+  - {id: tushino_south, name: Тушино Южное, osm_area: район Южное Тушино, count: 5}
+  - {id: tushino_north, name: Тушино Северное, osm_area: район Северное Тушино, count: 5}
+  - {id: mitino, name: Митино, osm_area: район Митино, count: 6}
+  - {id: kurkino, name: Куркино, osm_area: район Куркино, count: 3}
+  - {id: krylatskoe, name: Крылатское, osm_area: район Крылатское, count: 5}
+  - {id: kuntsevo, name: Кунцево, osm_area: район Кунцево, count: 5}
+  - {id: filevsky_park, name: Филевский Парк, osm_area: район Филёвский Парк, count: 4}
+  - {id: fili_davydkovo, name: Фили-Давыдково, osm_area: район Фили-Давыдково, count: 3}
+  - {id: levoberezhny, name: Левобережный, osm_area: район Левобережный, count: 4}
+  - {id: khovrino, name: Ховрино, osm_area: район Ховрино, count: 3}
+
+# Бригады выдуманы. Территории нарочно пересекают реки, водохранилище и железную дорогу.
+# car: бригаде можно давать аварии и дозаказ оборудования (по истории она получит автомобиль);
+# машин не больше 9 из 12, иначе синтез транспорта не оставит места другим типам.
+crews:
+  - {name: Бригада Ворожцов, districts: [strogino, khoroshevo_mnevniki, terekhovo], car: true}
+  - {name: Бригада Галкин, districts: [shchukino, pokrovskoe_streshnevo], car: true}
+  - {name: Бригада Дробышев, districts: [tushino_south, tushino_north], car: true}
+  - {name: Бригада Ермолаев, districts: [mitino, kurkino], car: true}
+  - {name: Бригада Жиганов, districts: [krylatskoe, kuntsevo], car: true}
+  - {name: Бригада Зимин, districts: [kuntsevo, fili_davydkovo], car: false}
+  - {name: Бригада Кострикин, districts: [filevsky_park, khoroshevo_mnevniki, terekhovo], car: true}
+  - {name: Бригада Лукьянов, districts: [levoberezhny, khovrino], car: true}
+  - {name: Бригада Мухин, districts: [tushino_north, levoberezhny], car: false}
+  - {name: Бригада Никифоров, districts: [strogino, mitino], car: false}
+  - {name: Бригада Осипов, districts: [shchukino, tushino_south], car: true}
+  - {name: Бригада Тарасюк, districts: [krylatskoe, filevsky_park, fili_davydkovo], car: false}

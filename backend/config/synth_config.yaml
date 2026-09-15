@@ -22,6 +22,11 @@ regions:
     title: Югоцентр
     control: data/raw/south_center_control.csv
     synthetic: data/raw/south_center_synthetic.csv
+  # Сгенерированный регион: адреса OpenStreetMap, выдуманные бригады (config/regions/north_west.yaml)
+  north_west:
+    title: Северо-Запад
+    control: data/raw/north_west_control.csv
+    synthetic: data/raw/north_west_synthetic.csv
 
 # Тип заявки BK -> навык из справочника ТЗ (п. 2.4.1)
 skill_by_bk:

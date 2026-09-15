@@ -193,7 +193,7 @@ def prepare_region(
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Готовит бандлы данных по регионам из выгрузки Билайна")
-    parser.add_argument("--region", default="all", help="east | south_east | south_center | all")
+    parser.add_argument("--region", default="all", help="east | south_east | south_center | north_west | all")
     parser.add_argument(
         "--osrm-url", default=os.environ.get("OSRM_URL"), help="например http://localhost:5000"
     )

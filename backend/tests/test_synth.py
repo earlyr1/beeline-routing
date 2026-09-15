@@ -53,7 +53,7 @@ def row(
 
 
 def test_config_loads_all_regions(cfg):
-    assert set(cfg.regions) == {"east", "south_east", "south_center"}
+    assert set(cfg.regions) == {"east", "south_east", "south_center", "north_west"}
     assert cfg.skill_by_bk["Дозаказ"] == Skill.CONNECTION
 
 
