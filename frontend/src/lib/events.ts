@@ -1,5 +1,15 @@
-import type { Engineer, HHMM, Plan, PlanEvent, ServiceRequest, Skill, Transport } from '../api/types';
-import { addMinutes, isValidTime, laterTime, toMinutes, TRANSPORT_LABELS } from './format';
+import type { Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, Transport, Visit } from '../api/types';
+import {
+  addMinutes,
+  formatWindow,
+  isValidTime,
+  laterTime,
+  PRIORITY_LABELS,
+  shortAddress,
+  SKILL_LABELS,
+  toMinutes,
+  TRANSPORT_LABELS,
+} from './format';
 
 /** Длина окна срочной заявки по умолчанию, минут. */
 export const URGENT_WINDOW_MIN = 120;
@@ -20,13 +30,29 @@ export interface UrgentForm {
   time: HHMM;
 }
 
+/** Форма изменения заявки. Время события хранится отдельно: оно не часть заявки. */
+export interface RequestEditForm {
+  address: string;
+  /** Точка, указанная на карте в этом диалоге; null, если диспетчер точку не указывал. */
+  point: PickedPoint | null;
+  windowStart: HHMM;
+  windowEnd: HHMM;
+  durationMin: number;
+  skill: Skill;
+  priority: Priority;
+  transport: Transport | '';
+}
+
+type VisitFields = Pick<UrgentForm, 'address' | 'point' | 'windowStart' | 'windowEnd' | 'durationMin'>;
+
 export function timeError(time: string, now: HHMM): string | null {
   if (!isValidTime(time)) return 'Укажите время в формате ЧЧ:ММ';
   if (toMinutes(time) < toMinutes(now)) return `Время события не может быть раньше ${now}`;
   return null;
 }
 
-export function validateUrgentForm(form: UrgentForm, now: HHMM): string[] {
+/** Общие проверки места, окна и длительности визита для срочной и изменённой заявки. */
+function visitErrors(form: VisitFields): string[] {
   const errors: string[] = [];
   if (!form.address.trim() && !form.point) errors.push('Укажите адрес или точку на карте');
   if (!isValidTime(form.windowStart) || !isValidTime(form.windowEnd)) {
@@ -35,6 +61,11 @@ export function validateUrgentForm(form: UrgentForm, now: HHMM): string[] {
     errors.push('Конец окна должен быть позже начала');
   }
   if (!Number.isFinite(form.durationMin) || form.durationMin <= 0) errors.push('Длительность должна быть больше нуля');
+  return errors;
+}
+
+export function validateUrgentForm(form: UrgentForm, now: HHMM): string[] {
+  const errors = visitErrors(form);
   const time = timeError(form.time, now);
   if (time) errors.push(time);
   return errors;
@@ -91,14 +122,23 @@ export function carDowngradeHint(count: number, time: HHMM): string {
   return `Заявок с требованием «${TRANSPORT_LABELS.car}» после ${time}: ${count}, их перераспределит оптимизатор`;
 }
 
+/**
+ * Работа по заявке уже началась: визит закреплён в плане, и заявка не отменена.
+ * Такую заявку нельзя ни отменить, ни изменить; визит, к которому инженер только едет, не закреплён.
+ */
+export function isWorkStarted(request: ServiceRequest, visit: Visit | undefined): boolean {
+  return Boolean(visit?.pinned) && request.status !== 'cancelled';
+}
+
 export function newUrgentId(timestamp: number): string {
   return `URG-${timestamp.toString(36).toUpperCase()}`;
 }
 
+const pointAddress = (point: PickedPoint) => `Точка на карте ${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}`;
+
 export function buildUrgentEvent(form: UrgentForm, requestId: string): PlanEvent {
   const point = form.point;
-  const address =
-    form.address.trim() || (point ? `Точка на карте ${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}` : 'Срочная заявка');
+  const address = form.address.trim() || (point ? pointAddress(point) : 'Срочная заявка');
   const request: ServiceRequest = {
     id: requestId,
     address,
@@ -117,6 +157,91 @@ export function buildUrgentEvent(form: UrgentForm, requestId: string): PlanEvent
     source_type_hd: '',
   };
   return { type: 'urgent', time: form.time, request, request_id: null, engineer_id: null };
+}
+
+/** Форма изменения, заполненная значениями сохранённой заявки. */
+export function requestEditForm(request: ServiceRequest): RequestEditForm {
+  return {
+    address: request.address,
+    point: null,
+    windowStart: request.window_start,
+    windowEnd: request.window_end,
+    durationMin: request.duration_min,
+    skill: request.skill,
+    priority: request.priority,
+    transport: request.transport_required ?? '',
+  };
+}
+
+/**
+ * Заявка после изменения. Номер, статус, район и типы из источника остаются от сохранённой заявки.
+ * Координаты: точка с карты, если её указали; для нового адреса без точки null, чтобы сервер нашёл адрес сам;
+ * иначе прежние.
+ */
+export function updatedRequest(original: ServiceRequest, form: RequestEditForm): ServiceRequest {
+  const typed = form.address.trim();
+  const sameAddress = typed === original.address.trim();
+  const { point } = form;
+  const address = sameAddress ? original.address : typed || (point ? pointAddress(point) : '');
+  const location: Pick<ServiceRequest, 'lat' | 'lon' | 'geocode_precision'> = point
+    ? { lat: point.lat, lon: point.lon, geocode_precision: 'house' }
+    : sameAddress
+      ? { lat: original.lat, lon: original.lon, geocode_precision: original.geocode_precision }
+      : { lat: null, lon: null, geocode_precision: 'none' };
+  return {
+    ...original,
+    address,
+    ...location,
+    duration_min: Math.round(form.durationMin),
+    window_start: form.windowStart,
+    window_end: form.windowEnd,
+    priority: form.priority,
+    skill: form.skill,
+    transport_required: form.transport === '' ? null : form.transport,
+  };
+}
+
+/** Изменение заявки: клиент отправляет заявку целиком с тем же номером, прежнюю версию сервер запишет сам. */
+export function requestUpdateEvent(original: ServiceRequest, form: RequestEditForm, time: HHMM): PlanEvent {
+  return {
+    type: 'request_updated',
+    time,
+    request: updatedRequest(original, form),
+    request_id: original.id,
+    engineer_id: null,
+  };
+}
+
+const transportRequirement = (transport: Transport | null) => (transport ? TRANSPORT_LABELS[transport] : 'не требуется');
+
+/** Что поменялось в заявке, языком диспетчера и всегда в одном порядке. */
+export function requestChanges(prev: ServiceRequest, next: ServiceRequest): string[] {
+  const changes: string[] = [];
+  if (next.address !== prev.address) {
+    changes.push(`адрес ${shortAddress(prev.address)} → ${shortAddress(next.address)}`);
+  } else if (next.lat !== null && next.lon !== null && (next.lat !== prev.lat || next.lon !== prev.lon)) {
+    // Координаты null при том же адресе сервер заменит прежними, поэтому новой точкой считаем только заданные.
+    changes.push('точка на карте');
+  }
+  if (next.window_start !== prev.window_start || next.window_end !== prev.window_end) {
+    changes.push(`окно ${formatWindow(prev.window_start, prev.window_end)} → ${formatWindow(next.window_start, next.window_end)}`);
+  }
+  if (next.duration_min !== prev.duration_min) changes.push(`длительность ${prev.duration_min} → ${next.duration_min} мин`);
+  if (next.skill !== prev.skill) changes.push(`навык ${SKILL_LABELS[prev.skill]} → ${SKILL_LABELS[next.skill]}`);
+  if (next.priority !== prev.priority) changes.push(`приоритет ${PRIORITY_LABELS[prev.priority]} → ${PRIORITY_LABELS[next.priority]}`);
+  if (next.transport_required !== prev.transport_required) {
+    changes.push(`транспорт ${transportRequirement(prev.transport_required)} → ${transportRequirement(next.transport_required)}`);
+  }
+  return changes;
+}
+
+/** Проверки формы изменения: как у срочной заявки и отказ, если в заявке ничего не поменялось. */
+export function validateRequestEdit(original: ServiceRequest, form: RequestEditForm, time: HHMM, now: HHMM): string[] {
+  const errors = visitErrors(form);
+  const timeProblem = timeError(time, now);
+  if (timeProblem) errors.push(timeProblem);
+  else if (requestChanges(original, updatedRequest(original, form)).length === 0) errors.push('Ничего не изменилось');
+  return errors;
 }
 
 export const cancelEvent = (requestId: string, time: HHMM): PlanEvent => ({
@@ -155,6 +280,11 @@ export const transportChangeEvent = (engineerId: string, transport: Transport, t
 
 export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>): string {
   switch (event.type) {
+    case 'request_updated': {
+      const title = `Изменена заявка ${event.request_id ?? event.request?.id ?? ''} с ${event.time}`;
+      const changes = event.previous_request && event.request ? requestChanges(event.previous_request, event.request) : [];
+      return changes.length > 0 ? `${title}: ${changes.join(', ')}` : title;
+    }
     case 'engineer_transport_changed': {
       const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
       const next = event.transport ? TRANSPORT_LABELS[event.transport] : 'другой транспорт';

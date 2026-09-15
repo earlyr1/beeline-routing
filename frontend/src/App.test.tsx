@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./api/client', async (importOriginal) => {
@@ -8,8 +8,8 @@ vi.mock('./api/client', async (importOriginal) => {
 
 import * as api from './api/client';
 import { App } from './App';
-import { SESSION_DATASET_KEY } from './store/useAppStore';
-import { makePlanningState } from './test/fixtures';
+import { SESSION_DATASET_KEY, useAppStore } from './store/useAppStore';
+import { makeExplanation, makePlanningState } from './test/fixtures';
 import { resetStore } from './test/store';
 
 beforeEach(() => {
@@ -35,6 +35,25 @@ describe('App', () => {
     expect(screen.getByText('2 из 3')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeInTheDocument();
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['Заявки', 'Таймлайн', 'Неназначенные1', 'Сравнение', 'Рекомендуемые изменения']);
+    expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
+  });
+
+  it('opens one request edit dialog from the explanation card and closes it', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104' });
+    render(<App />);
+    expect(screen.queryByRole('dialog', { name: 'Изменить заявку' })).not.toBeInTheDocument();
+    const card = screen.getByRole('region', { name: 'Объяснение по заявке' });
+    fireEvent.click(within(card).getByRole('button', { name: 'Изменить' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Изменить заявку' });
+    expect(within(dialog).getByRole('heading', { name: 'Изменить заявку 50104' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Указать точку на карте' }));
+    expect(screen.getByText('Кликните по карте, чтобы указать новое место заявки 50104')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }));
+    expect(screen.queryByRole('dialog', { name: 'Изменить заявку' })).not.toBeInTheDocument();
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: null, pickMode: false });
     expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
   });
 

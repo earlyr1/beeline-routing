@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makePlanningState, makeTransportChangeEvent } from '../test/fixtures';
+import { makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
 import { makeProposal, makeUrgentProposal } from '../test/proposalFixtures';
 import { formatKm } from './format';
 import { diffSummary, plural, proposalDetails, upsertProposal } from './proposals';
@@ -42,6 +42,29 @@ describe('proposals view helpers', () => {
     };
     const approved = makeProposal({ status: 'approved', event: makeTransportChangeEvent({ time: '16:00' }) });
     expect(proposalDetails(approved, switched)).toEqual(['Бригада Арташкин: Автомобиль → Велосипед с 16:00']);
+  });
+
+  it('lists the changes of a request update against the current request', () => {
+    const proposal = makeProposal({ event: makeRequestUpdateEvent({ previous_request: null }) });
+    expect(proposalDetails(proposal, state)).toEqual(['окно 14:00–16:00 → 15:00–17:00', 'длительность 45 → 60 мин']);
+    const moved = makeProposal({
+      event: makeRequestUpdateEvent({
+        previous_request: null,
+        request: { ...state.requests[2], address: 'Город Москва, ул.Юности, д. 5', lat: null, lon: null, priority: 'urgent' },
+      }),
+    });
+    expect(proposalDetails(moved, state)).toEqual(['адрес ул.Грайвороновская, д. 10 к 2 → ул.Юности, д. 5', 'приоритет Обычная → Срочная']);
+    const unknown = makeProposal({ event: makeRequestUpdateEvent({ previous_request: null, request_id: 'NOPE' }) });
+    expect(proposalDetails(unknown, state)).toEqual([]);
+  });
+
+  it('keeps the changes of an applied request update after the request changed', () => {
+    const event = makeRequestUpdateEvent();
+    const updated = { ...state, requests: state.requests.map((request) => (request.id === '50104' && event.request ? event.request : request)) };
+    expect(proposalDetails(makeProposal({ status: 'approved', event }), updated)).toEqual([
+      'окно 14:00–16:00 → 15:00–17:00',
+      'длительность 45 → 60 мин',
+    ]);
   });
 
   it('describes an urgent request with window, skill and transport', () => {

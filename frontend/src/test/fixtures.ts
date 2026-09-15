@@ -222,6 +222,20 @@ export function makeTransportChangeEvent(overrides: Partial<PlanEvent> = {}): Pl
   };
 }
 
+/** Изменение заявки 50104: окно на час позже и визит длиннее, как его возвращает сервер после применения. */
+export function makeRequestUpdateEvent(overrides: Partial<PlanEvent> = {}): PlanEvent {
+  const previous = requests()[2];
+  return {
+    type: 'request_updated',
+    time: '13:30',
+    request: { ...previous, window_start: '15:00', window_end: '17:00', duration_min: 60 },
+    request_id: '50104',
+    engineer_id: null,
+    previous_request: previous,
+    ...overrides,
+  };
+}
+
 export function makeDatasetStatus(overrides: Partial<DatasetStatus> = {}): DatasetStatus {
   return {
     dataset_id: 'd_test',

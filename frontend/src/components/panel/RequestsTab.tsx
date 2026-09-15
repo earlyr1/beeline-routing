@@ -1,6 +1,6 @@
 import type { ServiceRequest } from '../../api/types';
 import { engineerColor } from '../../lib/colors';
-import { cancelEvent, restoreEvent } from '../../lib/events';
+import { cancelEvent, isWorkStarted, restoreEvent } from '../../lib/events';
 import { formatWindow, isValidTime, laterTime, shortAddress } from '../../lib/format';
 import {
   assignmentIndex,
@@ -22,6 +22,7 @@ export function RequestsTab() {
   const selectRequest = useAppStore((s) => s.selectRequest);
   const selectEngineer = useAppStore((s) => s.selectEngineer);
   const applyEvent = useAppStore((s) => s.applyEvent);
+  const startEdit = useAppStore((s) => s.startEdit);
   const eventTime = useAppStore((s) => s.eventTime);
   const busy = useAppStore((s) => s.busy);
   if (!state) return null;
@@ -65,6 +66,8 @@ export function RequestsTab() {
           const badge = mark ? diffBadge(mark, request.id, state.last_diff, engineers, showPrevious) : null;
           const cancelled = request.status === 'cancelled';
           const pinned = Boolean(info?.visit.pinned);
+          const started = isWorkStarted(request, info?.visit);
+          const locked = busy || showPrevious || started;
           const classes = [
             'request-row',
             request.id === selectedRequestId ? 'request-row--selected' : '',
@@ -97,18 +100,32 @@ export function RequestsTab() {
                   )}
                 </div>
               </div>
-              <button
-                type="button"
-                className="btn btn-small"
-                disabled={busy || showPrevious || (pinned && !cancelled)}
-                title={pinned && !cancelled ? 'Работа уже началась, отменить нельзя' : undefined}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void applyEvent(cancelled ? restoreEvent(request.id, time) : cancelEvent(request.id, time));
-                }}
-              >
-                {cancelled ? 'Вернуть' : 'Отменить'}
-              </button>
+              <div className="request-row__actions">
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={locked}
+                  title={started ? 'Работа уже началась, изменить нельзя' : undefined}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    startEdit(request.id);
+                  }}
+                >
+                  Изменить
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-small"
+                  disabled={locked}
+                  title={started ? 'Работа уже началась, отменить нельзя' : undefined}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void applyEvent(cancelled ? restoreEvent(request.id, time) : cancelEvent(request.id, time));
+                  }}
+                >
+                  {cancelled ? 'Вернуть' : 'Отменить'}
+                </button>
+              </div>
             </li>
           );
         })}

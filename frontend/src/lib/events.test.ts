@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { makePlanningState } from '../test/fixtures';
+import type { ServiceRequest } from '../api/types';
+import { makePlanningState, makeRequestUpdateEvent } from '../test/fixtures';
 import {
   buildUrgentEvent,
   busiestEngineerId,
@@ -9,17 +10,22 @@ import {
   defaultUrgentWindow,
   describeEvent,
   earliestShiftStart,
+  isWorkStarted,
   newUrgentId,
+  requestChanges,
+  requestEditForm,
+  requestUpdateEvent,
   restoreEvent,
   timeError,
   transportChangeEvent,
   unavailableEvent,
+  validateRequestEdit,
   validateUrgentForm,
   visitsFrom,
   type UrgentForm,
 } from './events';
 import { EVENT_LABELS } from './format';
-import { byId } from './planView';
+import { assignmentIndex, byId } from './planView';
 
 const form: UrgentForm = {
   address: 'Город Москва, ул.Ташкентская, д. 16к2',
@@ -141,5 +147,146 @@ describe('events', () => {
     expect(carRequiredVisitsFrom(plan, requests, 'E02', '14:00')).toBe(0);
     expect(carRequiredVisitsFrom(plan, requests, 'E03', '00:00')).toBe(0);
     expect(carRequiredVisitsFrom(plan, requests, 'E99', '00:00')).toBe(0);
+  });
+});
+
+describe('request update', () => {
+  const state = makePlanningState();
+  const requestOf = (id: string) => state.requests.find((request) => request.id === id) as ServiceRequest;
+  // 46393: Шарикоподшипниковская, окно 15:00–17:00, 45 мин, локальные работы, нужен автомобиль.
+  const original = requestOf('46393');
+  const form = requestEditForm(original);
+
+  it('prefills the edit form from the stored request', () => {
+    expect(form).toEqual({
+      address: 'Город Москва, ул.Шарикоподшипниковская, д. 14',
+      point: null,
+      windowStart: '15:00',
+      windowEnd: '17:00',
+      durationMin: 45,
+      skill: 'local',
+      priority: 'normal',
+      transport: 'car',
+    });
+    expect(requestEditForm(requestOf('50104')).transport).toBe('');
+  });
+
+  it('builds a full request with the same id, status and source fields', () => {
+    const cancelled = requestOf('10135');
+    const changed = {
+      ...requestEditForm(cancelled),
+      windowStart: '11:00',
+      windowEnd: '13:00',
+      durationMin: 50,
+      skill: 'connection' as const,
+      priority: 'urgent' as const,
+      transport: 'bike' as const,
+    };
+    expect(requestUpdateEvent(cancelled, changed, '13:30')).toEqual({
+      type: 'request_updated',
+      time: '13:30',
+      request_id: '10135',
+      engineer_id: null,
+      request: {
+        ...cancelled,
+        window_start: '11:00',
+        window_end: '13:00',
+        duration_min: 50,
+        skill: 'connection',
+        priority: 'urgent',
+        transport_required: 'bike',
+      },
+    });
+    expect(requestUpdateEvent(cancelled, changed, '13:30').request).toMatchObject({
+      id: '10135',
+      status: 'cancelled',
+      district: 'Кузьминки',
+      source_type_bk: 'Локальная заявка',
+      source_type_hd: 'Нет линка',
+    });
+    expect(requestUpdateEvent(original, { ...form, transport: '' }, '13:30').request?.transport_required).toBeNull();
+  });
+
+  it('keeps the stored coordinates while the location is the same', () => {
+    const event = requestUpdateEvent(original, { ...form, address: ` ${original.address}  `, durationMin: 60 }, '13:30');
+    expect(event.request).toMatchObject({ address: original.address, lat: 55.7195, lon: 37.68, geocode_precision: 'house' });
+  });
+
+  it('asks the server to find a new address typed without a map point', () => {
+    const event = requestUpdateEvent(original, { ...form, address: 'Город Москва, ул.Юности, д. 5' }, '13:30');
+    expect(event.request).toMatchObject({ address: 'Город Москва, ул.Юности, д. 5', lat: null, lon: null, geocode_precision: 'none' });
+  });
+
+  it('sends a point picked on the map', () => {
+    const point = { lat: 55.72, lon: 37.69 };
+    expect(requestUpdateEvent(original, { ...form, point }, '13:30').request).toMatchObject({
+      address: original.address,
+      lat: 55.72,
+      lon: 37.69,
+      geocode_precision: 'house',
+    });
+    expect(requestUpdateEvent(original, { ...form, address: '', point }, '13:30').request?.address).toBe('Точка на карте 55.72000, 37.69000');
+  });
+
+  it('lists every changed field in dispatcher language and in a fixed order', () => {
+    const next: ServiceRequest = {
+      ...original,
+      address: 'Город Москва, ул.Юности, д. 5',
+      lat: null,
+      lon: null,
+      window_start: '16:00',
+      window_end: '18:00',
+      duration_min: 60,
+      skill: 'connection',
+      priority: 'urgent',
+      transport_required: null,
+    };
+    expect(requestChanges(original, next)).toEqual([
+      'адрес ул.Шарикоподшипниковская, д. 14 → ул.Юности, д. 5',
+      'окно 15:00–17:00 → 16:00–18:00',
+      'длительность 45 → 60 мин',
+      'навык Локальные работы → Работы на подключение и дозаказы',
+      'приоритет Обычная → Срочная',
+      'транспорт Автомобиль → не требуется',
+    ]);
+    expect(requestChanges(original, original)).toEqual([]);
+    expect(requestChanges(original, { ...original, window_end: '18:00' })).toEqual(['окно 15:00–17:00 → 15:00–18:00']);
+    expect(requestChanges({ ...original, transport_required: null }, original)).toEqual(['транспорт не требуется → Автомобиль']);
+  });
+
+  it('names a new map point when only the coordinates changed', () => {
+    expect(requestChanges(original, { ...original, lat: 55.72, lon: 37.69 })).toEqual(['точка на карте']);
+    expect(requestChanges(original, { ...original, lat: null, lon: null })).toEqual([]);
+  });
+
+  it('validates the edit like the urgent form and refuses an unchanged request', () => {
+    expect(validateRequestEdit(original, form, '13:30', '13:00')).toEqual(['Ничего не изменилось']);
+    expect(validateRequestEdit(original, { ...form, durationMin: 60 }, '13:30', '13:00')).toEqual([]);
+    expect(validateRequestEdit(original, form, '12:00', '13:00')).toEqual(['Время события не может быть раньше 13:00']);
+    expect(validateRequestEdit(original, { ...form, address: ' ', windowEnd: '14:00', durationMin: 0 }, '12:59', '13:00')).toEqual([
+      'Укажите адрес или точку на карте',
+      'Конец окна должен быть позже начала',
+      'Длительность должна быть больше нуля',
+      'Время события не может быть раньше 13:00',
+    ]);
+    expect(validateRequestEdit(original, { ...form, windowStart: '' }, '13:30', '13:00')).toEqual(['Укажите окно визита в формате ЧЧ:ММ']);
+  });
+
+  it('treats a pinned visit of an active request as started work', () => {
+    const visits = assignmentIndex(state.plan);
+    const visitOf = (id: string) => visits.get(id)?.visit;
+    expect(isWorkStarted(requestOf('74198'), visitOf('74198'))).toBe(true);
+    expect(isWorkStarted(requestOf('50104'), visitOf('50104'))).toBe(false);
+    expect(isWorkStarted({ ...requestOf('74198'), status: 'cancelled' }, visitOf('74198'))).toBe(false);
+    expect(isWorkStarted(requestOf('18754'), undefined)).toBe(false);
+  });
+
+  it('describes an applied request update with its changes and a client event without them', () => {
+    const engineers = byId(state.engineers);
+    expect(describeEvent(makeRequestUpdateEvent(), engineers)).toBe(
+      'Изменена заявка 50104 с 13:30: окно 14:00–16:00 → 15:00–17:00, длительность 45 → 60 мин',
+    );
+    expect(describeEvent(makeRequestUpdateEvent({ previous_request: null }), engineers)).toBe('Изменена заявка 50104 с 13:30');
+    expect(EVENT_LABELS.request_updated).toBe('Изменение заявки');
   });
 });

@@ -37,6 +37,36 @@ describe('ExplanationCard', () => {
     expect(useAppStore.getState().selectedRequestId).toBeNull();
   });
 
+  it('opens the request edit from the header', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    const edit = screen.getByRole('button', { name: 'Изменить' });
+    expect(edit).toBeEnabled();
+    fireEvent.click(edit);
+    expect(useAppStore.getState().editingRequestId).toBe('50104');
+  });
+
+  it.each([
+    ['started work', { selectedRequestId: '74198' }],
+    ['the plan before the event', { showPrevious: true }],
+    ['an event being applied', { busy: true }],
+  ])('disables the edit for %s', async (_, patch) => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', ...patch });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(screen.getByRole('button', { name: 'Изменить' })).toBeDisabled();
+  });
+
+  it('explains why started work cannot be edited', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '74198' });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(screen.getByRole('button', { name: 'Изменить' })).toHaveAttribute('title', 'Работа уже началась, изменить нельзя');
+  });
+
   it('renders nothing without a selection', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState() });
     const { container } = render(<ExplanationCard />);

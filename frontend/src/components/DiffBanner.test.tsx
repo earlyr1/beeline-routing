@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useAppStore } from '../store/useAppStore';
-import { makePlanningState, makeTransportChangeEvent } from '../test/fixtures';
+import { makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { DiffBanner } from './DiffBanner';
 
@@ -24,6 +24,16 @@ describe('DiffBanner', () => {
     resetStore({ state: { ...state, version: 5, engineers, events } });
     render(<DiffBanner />);
     expect(screen.getByText('Смена транспорта: Бригада Арташкин, Автомобиль → Велосипед с 13:30')).toBeInTheDocument();
+  });
+
+  it('titles a request update with what changed in the request', () => {
+    const state = makePlanningState();
+    const event = makeRequestUpdateEvent();
+    const requests = state.requests.map((request) => (request.id === '50104' && event.request ? event.request : request));
+    const events = [...state.events, { id: 'ev_4', event, version: 5 }];
+    resetStore({ state: { ...state, version: 5, requests, events } });
+    render(<DiffBanner />);
+    expect(screen.getByText('Изменена заявка 50104 с 13:30: окно 14:00–16:00 → 15:00–17:00, длительность 45 → 60 мин')).toBeInTheDocument();
   });
 
   it('names the engineers whose visit order changed', () => {

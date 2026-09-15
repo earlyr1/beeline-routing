@@ -1,5 +1,5 @@
 import type { PlanDiff, PlanningState, Proposal, ProposalStatus } from '../api/types';
-import { carDowngradeHint, carRequiredVisitsFrom } from './events';
+import { carDowngradeHint, carRequiredVisitsFrom, requestChanges } from './events';
 import { formatKm, formatWindow, shortAddress, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from './format';
 import { byId } from './planView';
 
@@ -55,6 +55,12 @@ export function proposalDetails(proposal: Proposal, state: PlanningState): strin
       if (carOnly > 0) details.push(carDowngradeHint(carOnly, event.time));
     }
     return details;
+  }
+
+  if (event.type === 'request_updated') {
+    // У применённого события прежняя заявка записана сервером, а в состоянии заявка уже изменилась.
+    const previous = event.previous_request ?? requests.get(event.request_id ?? '');
+    return previous && event.request ? requestChanges(previous, event.request) : [];
   }
 
   const request = requests.get(event.request_id ?? '');
