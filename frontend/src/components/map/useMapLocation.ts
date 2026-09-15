@@ -11,7 +11,7 @@ export const LOCATION_ANIMATION_MS = 400;
  * Куда смотрит карта: сначала весь план, при выборе заявки приближение к ней,
  * после снятия выбора снова весь план.
  */
-export function useMapLocation(): { location: MapLocation; showWholePlan: () => void; refreshLocation: () => void } {
+export function useMapLocation(): { location: MapLocation; showWholePlan: () => void } {
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const [location, setLocation] = useState<MapLocation>(() => {
     const state = useAppStore.getState().state;
@@ -44,17 +44,5 @@ export function useMapLocation(): { location: MapLocation; showWholePlan: () => 
     else showOverview();
   };
 
-  /**
-   * Повторно задаёт ту же камеру. Яндекс Карты запоминают размер контейнера при создании
-   * и догружают тайлы только после смены камеры, поэтому после того как раскладка
-   * устоялась или контейнер изменил размер, камеру нужно «передёрнуть».
-   */
-  const refreshLocation = () => {
-    setLocation((current) => {
-      const { duration: _duration, ...rest } = current;
-      return { ...rest } as MapLocation;
-    });
-  };
-
-  return { location, showWholePlan, refreshLocation };
+  return { location, showWholePlan };
 }
