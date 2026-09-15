@@ -112,24 +112,26 @@ describe('MapContent', () => {
     expect(map).toHaveAttribute('data-center', '');
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalled());
   });
-  it('nudges the camera after the map appears so Yandex recomputes tile coverage, without drifting', () => {
+  it('re-applies the same camera once the layout has settled so Yandex loads tiles for the full area', () => {
     vi.useFakeTimers();
     try {
       vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
-      render(<MapContent components={fake} />);
-      const initial = JSON.parse(screen.getByTestId('map').getAttribute('data-bounds') as string) as [LngLat, LngLat];
+      let renders = 0;
+      const counting: YMapsComponents = {
+        ...fake,
+        YMap: (props: { location: MapLocation; children?: ReactNode }) => {
+          renders += 1;
+          return FakeYMap(props);
+        },
+      };
+      render(<MapContent components={counting} />);
+      const bounds = screen.getByTestId('map').getAttribute('data-bounds');
+      const before = renders;
       act(() => {
-        vi.advanceTimersByTime(SETTLE_REFRESH_MS[0]);
+        vi.advanceTimersByTime(SETTLE_REFRESH_MS);
       });
-      const nudged = JSON.parse(screen.getByTestId('map').getAttribute('data-bounds') as string) as [LngLat, LngLat];
-      expect(nudged).not.toEqual(initial);
-      expect(Math.abs(nudged[0][0] - initial[0][0])).toBeLessThan(1e-4);
-      expect(nudged[0][1]).toBe(initial[0][1]);
-      act(() => {
-        vi.advanceTimersByTime(SETTLE_REFRESH_MS[1] - SETTLE_REFRESH_MS[0]);
-      });
-      const back = JSON.parse(screen.getByTestId('map').getAttribute('data-bounds') as string) as [LngLat, LngLat];
-      expect(back[0][0]).toBeCloseTo(initial[0][0], 9);
+      expect(renders).toBeGreaterThan(before);
+      expect(screen.getByTestId('map')).toHaveAttribute('data-bounds', bounds as string);
     } finally {
       vi.useRealTimers();
     }
