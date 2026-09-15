@@ -601,6 +601,14 @@ h4 {
   margin: 2px 0 4px;
 }
 
+.request-row__actions,
+.explanation__actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  flex: none;
+}
+
 .unassigned-item {
   padding: 10px;
   border: 1px solid var(--border);
@@ -834,6 +842,16 @@ h4 {
   border-radius: 12px;
   box-shadow: var(--shadow);
   padding: 16px;
+}
+
+/* Диалог изменения заявки открывается из панели, поэтому привязан к окну, а не к панели событий. */
+.dialog--floating {
+  position: fixed;
+  top: 72px;
+  right: 16px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 88px);
+  overflow: auto;
 }
 
 .dialog__actions {

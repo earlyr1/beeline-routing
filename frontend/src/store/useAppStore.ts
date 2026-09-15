@@ -26,6 +26,8 @@ export interface AppData {
   error: string | null;
   pickMode: boolean;
   pickedPoint: PickedPoint | null;
+  /** Заявка, открытая в диалоге «Изменить заявку»; null, когда диалог закрыт. */
+  editingRequestId: string | null;
 }
 
 export interface AppActions {
@@ -43,6 +45,9 @@ export interface AppActions {
   setEventTime(value: HHMM): void;
   startPick(): void;
   finishPick(point: PickedPoint | null): void;
+  /** Открыть диалог изменения заявки; незаконченный выбор точки на карте сбрасывается. */
+  startEdit(requestId: string): void;
+  closeEdit(): void;
   clearError(): void;
   reset(): void;
 }
@@ -63,6 +68,7 @@ export const initialAppData: AppData = {
   error: null,
   pickMode: false,
   pickedPoint: null,
+  editingRequestId: null,
 };
 
 const OFFLINE_CONFIG: ClientConfig = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: false };
@@ -121,6 +127,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       state: null,
       selectedRequestId: null,
       selectedEngineerId: null,
+      editingRequestId: null,
     });
     try {
       let status = await uploadFile(file);
@@ -206,15 +213,16 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   setPlanningState(state) {
-    const { selectedRequestId, eventTime } = get();
-    const keepSelection = selectedRequestId !== null && state.requests.some((request) => request.id === selectedRequestId);
+    const { selectedRequestId, editingRequestId, eventTime } = get();
+    const exists = (requestId: string | null) => requestId !== null && state.requests.some((request) => request.id === requestId);
     saveDatasetId(state.dataset_id);
     set({
       state,
       datasetId: state.dataset_id,
       showPrevious: false,
       eventTime: isValidTime(eventTime) ? laterTime(eventTime, state.now) : state.now,
-      selectedRequestId: keepSelection ? selectedRequestId : null,
+      selectedRequestId: exists(selectedRequestId) ? selectedRequestId : null,
+      editingRequestId: exists(editingRequestId) ? editingRequestId : null,
     });
   },
 
@@ -244,6 +252,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   finishPick(point) {
     set({ pickMode: false, pickedPoint: point });
+  },
+
+  startEdit(requestId) {
+    set({ editingRequestId: requestId, pickMode: false, pickedPoint: null });
+  },
+
+  closeEdit() {
+    set({ editingRequestId: null, pickMode: false, pickedPoint: null });
   },
 
   clearError() {

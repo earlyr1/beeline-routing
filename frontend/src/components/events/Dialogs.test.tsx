@@ -1,12 +1,13 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlanningState, Transport } from '../../api/types';
+import type { PlanningState, ServiceRequest, Transport } from '../../api/types';
 import { toMinutes } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
 import { EventToolbar } from './EventToolbar';
+import { RequestEditDialog } from './RequestEditDialog';
 import { TransportChangeDialog } from './TransportChangeDialog';
 import { UrgentRequestDialog } from './UrgentRequestDialog';
 
@@ -245,6 +246,139 @@ describe('TransportChangeDialog', () => {
     expect(onClose).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
     expect(onClose).toHaveBeenCalled();
+  });
+});
+
+describe('RequestEditDialog', () => {
+  // 46393: Шарикоподшипниковская, окно 15:00–17:00, 45 мин, локальные работы, нужен автомобиль.
+  const original = makePlanningState().requests.find((request) => request.id === '46393') as ServiceRequest;
+  const submitButton = () => screen.getByRole('button', { name: 'Сохранить и перепланировать' });
+
+  beforeEach(() => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:30', editingRequestId: '46393' });
+  });
+
+  it('prefills the form from the current request', () => {
+    render(<RequestEditDialog />);
+    expect(screen.getByRole('dialog', { name: 'Изменить заявку' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Изменить заявку 46393' })).toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('Город Москва, ул.Шарикоподшипниковская, д. 14');
+    expect([valueOf('Окно с'), valueOf('Окно до'), valueOf('Длительность, мин')]).toEqual(['15:00', '17:00', '45']);
+    expect([valueOf('Навык'), valueOf('Приоритет'), valueOf('Транспорт'), valueOf('Время события')]).toEqual([
+      'local',
+      'normal',
+      'car',
+      '13:30',
+    ]);
+    expect(optionsOf('Приоритет')).toEqual(['Обычная', 'Срочная']);
+    expect(optionsOf('Транспорт')).toEqual(['Не требуется', 'Автомобиль', 'Пешеход', 'Велосипед', 'Общественный транспорт']);
+    expect(screen.queryByText(/Изменится/)).not.toBeInTheDocument();
+  });
+
+  it('defaults the event time to now when the toolbar time is earlier', () => {
+    useAppStore.setState({ eventTime: '12:00' });
+    render(<RequestEditDialog />);
+    expect(valueOf('Время события')).toBe('13:00');
+  });
+
+  it('refuses to submit an unchanged request', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    fireEvent.click(submitButton());
+    expect(await screen.findByText('Ничего не изменилось')).toBeInTheDocument();
+    expect(applyEvent).not.toHaveBeenCalled();
+  });
+
+  it('checks the window and the event time', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '14:30' } });
+    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '12:00' } });
+    fireEvent.click(submitButton());
+    expect(await screen.findByText('Конец окна должен быть позже начала')).toBeInTheDocument();
+    expect(screen.getByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
+    expect(screen.queryByText('Ничего не изменилось')).not.toBeInTheDocument();
+    expect(applyEvent).not.toHaveBeenCalled();
+  });
+
+  it('previews the changes while editing', () => {
+    render(<RequestEditDialog />);
+    fireEvent.change(screen.getByLabelText('Длительность, мин'), { target: { value: '60' } });
+    fireEvent.change(screen.getByLabelText('Приоритет'), { target: { value: 'urgent' } });
+    expect(screen.getByText('Изменится: длительность 45 → 60 мин, приоритет Обычная → Срочная')).toBeInTheDocument();
+  });
+
+  it('sends a new address without coordinates so the server finds it on the map', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Юности, д. 5' } });
+    expect(screen.getByText('Изменится: адрес ул.Шарикоподшипниковская, д. 14 → ул.Юности, д. 5')).toBeInTheDocument();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(useAppStore.getState().editingRequestId).toBeNull());
+    expect(applyEvent).toHaveBeenCalledWith({
+      type: 'request_updated',
+      time: '13:30',
+      request_id: '46393',
+      engineer_id: null,
+      request: { ...original, address: 'Город Москва, ул.Юности, д. 5', lat: null, lon: null, geocode_precision: 'none' },
+    });
+  });
+
+  it('keeps the original coordinates when the location did not change', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '18:00' } });
+    fireEvent.change(screen.getByLabelText('Навык'), { target: { value: 'connection' } });
+    fireEvent.change(screen.getByLabelText('Транспорт'), { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '14:00' } });
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(useAppStore.getState().editingRequestId).toBeNull());
+    expect(applyEvent).toHaveBeenCalledWith({
+      type: 'request_updated',
+      time: '14:00',
+      request_id: '46393',
+      engineer_id: null,
+      request: { ...original, window_end: '18:00', skill: 'connection', transport_required: null },
+    });
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ lat: 55.7195, lon: 37.68 });
+  });
+
+  it('sends a point picked on the map', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    expect(useAppStore.getState().pickMode).toBe(true);
+    expect(screen.getByRole('button', { name: 'Кликните по карте…' })).toBeDisabled();
+    act(() => useAppStore.getState().finishPick({ lat: 55.72, lon: 37.69 }));
+    expect(screen.getByText('Точка: 55.72000, 37.69000')).toBeInTheDocument();
+    expect(screen.getByText('Изменится: точка на карте')).toBeInTheDocument();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ address: original.address, lat: 55.72, lon: 37.69, geocode_precision: 'house' });
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: null, pickedPoint: null });
+  });
+
+  it('stays open when the server rejects the change and closes on «Отмена»', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(false);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    fireEvent.change(screen.getByLabelText('Длительность, мин'), { target: { value: '60' } });
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(useAppStore.getState().editingRequestId).toBe('46393');
+    fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+    expect(useAppStore.getState().editingRequestId).toBeNull();
+  });
+
+  it('renders nothing for a request that is not in the plan', () => {
+    useAppStore.setState({ editingRequestId: 'GONE' });
+    const { container } = render(<RequestEditDialog />);
+    expect(container).toBeEmptyDOMElement();
   });
 });
 

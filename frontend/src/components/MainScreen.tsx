@@ -2,12 +2,17 @@ import { useAppStore } from '../store/useAppStore';
 import { DiffBanner } from './DiffBanner';
 import { ErrorToast } from './ErrorToast';
 import { EventToolbar } from './events/EventToolbar';
+import { RequestEditDialog } from './events/RequestEditDialog';
 import { MapView } from './map/MapView';
 import { MetricsStrip } from './MetricsStrip';
 import { RightPanel } from './panel/RightPanel';
 
 export function MainScreen() {
   const pickMode = useAppStore((s) => s.pickMode);
+  const editingRequestId = useAppStore((s) => s.editingRequestId);
+  const pickHint = editingRequestId
+    ? `Кликните по карте, чтобы указать новое место заявки ${editingRequestId}`
+    : 'Кликните по карте, чтобы указать место срочной заявки';
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -17,11 +22,12 @@ export function MainScreen() {
       <DiffBanner />
       <div className="workspace">
         <section className={`map-area${pickMode ? ' map-area--picking' : ''}`} aria-label="Карта">
-          {pickMode && <div className="map-hint">Кликните по карте, чтобы указать место срочной заявки</div>}
+          {pickMode && <div className="map-hint">{pickHint}</div>}
           <MapView />
         </section>
         <RightPanel />
       </div>
+      {editingRequestId && <RequestEditDialog />}
       <ErrorToast />
     </div>
   );

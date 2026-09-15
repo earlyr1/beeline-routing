@@ -205,6 +205,21 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ pickMode: false, pickedPoint: { lat: 55.7, lon: 37.8 } });
   });
 
+  it('opens and closes the request edit, leaving the map pick mode', () => {
+    useAppStore.getState().startPick();
+    useAppStore.getState().startEdit('50104');
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: '50104', pickMode: false, pickedPoint: null });
+
+    useAppStore.getState().startPick();
+    useAppStore.getState().finishPick({ lat: 55.7, lon: 37.8 });
+    useAppStore.getState().closeEdit();
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: null, pickMode: false, pickedPoint: null });
+
+    useAppStore.getState().startEdit('46393');
+    useAppStore.getState().reset();
+    expect(useAppStore.getState().editingRequestId).toBeNull();
+  });
+
   it('falls back to an offline config and keeps config on reset', async () => {
     vi.mocked(api.getConfig).mockRejectedValue(new api.ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.'));
     await useAppStore.getState().loadConfig();

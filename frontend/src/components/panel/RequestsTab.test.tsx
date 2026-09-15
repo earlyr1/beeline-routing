@@ -62,5 +62,29 @@ describe('RequestsTab', () => {
     expect(within(rowOf('URG-001')).getByText('Будет назначена')).toBeInTheDocument();
     expect(screen.queryByText('Перенесена от «Бригада Белузин»')).not.toBeInTheDocument();
     expect(within(rowOf('46393')).getByRole('button', { name: 'Отменить' })).toBeDisabled();
+    expect(within(rowOf('46393')).getByRole('button', { name: 'Изменить' })).toBeDisabled();
+  });
+
+  it('opens the request edit from a row without selecting it', () => {
+    render(<RequestsTab />);
+    fireEvent.click(within(rowOf('50104')).getByRole('button', { name: 'Изменить' }));
+    expect(useAppStore.getState().editingRequestId).toBe('50104');
+    expect(useAppStore.getState().selectedRequestId).toBeNull();
+  });
+
+  it('blocks editing started work exactly like cancelling and allows editing a cancelled request', () => {
+    render(<RequestsTab />);
+    const started = within(rowOf('74198')).getByRole('button', { name: 'Изменить' });
+    expect(started).toBeDisabled();
+    expect(started).toHaveAttribute('title', 'Работа уже началась, изменить нельзя');
+    expect(within(rowOf('74198')).getByRole('button', { name: 'Отменить' })).toBeDisabled();
+    expect(within(rowOf('50104')).getByRole('button', { name: 'Изменить' })).not.toHaveAttribute('title');
+    expect(within(rowOf('10135')).getByRole('button', { name: 'Изменить' })).toBeEnabled();
+  });
+
+  it('disables editing while an event is being applied', () => {
+    useAppStore.setState({ busy: true });
+    render(<RequestsTab />);
+    expect(within(rowOf('50104')).getByRole('button', { name: 'Изменить' })).toBeDisabled();
   });
 });

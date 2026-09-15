@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { getExplanation } from '../api/client';
 import type { Explanation } from '../api/types';
+import { isWorkStarted } from '../lib/events';
 import { formatKm, formatSigned, formatWindow, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
-import { byId } from '../lib/planView';
+import { assignmentIndex, byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 
 export function ExplanationCard() {
@@ -11,6 +12,8 @@ export function ExplanationCard() {
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const selectRequest = useAppStore((s) => s.selectRequest);
   const showPrevious = useAppStore((s) => s.showPrevious);
+  const busy = useAppStore((s) => s.busy);
+  const startEdit = useAppStore((s) => s.startEdit);
   const version = state?.version ?? 0;
   const [explanation, setExplanation] = useState<Explanation | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -45,6 +48,8 @@ export function ExplanationCard() {
   const request = state.requests.find((item) => item.id === selectedRequestId);
   const engineers = byId(state.engineers);
   const nameOf = (engineerId: string | null) => (engineerId ? (engineers.get(engineerId)?.name ?? engineerId) : '—');
+  // Те же правила, что у кнопок в списке заявок; начатую работу проверяем по текущему плану.
+  const started = request ? isWorkStarted(request, assignmentIndex(state.plan).get(request.id)?.visit) : false;
 
   return (
     <section className="explanation" aria-label="Объяснение по заявке">
@@ -60,9 +65,22 @@ export function ExplanationCard() {
             </p>
           )}
         </div>
-        <button type="button" className="btn btn-ghost btn-small" onClick={() => selectRequest(null)} aria-label="Закрыть объяснение">
-          ✕
-        </button>
+        <div className="explanation__actions">
+          {request && (
+            <button
+              type="button"
+              className="btn btn-small"
+              disabled={busy || showPrevious || started}
+              title={started ? 'Работа уже началась, изменить нельзя' : undefined}
+              onClick={() => startEdit(request.id)}
+            >
+              Изменить
+            </button>
+          )}
+          <button type="button" className="btn btn-ghost btn-small" onClick={() => selectRequest(null)} aria-label="Закрыть объяснение">
+            ✕
+          </button>
+        </div>
       </header>
       {showPrevious && <p className="note">Объяснение относится к текущему плану, после события.</p>}
       {loading && <p className="muted">Загружаем объяснение…</p>}
