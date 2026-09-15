@@ -3,7 +3,8 @@
 Цель лексикографическая через веса: сначала назначить все заявки (срочные важнее),
 затем задействовать меньше инженеров, затем меньше километров. При перепланировании
 добавляется штраф за перенос заявки к другому инженеру, а у инженеров с закреплёнными
-визитами фиксированная стоимость нулевая.
+визитами фиксированная стоимость нулевая. Срочная заявка «как можно скорее» ждёт до 4 часов бесплатно,
+дальше каждая минута ожидания слегка штрафуется.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from dataclasses import dataclass
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from app.domain.enums import Priority
-from app.domain.models import Plan
+from app.domain.models import ASAP_FREE_WAIT_MIN, Plan
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.assemble import build_plan
 from app.solvers.eligibility import exclusion
@@ -29,6 +30,9 @@ class ObjectiveWeights:
     drop_normal: int = 10_000_000
     drop_urgent: int = 100_000_000
     reassignment: int = 20_000  # условные 20 км за перенос заявки к другому инженеру
+    # Условные 0.2 км за минуту ожидания срочной заявки «как можно скорее» сверх 4 часов: лишний час стоит 12 км,
+    # намного дешевле ещё одного инженера и снятия срочной заявки.
+    asap_late_per_min: int = 200
 
 
 class OrToolsSolver:
@@ -110,6 +114,11 @@ class OrToolsSolver:
             routing.VehicleVar(index).SetValues([-1] + allowed)
             penalty = weights.drop_urgent if request.priority == Priority.URGENT else weights.drop_normal
             routing.AddDisjunction([index], penalty)
+            if request.priority == Priority.URGENT and request.asap and weights.asap_late_per_min:
+                # Жёсткое окно до конца смен остаётся, а начало позже 4 часов ожидания штрафуется слегка.
+                time_dimension.SetCumulVarSoftUpperBound(
+                    index, request.window_start + ASAP_FREE_WAIT_MIN, weights.asap_late_per_min
+                )
 
         for v, state in enumerate(vehicles):
             time_dimension.CumulVar(routing.Start(v)).SetRange(state.available_from, state.available_until)

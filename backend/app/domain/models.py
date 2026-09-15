@@ -23,6 +23,8 @@ class Request(BaseModel):
     window_start: HHMM
     window_end: HHMM
     priority: Priority = Priority.NORMAL
+    # «Как можно скорее»: окно заявки задаёт backend, от времени события до самого позднего конца смен.
+    asap: bool = False
     skill: Skill
     transport_required: Transport | None = None
     status: RequestStatus = RequestStatus.ACTIVE
@@ -31,9 +33,14 @@ class Request(BaseModel):
 
     @model_validator(mode="after")
     def _window_order(self) -> Request:
-        if self.window_end < self.window_start:
+        # Окно из запроса у заявки «как можно скорее» не используется: клиент может прислать любое.
+        if not self.asap and self.window_end < self.window_start:
             raise ValueError("конец временного окна раньше начала")
         return self
+
+
+# Ожидание срочной заявки «как можно скорее» (начало работы минус начало окна) до 4 часов не штрафуется.
+ASAP_FREE_WAIT_MIN = 240
 
 
 class Engineer(BaseModel):
@@ -164,14 +171,23 @@ class Bundle(BaseModel):
         ):
             repeated = _repeated(ids)
             if repeated:
-                shown = ", ".join(repeated[:MAX_REPEATED_SHOWN])
-                if len(repeated) > MAX_REPEATED_SHOWN:
-                    shown += f" и ещё {len(repeated) - MAX_REPEATED_SHOWN}"
-                raise ValueError(f"повторяются номера {label}: {shown}")
+                raise ValueError(f"повторяются номера {label}: {_listed(repeated)}")
+        # Заявка «как можно скорее» не проверяет порядок окна: в событии backend заменяет окно сам, а заявку
+        # из бандла солвер берёт как есть.
+        inverted = [request.id for request in self.requests if request.window_end < request.window_start]
+        if inverted:
+            raise ValueError(f"конец временного окна раньше начала у заявок: {_listed(inverted)}")
         return self
 
 
 MAX_REPEATED_SHOWN = 10
+
+
+def _listed(ids: list[str]) -> str:
+    shown = ", ".join(ids[:MAX_REPEATED_SHOWN])
+    if len(ids) > MAX_REPEATED_SHOWN:
+        shown += f" и ещё {len(ids) - MAX_REPEATED_SHOWN}"
+    return shown
 
 
 def _repeated(ids: list[str]) -> list[str]:

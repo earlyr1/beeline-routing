@@ -31,6 +31,10 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
             ReasonCode.NO_TRANSPORT, f"Нет инженера с навыком «{skill}» и транспортом «{transport}»."
         )
     active = [s for s in with_transport if s.active]
+    if not active and request.asap:
+        # У заявки «как можно скорее» инженер, у которого сегодня не осталось рабочего времени, не недоступен:
+        # он просто не успевает сегодня.
+        active = [s for s in with_transport if s.engineer.available]
     if not active:
         names = ", ".join(s.engineer.name for s in with_transport)
         return result(ReasonCode.NO_FREE_ENGINEER, f"Все подходящие инженеры недоступны: {names}.")
@@ -40,9 +44,10 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
     if not fitting:
         state, sim = min(solo, key=lambda pair: (pair[1].visits[0].start, pair[1].visits[0].end))
         visit = sim.visits[0]
+        lead = "Сегодня не успеть" if request.asap else f"Работа не помещается в окно {window} или в смену"
         return result(
             ReasonCode.DOES_NOT_FIT,
-            f"Работа не помещается в окно {window} или в смену: даже без других заявок "
+            f"{lead}: даже без других заявок "
             f"{state.engineer.name} начнёт не раньше {fmt_hhmm(visit.start)} и закончит в "
             f"{fmt_hhmm(visit.end)} (смена до {fmt_hhmm(state.available_until)}).",
         )
@@ -51,8 +56,13 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
         ((simulate_route(problem, s, sequences.get(s.engineer.id, [])).end_time, s) for s in fitting),
         key=lambda pair: pair[0],
     )
+    lead = (
+        "Сегодня нет свободных исполнителей"
+        if request.asap
+        else f"Нет свободных исполнителей на окно {window}"
+    )
     return result(
         ReasonCode.NO_FREE_ENGINEER,
-        f"Нет свободных исполнителей на окно {window}: подходящие инженеры ({len(fitting)}) заняты другими "
+        f"{lead}: подходящие инженеры ({len(fitting)}) заняты другими "
         f"заявками. Раньше всех освобождается {state.engineer.name} в {fmt_hhmm(finish)}.",
     )

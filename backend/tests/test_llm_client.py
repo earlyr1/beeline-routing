@@ -99,6 +99,7 @@ def test_request_update_tool_spec():
         "skill",
         "priority",
         "transport_required",
+        "asap",
         "time",
         "rationale",
     }
