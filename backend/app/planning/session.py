@@ -13,6 +13,7 @@ from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.geo.osrm import OsrmClient
 from app.ingest.geocode import GeoResult
+from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
 from app.planning.models import AppliedEvent, PlanDiff
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
@@ -240,6 +241,14 @@ def _find_engineer(engineers: list[Engineer], engineer_id: str | None) -> Engine
     return engineer
 
 
+def _unavailable_since(engineer: Engineer) -> int:
+    return engineer.unavailable_from if engineer.unavailable_from is not None else engineer.shift_start
+
+
+def window_order_text(request_id: str) -> str:
+    return f"Конец окна заявки {request_id} должен быть позже начала."
+
+
 def _apply_to_inputs(
     session: PlanningSession, event: Event, ctx: PlanningContext
 ) -> tuple[list[Request], list[Engineer], Event]:
@@ -266,7 +275,7 @@ def _apply_to_inputs(
                 f"события {fmt_hhmm(now)}."
             )
         if sent.window_end <= sent.window_start:
-            raise EventRejected(f"Конец окна заявки {stored.id} должен быть позже начала.")
+            raise EventRejected(window_order_text(stored.id))
         changes = sent.model_dump(include=EDITABLE_REQUEST_FIELDS)
         merged = stored.model_copy(update={**changes, **_edited_location(stored, sent, ctx)})
         if merged == stored:
@@ -297,13 +306,21 @@ def _apply_to_inputs(
             request.status = RequestStatus.ACTIVE
         return requests, engineers, event
 
+    if event.type == EventType.ENGINEER_DELAYED:
+        engineer = _find_engineer(engineers, event.engineer_id)
+        if not engineer.available:
+            raise EventRejected(
+                f"{engineer.name} недоступен с {fmt_hhmm(_unavailable_since(engineer))}, задержку поставить нельзя."
+            )
+        # Задержка меняет не инженера, а его маршрут: визиты и доступность сдвигает _pinned_problem.
+        return requests, engineers, event
+
     if event.type == EventType.ENGINEER_TRANSPORT_CHANGED:
         engineer = _find_engineer(engineers, event.engineer_id)
         if not engineer.available:
-            since = (
-                engineer.unavailable_from if engineer.unavailable_from is not None else engineer.shift_start
+            raise EventRejected(
+                f"{engineer.name} недоступен с {fmt_hhmm(_unavailable_since(engineer))}, сменить транспорт нельзя."
             )
-            raise EventRejected(f"{engineer.name} недоступен с {fmt_hhmm(since)}, сменить транспорт нельзя.")
         if engineer.transport == event.transport:
             raise EventRejected(f"У {engineer.name} уже транспорт «{TRANSPORT_RU[engineer.transport]}».")
         # Закреплённые визиты сохраняют прежние время и пробег (pin_problem берёт их из текущего плана),
@@ -335,6 +352,26 @@ def _apply_to_inputs(
     return requests, engineers, event.model_copy(update={"request": new})
 
 
+def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Problem:
+    """Задача на остаток дня после события: закреплённая работа, прежние задержки и задержка из самого события."""
+    until = delayed_until(applied.event for applied in session.events)
+
+    def pin(released: Collection[str]) -> Problem:
+        return keep_delays(pin_problem(base, session.plan, event.time, released), until)
+
+    if event.type == EventType.REQUEST_UPDATED:
+        # Изменённую заявку солвер планирует заново, даже если инженер уже едет к ней.
+        return pin([event.request_id])
+    problem = pin(())
+    if event.type != EventType.ENGINEER_DELAYED:
+        return problem
+    missed = missed_hold(problem, event.engineer_id, event.delay_min)
+    if missed is not None:
+        # С задержкой инженер не успеет в окно заявки, к которой едет: кому её отдать, решает солвер.
+        problem = pin([missed])
+    return delay_engineer(problem, event.engineer_id, event.delay_min)
+
+
 def _check_time(session: PlanningSession, event: Event) -> None:
     if event.time < session.now:
         raise EventRejected(
@@ -362,11 +399,13 @@ def apply_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
     base = make_problem(
         requests, engineers, model=ctx.model, traffic=ctx.traffic, osrm=ctx.osrm, cache=ctx.cache
     )
-    # Изменённую заявку солвер планирует заново, даже если инженер уже едет к ней.
-    released = [stored_event.request_id] if stored_event.type == EventType.REQUEST_UPDATED else []
-    problem = pin_problem(base, session.plan, event.time, released)
+    problem = _pinned_problem(base, session, stored_event)
     plan, baseline = _solve(problem, ctx)
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}
+    diff = compute_diff(session.plan, plan, cancelled)
+    if stored_event.type == EventType.ENGINEER_DELAYED:
+        forecast = forecast_delay(problem, session.plan, stored_event.engineer_id, stored_event.delay_min)
+        diff = diff.model_copy(update={"delay_forecast": forecast})
     version = session.version + 1
     applied = AppliedEvent(id=f"ev_{len(session.events) + 1}", event=stored_event, version=version)
     return replace(
@@ -377,7 +416,7 @@ def apply_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
         plan=plan,
         baseline=baseline,
         previous_plan=session.plan,
-        last_diff=compute_diff(session.plan, plan, cancelled),
+        last_diff=diff,
         events=[*session.events, applied],
         now=event.time,
         version=version,

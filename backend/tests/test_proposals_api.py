@@ -51,6 +51,7 @@ def test_chat_creates_proposals_and_approve_goes_through_event_pipeline(tmp_path
         "transport": None,
         "previous_transport": None,
         "previous_request": None,
+        "delay_min": None,
     }
     assert proposal["source_text"] == "Отмена по R2, а E9 не выйдет" and proposal["created_at_version"] == 1
     messages = provider.bodies()[0]["messages"]
@@ -151,6 +152,34 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
         "foot",
         "bike",
     )
+
+
+def test_approved_delay_proposal_keeps_the_applied_event_and_forecast(tmp_path):
+    arguments = {"engineer_id": "E2", "delay_min": 30, "time": "10:15", "rationale": "Работа затянулась"}
+    client, _ = with_llm(tmp_path, completion(tool_calls=[tool_call("propose_engineer_delay", arguments)]))
+    base = ready(client)
+    [proposal] = client.post(f"{base}/chat", json={"text": "У Белузина работа затянулась на полчаса"}).json()[
+        "proposals"
+    ]
+    assert proposal["status"] == "pending"
+    assert (proposal["event"]["type"], proposal["event"]["engineer_id"], proposal["event"]["delay_min"]) == (
+        "engineer_delayed",
+        "E2",
+        30,
+    )
+    # Пока предложение ждало, диспетчер сам сдвинул время плана: применяется оно с текущего времени.
+    manual = client.post(f"{base}/events", json={"type": "cancel", "time": "10:20", "request_id": "R3"})
+    assert manual.status_code == 200, manual.text
+
+    approved = client.post(f"{base}/proposals/{proposal['id']}/approve").json()
+
+    applied = approved["state"]["events"][-1]["event"]
+    assert approved["proposal"]["status"] == "approved"
+    assert approved["proposal"]["event"] == applied
+    assert (applied["type"], applied["time"], applied["delay_min"]) == ("engineer_delayed", "10:20", 30)
+    forecast = approved["proposal"]["result_diff"]["delay_forecast"]
+    assert (forecast["engineer_id"], forecast["delay_min"]) == ("E2", 30)
+    assert approved["state"]["last_diff"]["delay_forecast"] == forecast
 
 
 def test_address_change_proposal_keeps_geocoder_precision_after_approve(tmp_path):

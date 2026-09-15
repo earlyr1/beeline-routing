@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from app.domain.enums import TRANSPORT_RU, EventType, Priority, Skill, Transport
-from app.domain.models import Event, Request
+from app.domain.models import DELAY_RANGE_TEXT, MAX_DELAY_MIN, MIN_DELAY_MIN, Event, Request
 from app.domain.timeutil import HHMM
 from app.llm.client import LlmResult, ToolCall
 from app.planning.session import (
@@ -21,11 +21,12 @@ from app.planning.session import (
     PlanningContext,
     PlanningSession,
     check_event,
+    window_order_text,
 )
 
 NOTHING_FOUND = (
     "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена или возврат заявки, "
-    "срочная заявка, изменение заявки, недоступность инженера или смена транспорта."
+    "срочная заявка, изменение заявки, недоступность инженера, смена транспорта или задержка инженера."
 )
 
 
@@ -62,6 +63,17 @@ class TransportChangeArgs(EngineerArgs):
         raise ValueError(f"неизвестный тип транспорта «{value}», допустимы {allowed}")
 
 
+class EngineerDelayArgs(EngineerArgs):
+    delay_min: int
+
+    @field_validator("delay_min")
+    @classmethod
+    def _delay_range(cls, value: int) -> int:
+        if not MIN_DELAY_MIN <= value <= MAX_DELAY_MIN:
+            raise ValueError(DELAY_RANGE_TEXT)
+        return value
+
+
 class UrgentArgs(_TimedArgs):
     address: str = Field(min_length=3)
     window_start: HHMM
@@ -92,6 +104,7 @@ ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "propose_engineer_unavailable": EngineerArgs,
     "propose_engineer_transport_change": TransportChangeArgs,
     "propose_request_update": RequestUpdateArgs,
+    "propose_engineer_delay": EngineerDelayArgs,
     "ask_clarification": ClarifyArgs,
 }
 
@@ -111,6 +124,14 @@ class Interpretation:
 
 class Unresolved(ValueError):
     """Модель назвала инженера или заявку, которых нельзя однозначно найти, или не сказала, что менять."""
+
+
+class Refused(ValueError):
+    """Предложение понятно, но заведомо не применится: черновик сохраняется с этой ошибкой."""
+
+    def __init__(self, event: Event, text: str) -> None:
+        super().__init__(text)
+        self.event = event
 
 
 def resolve_engineer(session: PlanningSession, value: str) -> str:
@@ -163,14 +184,27 @@ def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:
     return stored.model_copy(update=changes)
 
 
+def _request_update_event(session: PlanningSession, args: RequestUpdateArgs, time: int) -> Event:
+    request_id = resolve_request(session, args.request_id)
+    stored = session.request(request_id)
+    request = _updated_request(stored, args)
+    if request.window_end > request.window_start:
+        return Event(type=EventType.REQUEST_UPDATED, time=time, request_id=request_id, request=request)
+    if request.window_end < request.window_start:
+        # Заявку с концом окна раньше начала нельзя записать даже в черновик: в нём остаётся прежнее окно.
+        request = request.model_copy(
+            update={"window_start": stored.window_start, "window_end": stored.window_end}
+        )
+    event = Event(type=EventType.REQUEST_UPDATED, time=time, request_id=request_id, request=request)
+    raise Refused(event, window_order_text(request_id))
+
+
 def _build_event(
     name: str, args: BaseModel, session: PlanningSession, new_request_id: Callable[[], str]
 ) -> Event:
     time = args.time if args.time is not None else session.now
     if name == "propose_request_update":
-        request_id = resolve_request(session, args.request_id)
-        request = _updated_request(session.request(request_id), args)
-        return Event(type=EventType.REQUEST_UPDATED, time=time, request_id=request_id, request=request)
+        return _request_update_event(session, args, time)
     if name == "propose_cancel":
         return Event(type=EventType.CANCEL, time=time, request_id=resolve_request(session, args.request_id))
     if name == "propose_restore":
@@ -187,6 +221,13 @@ def _build_event(
             time=time,
             engineer_id=resolve_engineer(session, args.engineer_id),
             transport=args.transport,
+        )
+    if name == "propose_engineer_delay":
+        return Event(
+            type=EventType.ENGINEER_DELAYED,
+            time=time,
+            engineer_id=resolve_engineer(session, args.engineer_id),
+            delay_min=args.delay_min,
         )
     transport = None if args.transport_required in (None, "none") else Transport(args.transport_required)
     request = Request(
@@ -230,8 +271,11 @@ def _interpret_call(
     if isinstance(args, ClarifyArgs):
         out.clarifications.append(args.question.strip())
         return
+    refusal: str | None = None
     try:
         event = _build_event(call.name, args, session, new_request_id)
+    except Refused as error:
+        event, refusal = error.event, str(error)
     except Unresolved as error:
         out.clarifications.append(str(error))
         return
@@ -248,12 +292,24 @@ def _interpret_call(
         described = request.address  # номер срочной заявки у каждого вызова новый
     else:
         described = request.model_dump_json()
-    key = (event.type, event.request_id, event.engineer_id, event.transport, event.time, described)
+    key = (
+        event.type,
+        event.request_id,
+        event.engineer_id,
+        event.transport,
+        event.delay_min,
+        event.time,
+        described,
+        refusal,
+    )
     if key in seen:
         return
     seen.add(key)
 
     rationale = args.rationale.strip() or "Помощник не пояснил предложение."
+    if refusal is not None:
+        out.drafts.append(ProposalDraft(event=event, rationale=rationale, error=refusal))
+        return
     try:
         stored = check_event(session, event, ctx)
     except EventRejected as error:

@@ -74,9 +74,16 @@ class Event(BaseModel):
     previous_transport: Transport | None = None
     # Изменение заявки: request — заявка с желаемыми значениями, previous_request (до изменения) заполняет backend.
     previous_request: Request | None = None
+    # Задержка инженера: на сколько минут задерживается инженер engineer_id.
+    delay_min: int | None = None
 
     @model_validator(mode="after")
     def _payload(self) -> Event:
+        if self.type == EventType.ENGINEER_DELAYED:
+            if not self.engineer_id or self.delay_min is None:
+                raise ValueError("для задержки инженера нужны engineer_id и delay_min")
+            if not MIN_DELAY_MIN <= self.delay_min <= MAX_DELAY_MIN:
+                raise ValueError(DELAY_RANGE_TEXT)
         if self.type == EventType.URGENT and self.request is None:
             raise ValueError("для срочной заявки нужен полный набор полей заявки")
         if self.type in (EventType.CANCEL, EventType.RESTORE) and not self.request_id:
@@ -93,6 +100,11 @@ class Event(BaseModel):
             if self.request.id != self.request_id:
                 raise ValueError("номер заявки в request_id и request.id не совпадает")
         return self
+
+
+MIN_DELAY_MIN = 5
+MAX_DELAY_MIN = 480
+DELAY_RANGE_TEXT = f"задержка должна быть от {MIN_DELAY_MIN} до {MAX_DELAY_MIN} минут"
 
 
 class Visit(BaseModel):

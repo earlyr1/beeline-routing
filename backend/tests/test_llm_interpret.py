@@ -1,9 +1,11 @@
 from app.domain.enums import EventType, Priority, Skill, Transport
+from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
 from app.ingest.geocode import GeoResult
 from app.llm.client import LlmResult, ToolCall
 from app.llm.interpret import NOTHING_FOUND, interpret
 from app.llm.prompt import build_messages
+from app.planning.session import apply_event
 from tests.llm_helpers import ids, named_session
 from tests.planning_helpers import context, day_requests, new_session
 
@@ -342,6 +344,119 @@ def test_prompt_and_nothing_found_hint_mention_request_update():
     assert "propose_request_update" in system["content"]
     assert '"duration_min": 30' in user["content"]
     assert "изменение заявки" in NOTHING_FOUND
+
+
+def test_request_update_with_inverted_window_is_failed_draft():
+    ctx = context()
+    session = named_session(ctx)
+    stored = session.request("R3")
+    out = run(
+        [
+            ToolCall(
+                "propose_request_update",
+                {
+                    "request_id": "R3",
+                    "window_start": "17:00",
+                    "window_end": "16:00",
+                    "duration_min": 45,
+                    "time": "13:00",
+                    "rationale": "Позже",
+                },
+            ),
+            ToolCall(
+                "propose_request_update",
+                {"request_id": "R2", "window_end": "13:30", "rationale": "Раньше конца"},
+            ),
+        ],
+        ctx=ctx,
+        session=session,
+    )
+    assert out.clarifications == []
+    inverted, before_start = out.drafts
+    assert (inverted.event.type, inverted.event.request_id, inverted.event.time) == (
+        EventType.REQUEST_UPDATED,
+        "R3",
+        780,
+    )
+    assert inverted.error == "Конец окна заявки R3 должен быть позже начала."
+    # Окно с концом раньше начала нельзя записать в заявку: в черновике прежнее окно, остальные изменения видны.
+    assert inverted.event.request == stored.model_copy(update={"duration_min": 45})
+    assert inverted.rationale == "Позже"
+    # Конец нового окна 13:30 раньше начала 14:00: тот же текст, а не ошибка разбора.
+    assert (before_start.event.request_id, before_start.error) == (
+        "R2",
+        "Конец окна заявки R2 должен быть позже начала.",
+    )
+
+
+def test_engineer_delay_by_surname_becomes_pending_draft():
+    out = run(
+        [
+            ToolCall(
+                "propose_engineer_delay",
+                {"engineer_id": "Белузин", "delay_min": 40, "time": "13:00", "rationale": "Застрял в пробке"},
+            ),
+            ToolCall(
+                "propose_engineer_delay",
+                {"engineer_id": "арташкин", "delay_min": "30", "rationale": "Опоздает"},
+            ),
+        ]
+    )
+    assert out.clarifications == []
+    assert [
+        (d.event.type, d.event.engineer_id, d.event.delay_min, d.event.time, d.error) for d in out.drafts
+    ] == [
+        (EventType.ENGINEER_DELAYED, "E2", 40, 780, None),
+        (EventType.ENGINEER_DELAYED, "E1", 30, 0, None),
+    ]
+    assert out.drafts[0].rationale == "Застрял в пробке"
+
+
+def test_engineer_delay_with_bad_delay_unknown_or_unavailable_engineer():
+    ctx = context()
+    session = apply_event(
+        named_session(ctx), Event(type=EventType.ENGINEER_UNAVAILABLE, time="12:00", engineer_id="E1"), ctx
+    )
+    out = run(
+        [
+            ToolCall("propose_engineer_delay", {"engineer_id": "Белузин", "delay_min": 0, "rationale": "?"}),
+            ToolCall(
+                "propose_engineer_delay", {"engineer_id": "Кузнецов", "delay_min": 30, "rationale": "?"}
+            ),
+            ToolCall(
+                "propose_engineer_delay",
+                {"engineer_id": "Арташкин", "delay_min": 30, "time": "13:00", "rationale": "Пробка"},
+            ),
+        ],
+        ctx=ctx,
+        session=session,
+    )
+    assert out.clarifications == [
+        "Не удалось разобрать предложение «propose_engineer_delay»: delay_min: задержка должна быть от 5 до 480 минут.",
+        "Инженер «Кузнецов» не найден.",
+    ]
+    [draft] = out.drafts
+    assert (draft.event.engineer_id, draft.event.delay_min) == ("E1", 30)
+    assert draft.error == "Бригада Арташкин недоступен с 12:00, задержку поставить нельзя."
+
+
+def test_delays_of_one_engineer_with_different_minutes_are_not_duplicates():
+    arguments = {"engineer_id": "E1", "time": "13:00", "rationale": "Задержка"}
+    out = run(
+        [
+            ToolCall("propose_engineer_delay", {**arguments, "delay_min": 20}),
+            ToolCall("propose_engineer_delay", {**arguments, "delay_min": 40}),
+            ToolCall("propose_engineer_delay", {**arguments, "delay_min": 20}),
+        ]
+    )
+    assert [d.event.delay_min for d in out.drafts] == [20, 40]
+
+
+def test_prompt_and_nothing_found_hint_mention_engineer_delay():
+    system, _ = build_messages("Белузин застрял в пробке на полчаса", named_session(context()))
+    assert "задержка инженера" in system["content"]
+    assert "propose_engineer_delay" in system["content"]
+    assert "задержка инженера" in NOTHING_FOUND
 
 
 def test_prompt_and_nothing_found_hint_mention_transport_change():
