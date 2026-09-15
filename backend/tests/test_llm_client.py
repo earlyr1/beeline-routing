@@ -149,7 +149,80 @@ def test_request_update_goes_from_provider_to_pending_draft(mode):
         assert "изменение заявки" in last["messages"][0]["content"]
 
 
-def test_tools_mode_sends_seven_tools_and_parses_calls():
+ENGINEER_DELAY = {
+    "engineer_id": "Белузин",
+    "delay_min": 40,
+    "time": "13:00",
+    "rationale": "Застрял в пробке на 40 минут",
+}
+
+
+def test_engineer_delay_tool_spec():
+    spec = TOOL_SPECS["propose_engineer_delay"]
+    assert spec["description"] == (
+        "Предложить отметить задержку инженера: застрял в пробке, работа на объекте затянулась и т.п. "
+        "delay_min — на сколько минут задерживается."
+    )
+    properties = spec["parameters"]["properties"]
+    assert set(properties) == {"engineer_id", "delay_min", "time", "rationale"}
+    assert (
+        properties["delay_min"]["type"],
+        properties["delay_min"]["minimum"],
+        properties["delay_min"]["maximum"],
+    ) == (
+        "integer",
+        5,
+        480,
+    )
+    assert spec["parameters"]["required"] == ["engineer_id", "delay_min", "rationale"]
+    schemas = json.loads(json_mode_instruction().split("\n", 1)[1])
+    assert schemas["propose_engineer_delay"]["description"] == spec["description"]
+    assert schemas["propose_engineer_delay"]["properties"]["delay_min"]["maximum"] == 480
+
+
+@pytest.mark.parametrize("mode", ["tools", "json"])
+def test_engineer_delay_goes_from_provider_to_pending_draft(mode):
+    if mode == "tools":
+        provider = ScriptedProvider(
+            completion(tool_calls=[tool_call("propose_engineer_delay", ENGINEER_DELAY)])
+        )
+    else:
+        action = {"actions": [{"tool": "propose_engineer_delay", "arguments": ENGINEER_DELAY}]}
+        provider = ScriptedProvider(
+            httpx.Response(400, json={"error": {"message": "tools are not supported"}}),
+            completion(content=json.dumps(action, ensure_ascii=False)),
+        )
+    ctx = context()
+    session = named_session(ctx)
+    result = provider.client().complete(build_messages("Белузин застрял в пробке на 40 минут", session))
+
+    assert result.mode == mode
+    interpretation = interpret(result, session, ctx, ids())
+    assert interpretation.clarifications == []
+    [draft] = interpretation.drafts
+    assert (
+        draft.event.type,
+        draft.event.engineer_id,
+        draft.event.delay_min,
+        draft.event.time,
+        draft.error,
+    ) == (
+        EventType.ENGINEER_DELAYED,
+        "E2",
+        40,
+        780,
+        None,
+    )
+    last = provider.bodies()[-1]
+    if mode == "tools":
+        assert "propose_engineer_delay" in [tool["function"]["name"] for tool in last["tools"]]
+    else:
+        assert "tools" not in last
+        assert '"propose_engineer_delay"' in last["messages"][0]["content"]
+        assert "задержка инженера" in last["messages"][0]["content"]
+
+
+def test_tools_mode_sends_eight_tools_and_parses_calls():
     provider = ScriptedProvider(
         completion(
             tool_calls=[
@@ -179,6 +252,7 @@ def test_tools_mode_sends_seven_tools_and_parses_calls():
         "propose_engineer_unavailable",
         "propose_engineer_transport_change",
         "propose_request_update",
+        "propose_engineer_delay",
         "ask_clarification",
     ]
     assert body["messages"] == MESSAGES
@@ -204,6 +278,7 @@ def test_json_mode_parses_fenced_actions_and_sends_no_tools():
     assert len(body["messages"]) == 2 and '"actions"' in body["messages"][0]["content"]
     assert '"propose_engineer_transport_change"' in body["messages"][0]["content"]
     assert '"propose_request_update"' in body["messages"][0]["content"]
+    assert '"propose_engineer_delay"' in body["messages"][0]["content"]
 
 
 def test_auto_mode_falls_back_to_json_when_provider_rejects_tools():

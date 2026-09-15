@@ -130,6 +130,35 @@ def test_other_events_have_no_previous_request():
     assert (urgent.request.id, urgent.request_id) == ("U1", "R1")
 
 
+def test_delay_event_needs_engineer_and_delay():
+    text = "для задержки инженера нужны engineer_id и delay_min"
+    with pytest.raises(ValidationError, match=text):
+        Event(type=EventType.ENGINEER_DELAYED, time="13:00", engineer_id="E1")
+    with pytest.raises(ValidationError, match=text):
+        Event(type="engineer_delayed", time="13:00", delay_min=30)
+
+
+@pytest.mark.parametrize("delay_min", [4, 481, 0, -5])
+def test_delay_event_rejects_delay_outside_5_to_480(delay_min):
+    with pytest.raises(ValidationError, match="задержка должна быть от 5 до 480 минут"):
+        Event(type=EventType.ENGINEER_DELAYED, time="13:00", engineer_id="E1", delay_min=delay_min)
+
+
+@pytest.mark.parametrize("delay_min", [5, 480])
+def test_delay_event_accepts_bounds(delay_min):
+    event = Event(type="engineer_delayed", time="13:00", engineer_id="E1", delay_min=delay_min)
+    assert (event.type, event.engineer_id, event.delay_min) == (EventType.ENGINEER_DELAYED, "E1", delay_min)
+    assert event.model_dump(mode="json")["delay_min"] == delay_min
+
+
+def test_other_events_are_not_affected_by_delay_min():
+    event = Event(type=EventType.CANCEL, time="13:00", request_id="R1")
+    assert event.delay_min is None
+    assert event.model_dump(mode="json")["delay_min"] is None
+    unavailable = Event(type=EventType.ENGINEER_UNAVAILABLE, time="13:00", engineer_id="E1", delay_min=3)
+    assert unavailable.delay_min == 3
+
+
 def test_bundle_json_roundtrip():
     bundle = Bundle(
         region="east",

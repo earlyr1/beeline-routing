@@ -133,6 +133,68 @@ def test_transport_change_event_updates_engineer_transport(tmp_path):
     )
 
 
+def test_delay_event_returns_forecast_and_russian_422(tmp_path):
+    client, _ = make_client(tmp_path)
+    base = f"/api/datasets/{_ready_dataset(client)}"
+    plan = client.get(f"{base}/state").json()["plan"]
+    busy = next(route for route in plan["routes"] if route["visits"])
+    r1 = busy["visits"][0]
+    assert (r1["request_id"], r1["start"], r1["end"]) == ("R1", "10:00", "10:30")
+    planned = {visit["request_id"]: visit["start"] for visit in busy["visits"]}
+    event = {
+        "type": "engineer_delayed",
+        "time": "10:15",
+        "engineer_id": busy["engineer_id"],
+        "delay_min": 360,
+    }
+
+    response = client.post(f"{base}/events", json=event)
+
+    assert response.status_code == 200, response.text
+    state = response.json()
+    forecast = state["last_diff"]["delay_forecast"]
+    assert (forecast["engineer_id"], forecast["delay_min"]) == (busy["engineer_id"], 360)
+    late = {item["request_id"]: item for item in forecast["late_without_replan"]}
+    # R1 закончится в 16:30: R2 (окно до 16:00) опоздает, у каждой записи время HH:MM.
+    assert "R2" in late
+    assert late["R2"]["planned_start"] == planned["R2"]
+    assert late["R2"]["forecast_start"] > "16:00" and len(late["R2"]["forecast_start"]) == 5
+    assert late["R2"]["late_min"] > 0
+    assert isinstance(forecast["overtime_without_replan_min"], int)
+    stored = state["events"][0]["event"]
+    assert (stored["type"], stored["engineer_id"], stored["delay_min"]) == (
+        "engineer_delayed",
+        busy["engineer_id"],
+        360,
+    )
+    extended = next(r for r in state["plan"]["routes"] if r["engineer_id"] == busy["engineer_id"])["visits"][
+        0
+    ]
+    assert (extended["request_id"], extended["end"], extended["pinned"]) == ("R1", "16:30", True)
+    assert state["version"] == 2 and state["now"] == "10:15"
+
+    small = client.post(f"{base}/events", json={**event, "time": "10:20", "delay_min": 3})
+    assert small.status_code == 422
+    assert small.json()["detail"] == "Некорректный запрос: задержка должна быть от 5 до 480 минут"
+    incomplete = client.post(
+        f"{base}/events", json={"type": "engineer_delayed", "time": "10:20", "engineer_id": "E1"}
+    )
+    assert incomplete.status_code == 422
+    assert (
+        incomplete.json()["detail"]
+        == "Некорректный запрос: для задержки инженера нужны engineer_id и delay_min"
+    )
+
+    other = "E1" if busy["engineer_id"] == "E2" else "E2"
+    unavailable = {"type": "engineer_unavailable", "time": "10:30", "engineer_id": other}
+    assert client.post(f"{base}/events", json=unavailable).status_code == 200
+    rejected = client.post(f"{base}/events", json={**event, "time": "10:40", "engineer_id": other})
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == f"Инженер {other} недоступен с 10:30, задержку поставить нельзя."
+    cancel = client.post(f"{base}/events", json={"type": "cancel", "time": "10:45", "request_id": "R3"})
+    assert cancel.json()["last_diff"]["delay_forecast"] is None
+
+
 def test_upload_csv_with_known_ids_reuses_region_bundle(tmp_path):
     client, _ = make_client(tmp_path)
     rows = [(r.id, "10:00", "12:00", r.address) for r in sample_bundle().requests]

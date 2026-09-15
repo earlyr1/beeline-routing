@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from app.domain.models import MAX_DELAY_MIN, MIN_DELAY_MIN
+
 _TIME = {
     "type": "string",
     "pattern": r"^\d{1,2}:\d{2}$",
@@ -126,6 +128,27 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "rationale": _RATIONALE,
             },
             "required": ["request_id", "rationale"],
+        },
+    },
+    "propose_engineer_delay": {
+        "description": (
+            "Предложить отметить задержку инженера: застрял в пробке, работа на объекте затянулась и т.п. "
+            "delay_min — на сколько минут задерживается."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "engineer_id": {"type": "string", "description": "id или фамилия инженера из состояния дня"},
+                "delay_min": {
+                    "type": "integer",
+                    "minimum": MIN_DELAY_MIN,
+                    "maximum": MAX_DELAY_MIN,
+                    "description": "На сколько минут задерживается инженер",
+                },
+                "time": _TIME,
+                "rationale": _RATIONALE,
+            },
+            "required": ["engineer_id", "delay_min", "rationale"],
         },
     },
     "ask_clarification": {

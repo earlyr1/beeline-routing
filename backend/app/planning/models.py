@@ -35,6 +35,22 @@ class DiffShift(BaseModel):
     delta_min: int
 
 
+class LateVisit(BaseModel):
+    request_id: str
+    planned_start: HHMM
+    forecast_start: HHMM
+    late_min: int
+
+
+class DelayForecast(BaseModel):
+    """Что будет с оставшимися визитами задержанного инженера, если план не пересчитывать."""
+
+    engineer_id: str
+    delay_min: int
+    late_without_replan: list[LateVisit] = Field(default_factory=list)
+    overtime_without_replan_min: int = 0
+
+
 class PlanDiff(BaseModel):
     moved: list[DiffMove] = Field(default_factory=list)
     added: list[DiffAssign] = Field(default_factory=list)
@@ -43,6 +59,8 @@ class PlanDiff(BaseModel):
     time_shifts: list[DiffShift] = Field(default_factory=list)
     metrics_before: Metrics
     metrics_after: Metrics
+    # Только у события «Задержка инженера», у остальных событий null.
+    delay_forecast: DelayForecast | None = None
 
 
 class ConstraintCheck(BaseModel):
