@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { timeError } from '../../lib/events';
 import { useAppStore } from '../../store/useAppStore';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
+import { TransportChangeDialog } from './TransportChangeDialog';
 import { UrgentRequestDialog } from './UrgentRequestDialog';
 
 export function EventToolbar() {
@@ -10,7 +11,7 @@ export function EventToolbar() {
   const setEventTime = useAppStore((s) => s.setEventTime);
   const busy = useAppStore((s) => s.busy);
   const showPrevious = useAppStore((s) => s.showPrevious);
-  const [dialog, setDialog] = useState<'urgent' | 'unavailable' | null>(null);
+  const [dialog, setDialog] = useState<'urgent' | 'transport' | 'unavailable' | null>(null);
   if (!state) return null;
 
   const error = timeError(eventTime, state.now);
@@ -24,10 +25,14 @@ export function EventToolbar() {
       <button type="button" className="btn btn-danger" disabled={busy || showPrevious} onClick={() => setDialog('urgent')}>
         Срочная заявка
       </button>
+      <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => setDialog('transport')}>
+        Смена транспорта
+      </button>
       <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => setDialog('unavailable')}>
         Инженер недоступен
       </button>
       {dialog === 'urgent' && <UrgentRequestDialog onClose={() => setDialog(null)} />}
+      {dialog === 'transport' && <TransportChangeDialog onClose={() => setDialog(null)} />}
       {dialog === 'unavailable' && <EngineerUnavailableDialog onClose={() => setDialog(null)} />}
     </div>
   );
