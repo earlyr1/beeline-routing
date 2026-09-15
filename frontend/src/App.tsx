@@ -5,11 +5,13 @@ import { useAppStore } from './store/useAppStore';
 
 export function App() {
   const loadConfig = useAppStore((s) => s.loadConfig);
+  const restoreSession = useAppStore((s) => s.restoreSession);
   const hasPlan = useAppStore((s) => s.state !== null);
 
   useEffect(() => {
     void loadConfig();
-  }, [loadConfig]);
+    void restoreSession();
+  }, [loadConfig, restoreSession]);
 
   return hasPlan ? <MainScreen /> : <UploadScreen />;
 }

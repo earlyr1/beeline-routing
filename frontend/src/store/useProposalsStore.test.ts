@@ -14,6 +14,7 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 import * as api from '../api/client';
+import type { ApproveResponse } from '../api/types';
 import { makePlanningState } from '../test/fixtures';
 import { makeProposal, makeUrgentProposal } from '../test/proposalFixtures';
 import { resetStore } from '../test/store';
@@ -49,6 +50,21 @@ describe('useProposalsStore', () => {
     expect(useProposalsStore.getState().proposals[0].status).toBe('approved');
     expect(useAppStore.getState().state?.version).toBe(5);
     expect(useProposalsStore.getState().working).toBe(false);
+  });
+
+  it('does not bring back the old plan after the dispatcher switched to another file', async () => {
+    useProposalsStore.setState({ datasetId: 'd_test', proposals: [makeProposal()] });
+    let resolve!: (value: ApproveResponse) => void;
+    vi.mocked(api.approveProposal).mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    const pending = useProposalsStore.getState().approve('pr_1');
+    useAppStore.getState().reset();
+    resolve({ proposal: makeProposal({ status: 'approved' }), state: makePlanningState({ version: 5 }) });
+    await pending;
+    expect(useAppStore.getState().state).toBeNull();
   });
 
   it('reloads the list when a proposal was already processed', async () => {

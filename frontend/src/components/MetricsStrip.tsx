@@ -42,19 +42,30 @@ export function MetricsStrip() {
           {showPrevious ? ' · показан план до события' : ''}
         </span>
       </div>
+      {/* В плане до события базовый вариант уже пересчитан после него: разница с ним ничего не значит. */}
       <Metric
         label="Инженеров"
         value={`${current.engineers_used} из ${state.engineers.length}`}
-        delta={formatSigned(current.engineers_used - base.engineers_used)}
+        delta={showPrevious ? undefined : formatSigned(current.engineers_used - base.engineers_used)}
       />
-      <Metric label="Пробег" value={formatKm(current.total_km)} delta={`${formatSigned(current.total_km - base.total_km, 1)} км`} />
+      <Metric
+        label="Пробег"
+        value={formatKm(current.total_km)}
+        delta={showPrevious ? undefined : `${formatSigned(current.total_km - base.total_km, 1)} км`}
+      />
       <Metric label="Назначено" value={String(current.assigned)} />
       <Metric label="Не назначено" value={String(current.unassigned)} warn={current.unassigned > 0} />
       <div className="metrics-strip__actions">
         <button type="button" className="btn" onClick={() => void plan()} disabled={busy}>
           Пересчитать с нуля
         </button>
-        <button type="button" className="btn btn-ghost" onClick={reset}>
+        <button
+          type="button"
+          className="btn btn-ghost"
+          onClick={reset}
+          disabled={busy}
+          title={busy ? 'Дождитесь окончания расчёта' : undefined}
+        >
           Другой файл
         </button>
       </div>

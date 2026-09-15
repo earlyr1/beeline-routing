@@ -12,7 +12,9 @@ export function DiffBanner() {
   if (!state || !state.last_diff || state.version === dismissedVersion) return null;
 
   const diff = state.last_diff;
+  const engineers = byId(state.engineers);
   const last = state.events[state.events.length - 1];
+  const reordered = diff.reordered_engineers.map((engineerId) => engineers.get(engineerId)?.name ?? engineerId);
   const before = diff.metrics_before;
   const after = diff.metrics_after;
   const shifts = diff.time_shifts.filter((item) => item.delta_min !== 0).length;
@@ -20,7 +22,7 @@ export function DiffBanner() {
   return (
     <div className="diff-banner" role="status">
       <div className="diff-banner__text">
-        <strong>{last ? describeEvent(last.event, byId(state.engineers)) : 'План перестроен'}</strong>
+        <strong>{last ? describeEvent(last.event, engineers) : 'План перестроен'}</strong>
         <span>
           Новых назначений: {diff.added.length} · перенесено: {diff.moved.length} · снято: {diff.removed.length} · сдвиг
           времени: {shifts}
@@ -29,6 +31,7 @@ export function DiffBanner() {
           Инженеров {before.engineers_used} → {after.engineers_used} · пробег {formatKm(before.total_km)} →{' '}
           {formatKm(after.total_km)} · не назначено {before.unassigned} → {after.unassigned}
         </span>
+        {reordered.length > 0 && <span>{`Изменён порядок: ${reordered.join(', ')}`}</span>}
       </div>
       <div className="segmented" role="group" aria-label="Какой план показать">
         <button type="button" aria-pressed={showPrevious} onClick={() => setShowPrevious(true)} disabled={!state.previous_plan}>

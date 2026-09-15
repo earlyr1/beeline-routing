@@ -8,18 +8,31 @@ vi.mock('../api/client', async (importOriginal) => {
     uploadFile: vi.fn(),
     getDatasetStatus: vi.fn(),
     buildPlan: vi.fn(),
+    getPlanningState: vi.fn(),
     postEvent: vi.fn(),
   };
 });
 
 import * as api from '../api/client';
+import type { DatasetStatus, PlanningState } from '../api/types';
 import { cancelEvent } from '../lib/events';
 import { makeDatasetStatus, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
-import { POLL_INTERVAL_MS, useAppStore } from './useAppStore';
+import { POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+const processing = () => makeDatasetStatus({ status: 'processing', stage: 'parsing', report: null });
 
 beforeEach(() => {
   vi.resetAllMocks();
+  sessionStorage.clear();
   resetStore();
 });
 
@@ -30,7 +43,7 @@ afterEach(() => {
 describe('useAppStore', () => {
   it('uploads a file and polls until the dataset is ready', async () => {
     vi.useFakeTimers();
-    vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus({ status: 'processing', stage: 'parsing', report: null }));
+    vi.mocked(api.uploadFile).mockResolvedValue(processing());
     vi.mocked(api.getDatasetStatus)
       .mockResolvedValueOnce(makeDatasetStatus({ status: 'processing', stage: 'matrix', report: null }))
       .mockResolvedValueOnce(makeDatasetStatus());
@@ -44,6 +57,57 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ datasetId: 'd_test', busy: false, error: null });
     expect(useAppStore.getState().datasetStatus?.status).toBe('ready');
     expect(api.getDatasetStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries transient status poll failures and keeps tracking the upload', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.uploadFile).mockResolvedValue(processing());
+    vi.mocked(api.getDatasetStatus)
+      .mockRejectedValueOnce(new api.ApiError(502, 'Ошибка сервера 502'))
+      .mockRejectedValueOnce(new api.ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.'))
+      .mockResolvedValueOnce(makeDatasetStatus());
+
+    const done = useAppStore.getState().upload(new File(['x'], 'east.csv'));
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    await done;
+
+    expect(api.getDatasetStatus).toHaveBeenCalledTimes(3);
+    expect(useAppStore.getState()).toMatchObject({ busy: false, error: null });
+    expect(useAppStore.getState().datasetStatus?.status).toBe('ready');
+  });
+
+  it('gives up after three retries and lets the dispatcher upload again', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.uploadFile).mockResolvedValue(processing());
+    vi.mocked(api.getDatasetStatus).mockRejectedValue(new api.ApiError(503, 'Ошибка сервера 503'));
+
+    const done = useAppStore.getState().upload(new File(['x'], 'east.csv'));
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 5);
+    await done;
+
+    expect(api.getDatasetStatus).toHaveBeenCalledTimes(4);
+    expect(useAppStore.getState()).toMatchObject({
+      busy: false,
+      datasetStatus: null,
+      error: 'Ошибка сервера 503. Загрузите файл ещё раз.',
+    });
+  });
+
+  it('stops polling at once when the dataset is gone', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.uploadFile).mockResolvedValue(processing());
+    vi.mocked(api.getDatasetStatus).mockRejectedValue(new api.ApiError(404, 'Набор данных не найден'));
+
+    const done = useAppStore.getState().upload(new File(['x'], 'east.csv'));
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    await done;
+
+    expect(api.getDatasetStatus).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState()).toMatchObject({
+      busy: false,
+      datasetStatus: null,
+      error: 'Набор данных не найден. Загрузите файл ещё раз.',
+    });
   });
 
   it('stores the backend failure message', async () => {
@@ -85,6 +149,40 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().state?.version).toBe(5);
   });
 
+  it('ignores a plan response that arrives after «Другой файл»', async () => {
+    resetStore({ datasetId: 'd_test' });
+    const response = deferred<PlanningState>();
+    vi.mocked(api.buildPlan).mockReturnValue(response.promise);
+    const pending = useAppStore.getState().plan();
+    expect(useAppStore.getState().busy).toBe(true);
+
+    useAppStore.getState().reset();
+    response.resolve(makePlanningState());
+    await pending;
+
+    expect(useAppStore.getState()).toMatchObject({ state: null, datasetId: null, busy: false });
+    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+  });
+
+  it('ignores an event response that arrives after a new upload started', async () => {
+    resetStore({ datasetId: 'd_old', state: makePlanningState({ dataset_id: 'd_old' }) });
+    const response = deferred<PlanningState>();
+    vi.mocked(api.postEvent).mockReturnValue(response.promise);
+    const pending = useAppStore.getState().applyEvent(cancelEvent('50104', '13:00'));
+
+    const uploaded = deferred<DatasetStatus>();
+    vi.mocked(api.uploadFile).mockReturnValue(uploaded.promise);
+    const uploading = useAppStore.getState().upload(new File(['x'], 'south.csv'));
+
+    response.resolve(makePlanningState({ dataset_id: 'd_old', version: 5 }));
+    expect(await pending).toBe(false);
+    expect(useAppStore.getState()).toMatchObject({ state: null, busy: true });
+
+    uploaded.resolve(makeDatasetStatus({ dataset_id: 'd_new' }));
+    await uploading;
+    expect(useAppStore.getState()).toMatchObject({ state: null, datasetId: 'd_new', busy: false });
+  });
+
   it('drops the selection of a request that no longer exists', () => {
     resetStore({ selectedRequestId: 'GONE' });
     useAppStore.getState().setPlanningState(makePlanningState());
@@ -115,5 +213,77 @@ describe('useAppStore', () => {
     useAppStore.getState().reset();
     expect(useAppStore.getState().state).toBeNull();
     expect(useAppStore.getState().config).not.toBeNull();
+  });
+});
+
+describe('session after a page reload', () => {
+  it('remembers the dataset of the shown plan and forgets it on reset or a new upload', async () => {
+    useAppStore.getState().setPlanningState(makePlanningState());
+    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
+    useAppStore.getState().reset();
+    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+
+    useAppStore.getState().setPlanningState(makePlanningState());
+    vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus({ dataset_id: 'd_new' }));
+    await useAppStore.getState().upload(new File(['x'], 'south.csv'));
+    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+  });
+
+  it('restores the saved plan', async () => {
+    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    vi.mocked(api.getPlanningState).mockResolvedValue(makePlanningState({ version: 7 }));
+    await useAppStore.getState().restoreSession();
+    expect(api.getPlanningState).toHaveBeenCalledWith('d_test');
+    expect(useAppStore.getState().datasetId).toBe('d_test');
+    expect(useAppStore.getState().state?.version).toBe(7);
+  });
+
+  it.each([404, 409])('forgets the saved dataset and stays on upload when the backend answers %i', async (status) => {
+    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_gone');
+    vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(status, 'Набор данных не найден'));
+    await useAppStore.getState().restoreSession();
+    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    expect(useAppStore.getState()).toMatchObject({ state: null, datasetId: null, error: null, busy: false });
+  });
+
+  it('keeps the saved dataset when the server is temporarily unreachable', async () => {
+    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.'));
+    await useAppStore.getState().restoreSession();
+    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
+    expect(useAppStore.getState()).toMatchObject({ state: null, error: 'Сервер недоступен. Проверьте, что backend запущен.' });
+  });
+
+  it('ignores a restored plan when the dispatcher already started another upload', async () => {
+    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    const response = deferred<PlanningState>();
+    vi.mocked(api.getPlanningState).mockReturnValue(response.promise);
+    const restoring = useAppStore.getState().restoreSession();
+    vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus({ dataset_id: 'd_new' }));
+    await useAppStore.getState().upload(new File(['x'], 'south.csv'));
+    response.resolve(makePlanningState());
+    await restoring;
+    expect(useAppStore.getState()).toMatchObject({ state: null, datasetId: 'd_new' });
+  });
+
+  it('works without a saved dataset and when session storage is blocked', async () => {
+    await useAppStore.getState().restoreSession();
+    expect(api.getPlanningState).not.toHaveBeenCalled();
+
+    const blocked = () => {
+      throw new DOMException('Доступ к хранилищу запрещён', 'SecurityError');
+    };
+    const spies = [
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(blocked),
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(blocked),
+      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(blocked),
+    ];
+    try {
+      await expect(useAppStore.getState().restoreSession()).resolves.toBeUndefined();
+      expect(() => useAppStore.getState().setPlanningState(makePlanningState())).not.toThrow();
+      expect(() => useAppStore.getState().reset()).not.toThrow();
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
   });
 });

@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { makePlanningState } from '../test/fixtures';
 import {
   buildUrgentEvent,
+  busiestEngineerId,
   cancelEvent,
+  defaultUrgentWindow,
   describeEvent,
+  earliestShiftStart,
   newUrgentId,
   restoreEvent,
   timeError,
   unavailableEvent,
   validateUrgentForm,
+  visitsFrom,
   type UrgentForm,
 } from './events';
 import { byId } from './planView';
@@ -61,6 +65,31 @@ describe('events', () => {
     expect(cancelEvent('1', '14:00')).toEqual({ type: 'cancel', time: '14:00', request: null, request_id: '1', engineer_id: null });
     expect(restoreEvent('1', '14:00').type).toBe('restore');
     expect(unavailableEvent('E01', '14:00')).toMatchObject({ type: 'engineer_unavailable', engineer_id: 'E01', request_id: null });
+  });
+
+  it('starts the default urgent window no earlier than the first shift of an available engineer', () => {
+    const { engineers } = makePlanningState();
+    expect(earliestShiftStart(engineers)).toBe('10:00');
+    const withShift = (id: string, shiftStart: string) =>
+      engineers.map((engineer) => (engineer.id === id ? { ...engineer, shift_start: shiftStart } : engineer));
+    expect(earliestShiftStart(withShift('E03', '08:00'))).toBe('10:00');
+    expect(earliestShiftStart(withShift('E02', '09:30'))).toBe('09:30');
+    expect(earliestShiftStart([])).toBeNull();
+    expect(defaultUrgentWindow('00:00', engineers)).toEqual({ windowStart: '10:00', windowEnd: '12:00' });
+    expect(defaultUrgentWindow('13:15', engineers)).toEqual({ windowStart: '13:15', windowEnd: '15:15' });
+    expect(defaultUrgentWindow('00:00', [])).toEqual({ windowStart: '00:00', windowEnd: '02:00' });
+  });
+
+  it('counts visits left after a time and picks the busiest available engineer', () => {
+    const state = makePlanningState();
+    expect(visitsFrom(state.plan, 'E01', '14:00')).toBe(2);
+    expect(visitsFrom(state.plan, 'E02', '13:00')).toBe(1);
+    expect(visitsFrom(state.plan, 'E03', '00:00')).toBe(0);
+    expect(busiestEngineerId(state.engineers, state.plan, '13:00')).toBe('E01');
+    expect(busiestEngineerId([...state.engineers].reverse(), state.plan, '16:00')).toBe('E01');
+    const onlyUnavailableBusy = { ...state.plan, routes: [{ ...state.plan.routes[2], visits: state.plan.routes[0].visits }] };
+    expect(busiestEngineerId(state.engineers, onlyUnavailableBusy, '09:00')).toBe('E01');
+    expect(busiestEngineerId([], state.plan, '13:00')).toBeNull();
   });
 
   it('generates readable urgent ids', () => {

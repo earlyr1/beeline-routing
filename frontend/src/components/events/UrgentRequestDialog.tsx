@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import type { Skill, Transport } from '../../api/types';
-import { buildUrgentEvent, newUrgentId, validateUrgentForm, type UrgentForm } from '../../lib/events';
-import { addMinutes, isValidTime, laterTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
+import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type UrgentForm } from '../../lib/events';
+import { isValidTime, laterTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 
 const SKILLS: Skill[] = ['emergency', 'connection', 'local'];
@@ -17,21 +17,35 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const startPick = useAppStore((s) => s.startPick);
   const finishPick = useAppStore((s) => s.finishPick);
   const now = state?.now ?? '00:00';
+  const engineers = state?.engineers ?? [];
   const initialTime = isValidTime(eventTime) ? laterTime(eventTime, now) : now;
   const [form, setForm] = useState<UrgentForm>(() => ({
     address: '',
     point: null,
-    windowStart: initialTime,
-    windowEnd: addMinutes(initialTime, 120),
+    ...defaultUrgentWindow(initialTime, engineers),
     durationMin: 60,
     skill: 'emergency',
     transport: 'car',
     time: initialTime,
   }));
+  // Пока диспетчер не правил окно руками, окно следует за временем события.
+  const [windowTouched, setWindowTouched] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const point = pickedPoint ?? form.point;
 
   const update = <K extends keyof UrgentForm>(key: K, value: UrgentForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const updateWindow = (key: 'windowStart' | 'windowEnd', value: string) => {
+    setWindowTouched(true);
+    update(key, value);
+  };
+
+  const updateTime = (value: string) =>
+    setForm((prev) => ({
+      ...prev,
+      time: value,
+      ...(windowTouched || !isValidTime(value) ? {} : defaultUrgentWindow(value, engineers)),
+    }));
 
   const close = () => {
     finishPick(null);
@@ -69,11 +83,11 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
         <div className="field-row">
           <label className="field">
             <span>Окно с</span>
-            <input type="time" value={form.windowStart} onChange={(event) => update('windowStart', event.target.value)} />
+            <input type="time" value={form.windowStart} onChange={(event) => updateWindow('windowStart', event.target.value)} />
           </label>
           <label className="field">
             <span>Окно до</span>
-            <input type="time" value={form.windowEnd} onChange={(event) => update('windowEnd', event.target.value)} />
+            <input type="time" value={form.windowEnd} onChange={(event) => updateWindow('windowEnd', event.target.value)} />
           </label>
           <label className="field">
             <span>Длительность, мин</span>
@@ -105,7 +119,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
         </div>
         <label className="field">
           <span>Время события</span>
-          <input type="time" value={form.time} min={now} onChange={(event) => update('time', event.target.value)} />
+          <input type="time" value={form.time} min={now} onChange={(event) => updateTime(event.target.value)} />
         </label>
         {errors.length > 0 && (
           <ul className="error-list" role="alert">
