@@ -15,7 +15,7 @@ LLM_TOOL_MODES = ("auto", "tools", "json")
 DEFAULT_SOLVER_TIME_LIMIT_S = 5
 # Лимит OR-Tools на весь день с обедом: перерывы в модели замедляют поиск. С этим лимитом посчитаны бандлы и
 # таблица результатов в README.
-DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S = 15
+DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S = 30
 
 
 @dataclass(frozen=True)

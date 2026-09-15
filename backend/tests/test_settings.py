@@ -22,15 +22,15 @@ def test_settings_from_env_defaults_and_overrides(tmp_path):
     assert settings.geocode_cache_path == tmp_path / "geocode_cache.json"
     assert settings.yandex_maps_api_key is None
     assert settings.llm_enabled and settings.geocoder == "nominatim"
-    assert (settings.solver_time_limit_s, settings.solver_time_limit_lunch_s) == (5, 15)
+    assert (settings.solver_time_limit_s, settings.solver_time_limit_lunch_s) == (5, 30)
 
 
 def test_solver_time_limits_default_to_five_and_fifteen_seconds_everywhere():
-    """День с обедом считается до 15 секунд, день без обеда и перепланирование по событию до 5 секунд."""
-    assert (DEFAULT_SOLVER_TIME_LIMIT_S, DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S) == (5, 15)
+    """День с обедом считается до 30 секунд, день без обеда и перепланирование по событию до 5 секунд."""
+    assert (DEFAULT_SOLVER_TIME_LIMIT_S, DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S) == (5, 30)
     assert OrToolsSolver().time_limit_s == 5
     ctx = PlanningContext(model=TravelModel(), traffic=TrafficProfile({}))
-    assert (ctx.time_limit_s, ctx.time_limit_lunch_s) == (5, 15)
+    assert (ctx.time_limit_s, ctx.time_limit_lunch_s) == (5, 30)
     overridden = Settings.from_env({"SOLVER_TIME_LIMIT_S": "2", "SOLVER_TIME_LIMIT_LUNCH_S": "7"})
     assert (overridden.solver_time_limit_s, overridden.solver_time_limit_lunch_s) == (2, 7)
 

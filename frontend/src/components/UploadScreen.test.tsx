@@ -67,13 +67,13 @@ describe('UploadScreen', () => {
     expect(screen.getByText('Запас на дорогу: без запаса')).toBeInTheDocument();
 
     fireEvent.change(slider, { target: { value: '0' } });
-    expect(screen.getByText('😌 Спокойный день: Больше инженеров, у каждого свободнее день')).toBeInTheDocument();
+    expect(screen.getByText('😌 Спокойный день: Больше инженеров, больше запас на дорогу')).toBeInTheDocument();
     expect(screen.getByText('Запас на дорогу: +30%')).toBeInTheDocument();
 
     const lunch = screen.getByRole('checkbox', { name: 'Обед по плану' });
     expect(lunch).toBeChecked();
     expect(
-      screen.getByText('45 минут в середине смены у каждого инженера. С обедом план считается до 15 секунд, без обеда до 5.'),
+      screen.getByText('45 минут в середине смены у каждого инженера. С обедом план считается до 30 секунд, без обеда до 5.'),
     ).toHaveClass('muted');
     fireEvent.click(lunch);
     expect(lunch).not.toBeChecked();

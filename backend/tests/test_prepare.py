@@ -107,5 +107,5 @@ def test_self_check_requires_strict_improvement():
 
 def test_cli_time_limit_defaults_to_lunch_limit():
     """Бандл считается с обедом, поэтому и лимит OR-Tools по умолчанию как у дня с обедом."""
-    assert build_parser().parse_args([]).time_limit == DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S == 15
+    assert build_parser().parse_args([]).time_limit == DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S == 30
     assert build_parser().parse_args(["--time-limit", "10"]).time_limit == 10

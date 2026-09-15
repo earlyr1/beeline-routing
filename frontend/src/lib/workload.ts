@@ -12,7 +12,7 @@ export interface WorkloadLevel {
 }
 
 export const WORKLOAD_LEVELS: readonly WorkloadLevel[] = [
-  { level: 0, title: 'Спокойный день', emoji: '😌', hint: 'Больше инженеров, у каждого свободнее день', travelFactor: 1.3 },
+  { level: 0, title: 'Спокойный день', emoji: '😌', hint: 'Больше инженеров, больше запас на дорогу', travelFactor: 1.3 },
   { level: 1, title: 'Обычный день', emoji: '😐', hint: 'Баланс между числом инженеров и пробегом', travelFactor: 1.1 },
   { level: 2, title: 'На пределе', emoji: '🥵', hint: 'Меньше инженеров, каждому больше заявок', travelFactor: 1 },
 ];

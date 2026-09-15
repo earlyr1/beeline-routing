@@ -6,7 +6,7 @@ import { useAppStore } from '../store/useAppStore';
 
 const PRECISIONS: GeocodePrecision[] = ['house', 'street', 'locality', 'none'];
 
-const LUNCH_HINT = '45 минут в середине смены у каждого инженера. С обедом план считается до 15 секунд, без обеда до 5.';
+const LUNCH_HINT = '45 минут в середине смены у каждого инженера. С обедом план считается до 30 секунд, без обеда до 5.';
 
 export function UploadScreen() {
   const status = useAppStore((s) => s.datasetStatus);

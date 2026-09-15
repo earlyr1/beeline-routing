@@ -14,7 +14,7 @@ describe('workload levels', () => {
   it('mirrors the backend scale of three steps from a calm day to a day at the limit', () => {
     expect(DEFAULT_WORKLOAD_LEVEL).toBe(1);
     expect(WORKLOAD_LEVELS.map(({ level, emoji, title, hint }) => ({ level, emoji, title, hint }))).toEqual([
-      { level: 0, emoji: '😌', title: 'Спокойный день', hint: 'Больше инженеров, у каждого свободнее день' },
+      { level: 0, emoji: '😌', title: 'Спокойный день', hint: 'Больше инженеров, больше запас на дорогу' },
       { level: 1, emoji: '😐', title: 'Обычный день', hint: 'Баланс между числом инженеров и пробегом' },
       { level: 2, emoji: '🥵', title: 'На пределе', hint: 'Меньше инженеров, каждому больше заявок' },
     ]);

@@ -168,7 +168,7 @@ def solver_limits(monkeypatch):
     return seen
 
 
-@pytest.mark.parametrize(("lunch_enabled", "full_day"), [(True, 15), (False, 5)])
+@pytest.mark.parametrize(("lunch_enabled", "full_day"), [(True, 30), (False, 5)])
 def test_full_day_limit_depends_on_lunch_and_event_replan_keeps_five_seconds(
     solver_limits, lunch_enabled, full_day
 ):
