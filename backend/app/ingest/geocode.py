@@ -19,6 +19,10 @@ NOMINATIM_TIMEOUT_S = 5.0
 # После сетевой ошибки геокодер не вызывается минуту: адреса ищутся только в кэше и не ждут таймаутов.
 NETWORK_RETRY_S = 60.0
 _network_down_until: float | None = None
+# Ранг объекта Nominatim (place_rank): 30 — дом или адресная точка, 26–27 — улица, 16 — город.
+HOUSE_PLACE_RANK = 28
+STREET_PLACE_RANK = 26
+_PRECISION_ORDER = {"locality": 0, "street": 1, "house": 2}
 
 
 @dataclass(frozen=True)
@@ -26,6 +30,7 @@ class GeoHit:
     lat: float
     lon: float
     category: str = ""
+    place_rank: int | None = None
 
 
 @dataclass(frozen=True)
@@ -87,11 +92,20 @@ class NominatimGeocoder:
         if not items:
             return None
         item = items[0]
-        return GeoHit(float(item["lat"]), float(item["lon"]), str(item.get("category", "")))
+        rank = item.get("place_rank")
+        return GeoHit(
+            float(item["lat"]),
+            float(item["lon"]),
+            str(item.get("category", "")),
+            None if rank is None else int(rank),
+        )
 
 
 class JsonGeocodeCache:
-    """запрос -> [lat, lon, category] или null (промах тоже кэшируется)."""
+    """запрос -> [lat, lon, category, place_rank] или null (промах тоже кэшируется).
+
+    place_rank пишется, только если он известен; старые записи [lat, lon, category] читаются с place_rank=None.
+    """
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
@@ -103,10 +117,16 @@ class JsonGeocodeCache:
         if query not in self._data:
             return False, None
         value = self._data[query]
-        return True, None if value is None else GeoHit(value[0], value[1], value[2])
+        if value is None:
+            return True, None
+        return True, GeoHit(value[0], value[1], value[2], value[3] if len(value) > 3 else None)
 
     def put(self, query: str, hit: GeoHit | None) -> None:
-        self._data[query] = None if hit is None else [hit.lat, hit.lon, hit.category]
+        if hit is None:
+            self._data[query] = None
+            return
+        rank = [] if hit.place_rank is None else [hit.place_rank]
+        self._data[query] = [hit.lat, hit.lon, hit.category, *rank]
 
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,6 +139,17 @@ def _network_down(clock: Callable[[], float]) -> bool:
     return _network_down_until is not None and clock() < _network_down_until
 
 
+def auto_precision(hit: GeoHit) -> str:
+    """Точность попадания по адресу как его ввели: по рангу объекта, для старых записей кэша — по категории."""
+    if hit.category == "highway":
+        return "street"
+    if hit.place_rank is None:
+        return "house" if hit.category in ("building", "place") else "locality"
+    if hit.place_rank >= HOUSE_PLACE_RANK:
+        return "house"
+    return "street" if hit.place_rank >= STREET_PLACE_RANK else "locality"
+
+
 def geocode_address(
     raw: str,
     district: str,
@@ -129,8 +160,11 @@ def geocode_address(
     """Перебирает варианты запроса от точного к грубому; ошибки сети и сервиса не кэшируются.
 
     После сетевой ошибки оставшиеся варианты и следующие адреса NETWORK_RETRY_S секунд ищутся только в кэше.
+    Точность варианта "auto" определяет найденный объект. Если это не дом, поиск идёт дальше: улица из разбора
+    точнее района, а при равной или худшей точности остаётся ответ на адрес как его ввели.
     """
     global _network_down_until
+    coarse: GeoResult | None = None
     for query, precision in query_variants(parse_address(raw), district):
         found, hit = cache.get(query)
         if not found:
@@ -146,7 +180,14 @@ def geocode_address(
             cache.put(query, hit)
         if hit is None or not in_region(hit.lat, hit.lon):
             continue
-        if precision == "house" and hit.category == "highway":
+        if precision == "auto":
+            precision = auto_precision(hit)
+            if precision != "house":
+                coarse = GeoResult(hit.lat, hit.lon, precision, query)
+                continue
+        elif precision == "house" and hit.category == "highway":
             precision = "street"
+        if coarse is not None and _PRECISION_ORDER[coarse.precision] >= _PRECISION_ORDER[precision]:
+            return coarse
         return GeoResult(hit.lat, hit.lon, precision, query)
-    return GeoResult(None, None, "none", None)
+    return coarse or GeoResult(None, None, "none", None)
