@@ -1038,6 +1038,27 @@ h4 {
   grid-template-columns: 1fr;
 }
 
+/* Обед по плану: серая полоса на дорожке, не открывает заявку. */
+.timeline__lunch {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: #d1d5db;
+  color: #374151;
+  font-size: 9px;
+  line-height: 16px;
+  text-align: center;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* Обед в таблице визитов бригады: строка без перехода к заявке. */
+.route-card__lunch td {
+  color: var(--muted);
+}
+
 /* Меню карты по клику на пустом месте: над точкой клика, с хвостиком вниз. Одно для Яндекс Карт и OpenStreetMap. */
 .map-menu {
   position: relative;

@@ -29,9 +29,34 @@ describe('RouteCard', () => {
     ).toBeInTheDocument();
 
     const rows = bodyRows();
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(5);
     expect(cells(rows[0])).toEqual(['1', '74198Закреплена', '10:00–12:00', '09:35', '10:00', '120 мин', '6,1 км']);
     expect(cells(rows[3])).toEqual(['4', '46393', '15:00–17:00', '15:10', '15:10', '110 мин', '3,9 км']);
+    expect(cells(rows[4])).toEqual(['', 'Обед', '15:55–16:40']);
+  });
+
+  it('lists the lunch among the visits in time order and the lunch row opens nothing', () => {
+    useAppStore.setState({ showPrevious: true });
+    render(<RouteCard />);
+    const rows = bodyRows();
+    expect(rows.map((row) => cells(row).slice(0, 3))).toEqual([
+      ['1', '74198Закреплена', '10:00–12:00'],
+      ['2', '86160Закреплена', '12:00–14:00'],
+      ['', 'Обед', '13:30–14:15'],
+      ['3', '46393', '15:00–17:00'],
+    ]);
+    fireEvent.click(rows[2]);
+    expect(useAppStore.getState()).toMatchObject({ selectedRequestId: null, selectedEngineerId: 'E01' });
+  });
+
+  it('shows no lunch for a route without a lunch', () => {
+    const state = makePlanningState();
+    const plan = { ...state.plan, routes: state.plan.routes.map((route) => ({ ...route, lunch: null })) };
+    resetStore({ datasetId: 'd_test', state: { ...state, plan }, selectedEngineerId: 'E01' });
+    render(<RouteCard />);
+    expect(bodyRows()).toHaveLength(4);
+    expect(within(card()).queryByText('Обед')).not.toBeInTheDocument();
+    expect(timeline().querySelector('.timeline__lunch')).toBeNull();
   });
 
   it('explains the route in dispatcher language', () => {
@@ -62,7 +87,7 @@ describe('RouteCard', () => {
     useAppStore.setState({ showPrevious: true });
     render(<RouteCard />);
     expect(within(card()).getByText('Маршрут по плану до события.')).toBeInTheDocument();
-    expect(bodyRows().map((row) => cells(row)[1])).toEqual(['74198Закреплена', '86160Закреплена', '46393']);
+    expect(bodyRows().map((row) => cells(row)[1])).toEqual(['74198Закреплена', '86160Закреплена', 'Обед', '46393']);
     expect(within(timeline()).getByRole('button', { name: 'Заявка 46393 15:00–15:45' })).toBeInTheDocument();
   });
 
@@ -128,6 +153,13 @@ describe('RouteCard', () => {
     expect(personal.querySelectorAll('.timeline__shift')).toHaveLength(1);
     expect(personal.querySelector('.timeline__now')).not.toBeNull();
     expect(container.querySelector('.timeline__unavailable')).toBeNull();
+
+    const lunch = within(personal).getByTitle('Обед 15:55–16:40');
+    expect(lunch).toHaveClass('timeline__lunch');
+    expect(lunch).toHaveTextContent('Обед');
+    expect(lunch.tagName).toBe('DIV');
+    fireEvent.click(lunch);
+    expect(useAppStore.getState().selectedRequestId).toBeNull();
 
     fireEvent.click(within(personal).getByRole('button', { name: 'Заявка 50104 14:00–14:45' }));
     expect(useAppStore.getState()).toMatchObject({ selectedRequestId: '50104', selectedEngineerId: 'E01' });

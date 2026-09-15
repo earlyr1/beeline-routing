@@ -19,14 +19,17 @@ function visit(requestId: string, arrival: string, start: string, end: string, l
   return { request_id: requestId, arrival, start, end, leg_km: legKm, leg_min: legMin, late_min: 0, pinned };
 }
 
-function route(engineerId: string, visits: Visit[]): Route {
+function route(engineerId: string, visits: Visit[], lunch: Route['lunch'] = null): Route {
   return {
     engineer_id: engineerId,
     visits,
     total_km: Number(visits.reduce((sum, item) => sum + item.leg_km, 0).toFixed(2)),
     total_travel_min: visits.reduce((sum, item) => sum + item.leg_min, 0),
+    lunch,
   };
 }
+
+const lunch = (start: string, end: string): Route['lunch'] => ({ start, end });
 
 function metrics(routes: Route[], unassigned: number, violations = 0): Metrics {
   const used = routes.filter((item) => item.visits.length > 0);
@@ -117,8 +120,8 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       visit('86160', '11:40', '12:00', '13:00', 7.9, 40, true),
       visit('50104', '13:35', '14:00', '14:45', 5.8, 35),
       visit('46393', '15:10', '15:10', '15:55', 3.9, 25),
-    ]),
-    route('E02', [visit('84627', '09:25', '12:00', '12:40', 5.9, 25, true), visit('URG-001', '13:05', '13:05', '14:05', 5.3, 25)]),
+    ], lunch('15:55', '16:40')),
+    route('E02', [visit('84627', '09:25', '12:00', '12:40', 5.9, 25, true), visit('URG-001', '13:05', '13:05', '14:05', 5.3, 25)], lunch('14:05', '14:50')),
     route('E03', []),
   ];
   const previousRoutes = [
@@ -126,8 +129,8 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       visit('74198', '09:35', '10:00', '11:00', 6.1, 35, true),
       visit('86160', '11:40', '12:00', '13:00', 7.9, 40, true),
       visit('46393', '13:30', '15:00', '15:45', 6.4, 30),
-    ]),
-    route('E02', [visit('84627', '09:25', '12:00', '12:40', 5.9, 25, true), visit('50104', '13:05', '14:00', '14:45', 5.4, 25)]),
+    ], lunch('13:30', '14:15')),
+    route('E02', [visit('84627', '09:25', '12:00', '12:40', 5.9, 25, true), visit('50104', '13:05', '14:00', '14:45', 5.4, 25)], lunch('13:05', '13:50')),
     route('E03', []),
   ];
   const baselineRoutes = [
@@ -135,10 +138,11 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       visit('74198', '09:35', '10:00', '11:00', 6.1, 35, true),
       visit('86160', '11:40', '12:00', '13:00', 7.9, 40, true),
       visit('46393', '13:35', '15:00', '15:45', 7.0, 35),
-    ]),
-    route('E02', [visit('84627', '09:25', '12:00', '12:40', 5.9, 25, true), visit('URG-001', '13:05', '13:05', '14:05', 5.3, 25)]),
+    ], lunch('13:35', '14:20')),
+    route('E02', [visit('84627', '09:25', '12:00', '12:40', 5.9, 25, true), visit('URG-001', '13:05', '13:05', '14:05', 5.3, 25)], lunch('14:05', '14:50')),
     route('E03', []),
   ];
+  // План диспетчеров показываем как есть, без обеда.
   const controlRoutes = [
     route('E01', [visit('74198', '09:35', '10:00', '11:00', 6.1, 35), visit('86160', '11:40', '12:00', '13:00', 7.9, 40)]),
     route('E02', [
@@ -251,11 +255,11 @@ export function makeAsapRequest(overrides: Partial<ServiceRequest> = {}): Servic
   });
 }
 
-/** План с заявкой «как можно скорее» URG-002: Бригада Белузин едет к ней после URG-001. */
+/** План с заявкой «как можно скорее» URG-002: Бригада Белузин едет к ней после URG-001 и обедает после неё. */
 export function makeAsapState(): PlanningState {
   const state = makePlanningState();
   const routes = state.plan.routes.map((item) =>
-    item.engineer_id === 'E02' ? route('E02', [...item.visits, visit('URG-002', '14:25', '14:25', '15:25', 4.2, 20)]) : item,
+    item.engineer_id === 'E02' ? route('E02', [...item.visits, visit('URG-002', '14:25', '14:25', '15:25', 4.2, 20)], lunch('15:25', '16:10')) : item,
   );
   return {
     ...state,

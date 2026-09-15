@@ -1,5 +1,5 @@
-import type { Engineer, Plan, PlanningState, ServiceRequest } from '../api/types';
-import { requestWindowPhrase, toMinutes } from './format';
+import type { Engineer, Plan, PlanningState, RouteLunch, ServiceRequest } from '../api/types';
+import { formatWindow, requestWindowPhrase, toMinutes } from './format';
 
 /** Ось по умолчанию 08:00–23:00, расширяется под данные, но не дальше 00:00–24:00. */
 export const AXIS_DEFAULT_FROM = 8 * 60;
@@ -28,12 +28,22 @@ export interface TimelineBar {
   window: string | null;
 }
 
+/** Обед по плану на дорожке инженера: серая полоса без перехода к заявке. */
+export interface TimelineLunch {
+  left: number;
+  width: number;
+  /** Время обеда для подсказки: «13:30–14:15» */
+  label: string;
+}
+
 export interface TimelineRow {
   engineer: Engineer;
   shiftLeft: number;
   shiftWidth: number;
   unavailableLeft: number | null;
   bars: TimelineBar[];
+  /** null, если в маршруте нет обеда, например в плане диспетчеров. */
+  lunch: TimelineLunch | null;
 }
 
 export function timeScale(state: PlanningState, plan: Plan): TimeScale {
@@ -43,6 +53,10 @@ export function timeScale(state: PlanningState, plan: Plan): TimeScale {
     for (const visit of route.visits) {
       starts.push(toMinutes(visit.start));
       ends.push(toMinutes(visit.end));
+    }
+    if (route.lunch) {
+      starts.push(toMinutes(route.lunch.start));
+      ends.push(toMinutes(route.lunch.end));
     }
   }
   const from = Math.max(0, Math.floor(Math.min(AXIS_DEFAULT_FROM, ...starts) / 60) * 60);
@@ -59,6 +73,11 @@ export function hourTicks(scale: TimeScale): number[] {
   const ticks: number[] = [];
   for (let minute = scale.from; minute <= scale.to; minute += 60) ticks.push(minute);
   return ticks;
+}
+
+function lunchBar(scale: TimeScale, lunch: RouteLunch): TimelineLunch {
+  const left = percent(scale, toMinutes(lunch.start));
+  return { left, width: percent(scale, toMinutes(lunch.end)) - left, label: formatWindow(lunch.start, lunch.end) };
 }
 
 function buildRow(engineer: Engineer, plan: Plan, scale: TimeScale, requests: Map<string, ServiceRequest>): TimelineRow {
@@ -94,6 +113,7 @@ function buildRow(engineer: Engineer, plan: Plan, scale: TimeScale, requests: Ma
     shiftWidth: shiftEnd - shiftStart,
     unavailableLeft: unavailableFrom === null ? null : percent(scale, toMinutes(unavailableFrom)),
     bars,
+    lunch: route?.lunch ? lunchBar(scale, route.lunch) : null,
   };
 }
 

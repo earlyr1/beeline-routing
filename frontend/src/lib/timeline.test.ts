@@ -73,6 +73,27 @@ describe('timeline', () => {
     ]);
   });
 
+  it('draws the lunch of a route as a bar at its time and nothing for a route without a lunch', () => {
+    const plan = state.previous_plan!;
+    const scale = timeScale(state, plan);
+    const rows = timelineRows(state, plan, scale);
+    expect(rows[0].lunch).toEqual({
+      left: percent(scale, 810),
+      width: percent(scale, 855) - percent(scale, 810),
+      label: '13:30–14:15',
+    });
+    expect(rows[1].lunch?.label).toBe('13:05–13:50');
+    expect(rows[2].lunch).toBeNull();
+    const control = state.control!;
+    expect(timelineRows(state, control, timeScale(state, control)).map((row) => row.lunch)).toEqual([null, null, null]);
+  });
+
+  it('extends the axis to fit a lunch', () => {
+    const [e01, ...rest] = state.plan.routes;
+    const plan = { ...state.plan, routes: [{ ...e01, lunch: { start: '23:00', end: '23:45' } }, ...rest] };
+    expect(timeScale(state, plan).to).toBe(1440);
+  });
+
   it('produces hour ticks', () => {
     expect(hourTicks({ from: 540, to: 720 })).toEqual([540, 600, 660, 720]);
   });
