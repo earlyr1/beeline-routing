@@ -33,8 +33,15 @@ TOWNS_OUTSIDE_MOSCOW = ("Домодедово", "Кашира", "Ступино"
 _TYPES = "|".join(sorted((re.escape(key) for key in STREET_TYPES), key=len, reverse=True))
 _PREFIX_TYPE = re.compile(rf"^(?P<type>{_TYPES})(?:\.\s*|\s+)(?P<name>.+)$", re.IGNORECASE)
 _SUFFIX_TYPE = re.compile(rf"^(?P<name>.+?)\s+(?P<type>{_TYPES})\.?$", re.IGNORECASE)
-_FLAT = re.compile(r",?\s*(?<![а-яё])(?:кв\.\s*\S+|(?:кв|квартира)\s+\d\S*)\s*$", re.IGNORECASE)
-_TOWN_PREFIX = re.compile(r"^(?:г\.\s*)?(?:Город\s+)?(?:Москва|Домодедово|Кашира|Ступино)\b\s*")
+# Квартира, подъезд, этаж, офис и помещение в конце адреса к номеру дома не относятся.
+_TAIL = re.compile(
+    r",?\s*(?<![а-яё])(?:кв\.\s*\S+|(?:кв|квартира)\s+\d\S*"
+    r"|(?:подъезд|под\.|этаж|эт\.?|офис|оф\.?|помещение|пом\.?)\s*\d\S*)\s*$",
+    re.IGNORECASE,
+)
+_TOWN_PREFIX = re.compile(
+    r"^(?:г\.\s*)?(?:Город\s+)?(?:Москва|Домодедово|Кашира|Ступино)\b\s*", re.IGNORECASE
+)
 _ORDINAL_SUFFIX = re.compile(r"^(?P<rest>.+?)\s+(?P<ord>\d+-[йяе])$")
 _QUARTER = re.compile(r"\s+Квартал\s+\S+$")
 
@@ -86,11 +93,20 @@ def _split_street(chunk: str) -> tuple[str, str] | None:
     return None
 
 
+def _strip_tail(text: str) -> str:
+    """Убирает с конца адреса квартиру, подъезд, этаж, офис и помещение, сколько бы их ни было подряд."""
+    while True:
+        stripped = _TAIL.sub("", text, count=1)
+        if stripped == text:
+            return stripped
+        text = stripped
+
+
 def parse_address(raw: str) -> ParsedAddress:
-    text = _FLAT.sub("", raw.strip())
+    text = _strip_tail(raw.strip())
     city = "Москва"
     for town in TOWNS_OUTSIDE_MOSCOW:
-        if re.search(rf"\b{town}\b", text):
+        if re.search(rf"\b{town}\b", text, re.IGNORECASE):
             city = f"{town}, Московская область"
             break
     # «дом 42, корпус 1» -> «дом 42 корпус 1»: корпус и строение относятся к дому перед запятой.
@@ -113,8 +129,8 @@ def parse_address(raw: str) -> ParsedAddress:
 
 
 def raw_query(raw: str) -> str:
-    """Адрес как его ввели, но без квартиры и слов «дом», «корпус», «строение»: «42, корпус 1» -> «42к1»."""
-    text = _FLAT.sub("", raw.strip())
+    """Адрес как его ввели, но без квартиры, подъезда, этажа и слов «дом», «корпус», «строение»: «42, корпус 1» -> «42к1»."""
+    text = _strip_tail(raw.strip())
     text = _HOUSE_WORD_MARK.sub("", text)
     text = _BUILDING_MARK.sub(lambda match: "к" if match.group("korpus") else "с", text)
     text = re.sub(r"\s+", " ", text)

@@ -225,3 +225,38 @@ def test_query_variants_raw_address_does_not_repeat_a_street_query():
         ("Москва, 3-я Парковая улица", "street"),
         ("Москва, улица 3-я Парковая", "street"),
     ]
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        ", подъезд 2",
+        " подъезд 2",
+        ", под. 2",
+        ", этаж 3",
+        ", эт. 3",
+        ", офис 5",
+        ", оф. 5",
+        ", помещение 4",
+        ", пом. 4",
+        ", кв. 17, подъезд 2, этаж 3",
+    ],
+)
+def test_entrance_floor_office_and_premises_are_not_the_house(tail):
+    from app.ingest.address import raw_query
+
+    raw = f"Москва, Большая Косинская улица, 27{tail}"
+    parsed = parse_address(raw)
+    assert (parsed.street_type, parsed.street_name, parsed.house) == ("улица", "Большая Косинская", "27")
+    assert raw_query(raw) == "Москва, Большая Косинская улица, 27"
+
+
+def test_towns_outside_moscow_are_found_in_any_case():
+    parsed = parse_address("кашира, улица победы, 9")
+    assert (parsed.city, parsed.street_type, parsed.street_name, parsed.house) == (
+        "Кашира, Московская область",
+        "улица",
+        "победы",
+        "9",
+    )
+    assert query_variants(parsed, "")[0] == ("Кашира, Московская область, победы улица, 9", "house")
