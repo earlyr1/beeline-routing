@@ -93,6 +93,11 @@ def _split_street(chunk: str) -> tuple[str, str] | None:
     return None
 
 
+def join_building_parts(text: str) -> str:
+    """Корпус и строение после запятой относятся к дому перед ней: «12, корпус 2» -> «12 корпус 2»."""
+    return _COMMA_BEFORE_BUILDING.sub(" ", text)
+
+
 def _strip_tail(text: str) -> str:
     """Убирает с конца адреса квартиру, подъезд, этаж, офис и помещение, сколько бы их ни было подряд."""
     while True:

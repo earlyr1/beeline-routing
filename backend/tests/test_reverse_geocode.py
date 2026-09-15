@@ -112,6 +112,14 @@ def test_nominatim_reverse_without_result_returns_none():
     assert _nominatim(handler).reverse(55.74, 37.78) is None
 
 
+@pytest.mark.parametrize("address", ["Москва", ["Москва"], 42])
+def test_nominatim_reverse_with_malformed_address_returns_none(address):
+    def handler(request):
+        return httpx.Response(200, json={"address": address})
+
+    assert _nominatim(handler).reverse(55.74, 37.78) is None
+
+
 @pytest.mark.parametrize(
     ("hit", "expected"),
     [
@@ -133,6 +141,14 @@ def test_nominatim_reverse_without_result_returns_none():
         ),
         (ReverseHit("Москва", "Тверская улица", " 7 "), ReverseAddress("Москва, Тверская улица, 7", "house")),
         (ReverseHit("Москва", "Тверская улица", "7;9"), ReverseAddress("Москва, Тверская улица, 7", "house")),
+        (
+            ReverseHit("Москва", "улица Ильинка", "12, корпус 2"),
+            ReverseAddress("Москва, улица Ильинка, 12к2", "house"),
+        ),
+        (
+            ReverseHit("Москва", "улица Ильинка", "12, строение 3;14"),
+            ReverseAddress("Москва, улица Ильинка, 12с3", "house"),
+        ),
         (ReverseHit("Москва", "Перовская улица"), ReverseAddress("Москва, Перовская улица", "street")),
         (ReverseHit(None, "Перовская улица"), ReverseAddress("Перовская улица", "street")),
         (ReverseHit("Балашиха"), ReverseAddress("Балашиха", "locality")),

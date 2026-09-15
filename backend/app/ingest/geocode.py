@@ -13,7 +13,7 @@ from typing import Any, Protocol, runtime_checkable
 
 import httpx
 
-from app.ingest.address import normalize_house, parse_address, query_variants
+from app.ingest.address import join_building_parts, normalize_house, parse_address, query_variants
 
 # min_lat, min_lon, max_lat, max_lon: Москва и Московская область
 MOSCOW_REGION_BBOX = (54.2, 35.1, 57.0, 40.3)
@@ -156,7 +156,9 @@ class NominatimGeocoder:
         )
         if not isinstance(data, dict) or "error" in data:
             return None
-        return reverse_hit(data.get("address") or {})
+        address = data.get("address")
+        # Без объекта address (или с неожиданным типом) точку считаем ненайденной, а не ошибкой сервера.
+        return reverse_hit(address) if isinstance(address, dict) else None
 
 
 def _first(address: Mapping[str, Any], fields: tuple[str, ...]) -> str | None:
@@ -186,7 +188,8 @@ def short_address(hit: ReverseHit | None) -> ReverseAddress:
     hit = hit or ReverseHit()
     city = (hit.city or "").strip()
     road = (hit.road or "").strip()
-    house = re.split(r"[,;]", hit.house_number or "")[0].strip()
+    # Корпус и строение после запятой остаются при доме, а следующий дом из списка («7;9», «7, 9») отбрасывается.
+    house = re.split(r"[,;]", join_building_parts(hit.house_number or ""))[0].strip()
     if house:
         house = normalize_house(house) or re.sub(r"\s+", " ", house)
     parts = [part for part in (city, road, house) if part]
