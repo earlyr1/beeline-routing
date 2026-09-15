@@ -261,8 +261,18 @@ export interface PlanningState {
   last_diff: PlanDiff | null;
   events: AppliedEvent[];
   matrix_source: MatrixSource;
-  /** Нагрузка инженеров сессии от 0 (спокойный день) до 4 (на пределе): её используют все расчёты дня. */
+  /** Нагрузка инженеров сессии от 0 (спокойный день) до 2 (на пределе): её используют все расчёты дня. */
   workload_level: number;
+  /** Обед по плану в сессии: без него маршруты без обеда, а план дня с нуля считается быстрее. */
+  lunch_enabled: boolean;
+}
+
+/** Тело POST /api/datasets/{id}/plan: пропущенное поле оставляет значение сессии. */
+export interface PlanRequest {
+  /** Нагрузка инженеров от 0 до 2. */
+  workload_level?: number;
+  /** Обед по плану у каждого инженера. */
+  lunch?: boolean;
 }
 
 export interface RouteLeg {

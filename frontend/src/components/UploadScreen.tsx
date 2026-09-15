@@ -6,6 +6,8 @@ import { useAppStore } from '../store/useAppStore';
 
 const PRECISIONS: GeocodePrecision[] = ['house', 'street', 'locality', 'none'];
 
+const LUNCH_HINT = '45 минут в середине смены у каждого инженера. С обедом план считается до 15 секунд, без обеда до 5.';
+
 export function UploadScreen() {
   const status = useAppStore((s) => s.datasetStatus);
   const busy = useAppStore((s) => s.busy);
@@ -14,6 +16,8 @@ export function UploadScreen() {
   const plan = useAppStore((s) => s.plan);
   const level = useAppStore((s) => s.workloadLevel);
   const setWorkloadLevel = useAppStore((s) => s.setWorkloadLevel);
+  const lunchEnabled = useAppStore((s) => s.lunchEnabled);
+  const setLunchEnabled = useAppStore((s) => s.setLunchEnabled);
   const inputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -33,7 +37,7 @@ export function UploadScreen() {
   const processing = status?.status === 'processing';
   const report = status?.report ?? null;
   const progress = status && status.progress.total > 0 ? Math.round((status.progress.done / status.progress.total) * 100) : 0;
-  // Пока файл обрабатывается, уровень можно менять: сервер получит его только вместе с «Спланировать».
+  // Пока файл обрабатывается, нагрузку и обед можно менять: сервер получит их только вместе с «Спланировать».
   const planning = busy && status?.status === 'ready';
   const workload = workloadLevel(level);
 
@@ -169,6 +173,16 @@ export function UploadScreen() {
             {`${workload.emoji} ${workload.title}: ${workload.hint}`}
           </p>
           <p className="muted workload__buffer">{travelBufferText(workload.level)}</p>
+          <label className="workload__lunch">
+            <input
+              type="checkbox"
+              checked={lunchEnabled}
+              disabled={planning}
+              onChange={(event) => setLunchEnabled(event.target.checked)}
+            />
+            <span>Обед по плану</span>
+          </label>
+          <p className="muted workload__lunch-hint">{LUNCH_HINT}</p>
         </section>
 
         {status?.status === 'ready' && (

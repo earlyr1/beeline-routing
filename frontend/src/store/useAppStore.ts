@@ -12,7 +12,7 @@ import {
 import type { ClientConfig, DatasetStatus, HHMM, PlanEvent, PlanningState } from '../api/types';
 import type { PickedPoint } from '../lib/events';
 import { isValidTime, laterTime } from '../lib/format';
-import { DEFAULT_WORKLOAD_LEVEL, clampWorkloadLevel } from '../lib/workload';
+import { DEFAULT_LUNCH_ENABLED, DEFAULT_WORKLOAD_LEVEL, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 
 export const POLL_INTERVAL_MS = 1000;
 /** Сколько раз повторить опрос статуса после сбоя сети или ответа 5xx, прежде чем сдаться. */
@@ -69,8 +69,10 @@ export interface AppData {
   urgentAddressLookup: AddressLookup;
   /** Адрес, найденный по точке срочной заявки; null — не нашли или не искали. */
   urgentSuggestedAddress: string | null;
-  /** Нагрузка инженеров от 0 до 4: диспетчер выбирает её перед планированием, сервер возвращает уровень сессии. */
+  /** Нагрузка инженеров от 0 до 2: диспетчер выбирает её перед планированием, сервер возвращает уровень сессии. */
   workloadLevel: number;
+  /** Обед по плану: диспетчер выбирает его вместе с нагрузкой, сервер возвращает выбор сессии. */
+  lunchEnabled: boolean;
 }
 
 export interface AppActions {
@@ -88,6 +90,8 @@ export interface AppActions {
   setEventTime(value: HHMM): void;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
   setWorkloadLevel(level: number): void;
+  /** Включить или выключить обед по плану для следующего расчёта плана с нуля. */
+  setLunchEnabled(value: boolean): void;
   /** Начать выбор точки на карте для диалога-владельца. */
   startPick(owner?: PickOwner): void;
   finishPick(point: PickedPoint | null): void;
@@ -138,6 +142,7 @@ export const initialAppData: AppData = {
   urgentAddressLookup: 'idle',
   urgentSuggestedAddress: null,
   workloadLevel: DEFAULT_WORKLOAD_LEVEL,
+  lunchEnabled: DEFAULT_LUNCH_ENABLED,
 };
 
 /** Плавающие диалоги открываются на одном месте, поэтому открытый диалог закрывает остальные. */
@@ -248,12 +253,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   async plan() {
-    const { datasetId, workloadLevel } = get();
+    const { datasetId, workloadLevel, lunchEnabled } = get();
     if (!datasetId) return;
     const current = generation;
     set({ busy: true, error: null });
     try {
-      const state = await buildPlan(datasetId, workloadLevel);
+      const state = await buildPlan(datasetId, { workload_level: workloadLevel, lunch: lunchEnabled });
       if (!isCurrent(current)) return;
       get().setPlanningState(state);
       set({ selectedRequestId: null });
@@ -308,8 +313,9 @@ export const useAppStore = create<AppState>()((set, get) => ({
       eventTime: isValidTime(eventTime) ? laterTime(eventTime, state.now) : state.now,
       selectedRequestId: exists(selectedRequestId) ? selectedRequestId : null,
       editingRequestId: exists(editingRequestId) ? editingRequestId : null,
-      // Уровень сессии на сервере: «Пересчитать с нуля» и восстановленный план продолжают с ним.
+      // Нагрузка и обед сессии на сервере: «Пересчитать с нуля» и восстановленный план продолжают с ними.
       workloadLevel: clampWorkloadLevel(state.workload_level),
+      lunchEnabled: lunchEnabledOf(state.lunch_enabled),
     });
   },
 
@@ -335,6 +341,10 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   setWorkloadLevel(level) {
     set({ workloadLevel: clampWorkloadLevel(level) });
+  },
+
+  setLunchEnabled(value) {
+    set({ lunchEnabled: value });
   },
 
   startPick(owner) {
@@ -428,7 +438,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
     generation += 1;
     addressLookup += 1;
     saveDatasetId(null);
-    // Нагрузку диспетчер выбирал сам: следующий файл он планирует с тем же уровнем.
-    set({ ...initialAppData, config: get().config, workloadLevel: get().workloadLevel });
+    // Нагрузку и обед диспетчер выбирал сам: следующий файл он планирует с тем же выбором.
+    const { config, workloadLevel, lunchEnabled } = get();
+    set({ ...initialAppData, config, workloadLevel, lunchEnabled });
   },
 }));

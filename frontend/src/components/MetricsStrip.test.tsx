@@ -39,17 +39,23 @@ describe('MetricsStrip', () => {
     expect(screen.getByRole('button', { name: 'Пересчитать с нуля' })).toBeDisabled();
   });
 
-  it('shows the workload level of the day and replans from scratch with the same level', async () => {
-    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 3 }));
-    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 3, version: 5 }));
+  it('shows the workload level and the lunch of the day and replans from scratch with the same choice', async () => {
+    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 2, lunch_enabled: false }));
+    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 2, lunch_enabled: false, version: 5 }));
     render(<MetricsStrip />);
 
     const item = screen.getByTitle('Стоимость нового инженера для оптимизатора зависит от нагрузки дня');
     expect(item).toHaveTextContent('Нагрузка');
-    expect(item).toHaveTextContent('😓 Плотный день');
+    expect(item).toHaveTextContent('🥵 На пределе · без обеда');
 
     fireEvent.click(screen.getByRole('button', { name: 'Пересчитать с нуля' }));
     await waitFor(() => expect(useAppStore.getState().state?.version).toBe(5));
-    expect(api.buildPlan).toHaveBeenCalledWith('d_test', 3);
+    expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 2, lunch: false });
+  });
+
+  it('shows a day with lunch', () => {
+    render(<MetricsStrip />);
+    const item = screen.getByTitle('Стоимость нового инженера для оптимизатора зависит от нагрузки дня');
+    expect(item).toHaveTextContent('😐 Обычный день · с обедом');
   });
 });

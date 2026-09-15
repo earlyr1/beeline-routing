@@ -352,6 +352,30 @@ h4 {
   font-size: 13px;
 }
 
+.workload__lunch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  margin: 14px 0 2px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.workload__lunch input {
+  margin: 0;
+}
+
+.workload__lunch:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workload__lunch-hint {
+  margin: 0;
+  font-size: 13px;
+}
+
 /* Основной экран */
 .app-shell {
   height: 100vh;

@@ -45,24 +45,24 @@ describe('UploadScreen', () => {
     expect(screen.queryByRole('button', { name: 'Спланировать' })).not.toBeInTheDocument();
   });
 
-  it('lets the dispatcher set the workload level before the upload and plans the day with it', async () => {
+  it('lets the dispatcher set the workload level and the lunch before the upload and plans the day with them', async () => {
     vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus());
-    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0 }));
+    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false }));
     render(<UploadScreen />);
 
     const slider = screen.getByRole('slider', { name: 'Нагрузка инженеров' });
     expect(screen.getByRole('heading', { name: 'Нагрузка инженеров' })).toBeInTheDocument();
-    expect(slider).toHaveValue('2');
+    expect(slider).toHaveValue('1');
     expect(slider).toHaveAttribute('min', '0');
-    expect(slider).toHaveAttribute('max', '4');
+    expect(slider).toHaveAttribute('max', '2');
     expect(slider).toHaveAttribute('step', '1');
     expect(screen.getByText('😌')).toBeInTheDocument();
     expect(screen.getByText('🥵')).toBeInTheDocument();
     expect(screen.getByText('😐 Обычный день: Баланс между числом инженеров и пробегом')).toBeInTheDocument();
     expect(screen.getByText('Запас на дорогу: +10%')).toBeInTheDocument();
 
-    fireEvent.change(slider, { target: { value: '4' } });
-    expect(useAppStore.getState().workloadLevel).toBe(4);
+    fireEvent.change(slider, { target: { value: '2' } });
+    expect(useAppStore.getState().workloadLevel).toBe(2);
     expect(screen.getByText('🥵 На пределе: Меньше инженеров, каждому больше заявок')).toBeInTheDocument();
     expect(screen.getByText('Запас на дорогу: без запаса')).toBeInTheDocument();
 
@@ -70,27 +70,42 @@ describe('UploadScreen', () => {
     expect(screen.getByText('😌 Спокойный день: Больше инженеров, у каждого свободнее день')).toBeInTheDocument();
     expect(screen.getByText('Запас на дорогу: +30%')).toBeInTheDocument();
 
+    const lunch = screen.getByRole('checkbox', { name: 'Обед по плану' });
+    expect(lunch).toBeChecked();
+    expect(
+      screen.getByText('45 минут в середине смены у каждого инженера. С обедом план считается до 15 секунд, без обеда до 5.'),
+    ).toHaveClass('muted');
+    fireEvent.click(lunch);
+    expect(lunch).not.toBeChecked();
+    expect(useAppStore.getState().lunchEnabled).toBe(false);
+
     fireEvent.change(screen.getByTestId('file-input'), { target: { files: [new File(['x'], 'east.csv')] } });
     expect(await screen.findByRole('heading', { name: 'Восток' })).toBeInTheDocument();
     const planButton = screen.getByRole('button', { name: 'Спланировать' });
     const sliderAfterUpload = screen.getByRole('slider', { name: 'Нагрузка инженеров' });
     expect(sliderAfterUpload).toHaveValue('0');
+    expect(screen.getByRole('checkbox', { name: 'Обед по плану' })).not.toBeChecked();
     expect(sliderAfterUpload.compareDocumentPosition(planButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      screen.getByRole('checkbox', { name: 'Обед по плану' }).compareDocumentPosition(planButton) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     fireEvent.click(planButton);
-    await waitFor(() => expect(api.buildPlan).toHaveBeenCalledWith('d_test', 0));
+    await waitFor(() => expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 0, lunch: false }));
   });
 
-  it('blocks the workload slider only while the plan is being built', () => {
+  it('blocks the workload slider and the lunch only while the plan is being built', () => {
     resetStore({ busy: true, datasetStatus: makeDatasetStatus({ status: 'processing', stage: 'geocoding', report: null }) });
     const { unmount } = render(<UploadScreen />);
     expect(screen.getByRole('slider', { name: 'Нагрузка инженеров' })).toBeEnabled();
+    expect(screen.getByRole('checkbox', { name: 'Обед по плану' })).toBeEnabled();
     unmount();
 
     resetStore({ busy: true, datasetStatus: makeDatasetStatus() });
     render(<UploadScreen />);
     expect(screen.getByRole('button', { name: 'Считаем план…' })).toBeDisabled();
     expect(screen.getByRole('slider', { name: 'Нагрузка инженеров' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Обед по плану' })).toBeDisabled();
   });
 
   it('shows the backend error', () => {
