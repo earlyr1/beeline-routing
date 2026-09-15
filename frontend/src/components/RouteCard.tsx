@@ -15,6 +15,8 @@ export function RouteCard() {
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const selectEngineer = useAppStore((s) => s.selectEngineer);
   const selectRequest = useAppStore((s) => s.selectRequest);
+  const busy = useAppStore((s) => s.busy);
+  const startDelay = useAppStore((s) => s.startDelay);
   if (!state || !selectedEngineerId || selectedRequestId) return null;
   const summary = routeSummary(state, displayedPlan(state, showPrevious), selectedEngineerId);
   if (!summary) return null;
@@ -37,9 +39,20 @@ export function RouteCard() {
           <h3>{engineer.name}</h3>
           <p className="muted">{profile}</p>
         </div>
-        <button type="button" className="btn btn-ghost btn-small" onClick={() => selectEngineer(null)} aria-label="Закрыть маршрут">
-          ✕
-        </button>
+        <div className="explanation__actions">
+          <button
+            type="button"
+            className="btn btn-small"
+            disabled={busy || showPrevious || !engineer.available}
+            title={engineer.available ? undefined : 'Инженер недоступен, задержку поставить нельзя'}
+            onClick={() => startDelay(engineer.id)}
+          >
+            Задержка
+          </button>
+          <button type="button" className="btn btn-ghost btn-small" onClick={() => selectEngineer(null)} aria-label="Закрыть маршрут">
+            ✕
+          </button>
+        </div>
       </header>
       {showPrevious && state.previous_plan && <p className="note">Маршрут по плану до события.</p>}
       {stops.length > 0 && (

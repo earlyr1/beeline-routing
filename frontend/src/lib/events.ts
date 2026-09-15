@@ -1,9 +1,10 @@
-import type { Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, Transport, Visit } from '../api/types';
+import type { DelayForecast, Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, Transport, Visit } from '../api/types';
 import {
   addMinutes,
   formatWindow,
   isValidTime,
   laterTime,
+  plural,
   PRIORITY_LABELS,
   shortAddress,
   SKILL_LABELS,
@@ -278,8 +279,67 @@ export const transportChangeEvent = (engineerId: string, transport: Transport, t
   transport,
 });
 
+/** Быстрый выбор задержки в диалоге, минут. */
+export const DELAY_PRESETS = [15, 30, 60];
+export const MIN_DELAY_MIN = 5;
+export const MAX_DELAY_MIN = 480;
+
+/** Задержка принимается целым числом минут в тех же границах, что проверяет сервер. */
+export function validateDelay(value: number): string | null {
+  if (!Number.isInteger(value) || value < MIN_DELAY_MIN || value > MAX_DELAY_MIN) {
+    return `Задержка должна быть от ${MIN_DELAY_MIN} до ${MAX_DELAY_MIN} минут`;
+  }
+  return null;
+}
+
+/** Задержка инженера: клиент передаёт, кто задерживается и на сколько минут; последствия сервер считает по плану. */
+export const delayEvent = (engineerId: string, delayMin: number, time: HHMM): PlanEvent => ({
+  type: 'engineer_delayed',
+  time,
+  request: null,
+  request_id: null,
+  engineer_id: engineerId,
+  delay_min: delayMin,
+});
+
+/**
+ * Прогноз задержки без перепланирования языком диспетчера: к скольким клиентам и насколько опоздали бы, и переработка.
+ * Заявки и инженеры в тексте пока не нужны, параметры оставлены по общему контракту описаний событий.
+ */
+export function forecastLines(
+  forecast: DelayForecast,
+  _requests: Map<string, ServiceRequest>,
+  _engineers: Map<string, Engineer>,
+): string[] {
+  const late = forecast.late_without_replan;
+  const overtime = forecast.overtime_without_replan_min;
+  const overtimeText = `переработка ${overtime} мин`;
+  if (late.length === 0) {
+    return [overtime > 0 ? `Без перепланирования была бы ${overtimeText}` : 'Задержка не привела бы к опозданиям'];
+  }
+  const minutes = late.map((item) => item.late_min);
+  const least = Math.min(...minutes);
+  const most = Math.max(...minutes);
+  const range = least === most ? `${least}` : `${least}–${most}`;
+  const clients = `${late.length} ${plural(late.length, 'клиенту', 'клиентам', 'клиентам')}`;
+  const line = `Без перепланирования опоздали бы к ${clients} на ${range} мин`;
+  return [overtime > 0 ? `${line} и ${overtimeText}` : line];
+}
+
+/** Подробности прогноза для подсказки: по строке на каждый визит с опозданием. */
+export function lateVisitsTitle(forecast: DelayForecast): string {
+  return forecast.late_without_replan
+    .map((item) => `${item.request_id}: план ${item.planned_start}, прогноз ${item.forecast_start}, +${item.late_min} мин`)
+    .join('\n');
+}
+
 export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>): string {
   switch (event.type) {
+    case 'engineer_delayed': {
+      const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
+      if (event.delay_min == null) return `Задержка: ${name} с ${event.time}`;
+      return `Задержка: ${name} на ${event.delay_min} мин с ${event.time}`;
+    }
     case 'request_updated': {
       const title = `Изменена заявка ${event.request_id ?? event.request?.id ?? ''} с ${event.time}`;
       const changes = event.previous_request && event.request ? requestChanges(event.previous_request, event.request) : [];

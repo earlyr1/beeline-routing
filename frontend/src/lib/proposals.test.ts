@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
+import { makeDelayEvent, makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
 import { makeProposal, makeUrgentProposal } from '../test/proposalFixtures';
 import { formatKm } from './format';
 import { diffSummary, plural, proposalDetails, upsertProposal } from './proposals';
@@ -42,6 +42,17 @@ describe('proposals view helpers', () => {
     };
     const approved = makeProposal({ status: 'approved', event: makeTransportChangeEvent({ time: '16:00' }) });
     expect(proposalDetails(approved, switched)).toEqual(['Бригада Арташкин: Автомобиль → Велосипед с 16:00']);
+  });
+
+  it('describes an engineer delay and counts the requests left in the route after its time', () => {
+    expect(proposalDetails(makeProposal({ event: makeDelayEvent({ delay_min: 30 }) }), state)).toEqual([
+      'Бригада Арташкин: задержка 30 мин с 13:30',
+      'В маршруте после 13:30: 2 заявки',
+    ]);
+    const single = makeProposal({ event: makeDelayEvent({ engineer_id: 'E02', delay_min: 45, time: '13:00' }) });
+    expect(proposalDetails(single, state)).toEqual(['Бригада Белузин: задержка 45 мин с 13:00', 'В маршруте после 13:00: 1 заявка']);
+    const empty = makeProposal({ event: makeDelayEvent({ engineer_id: 'E03', delay_min: 15, time: '14:00' }) });
+    expect(proposalDetails(empty, state)).toEqual(['Бригада Комарь: задержка 15 мин с 14:00', 'В маршруте после 14:00: 0 заявок']);
   });
 
   it('lists the changes of a request update against the current request', () => {

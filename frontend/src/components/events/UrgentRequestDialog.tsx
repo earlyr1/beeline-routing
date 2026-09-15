@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type { Skill, Transport } from '../../api/types';
 import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type UrgentForm } from '../../lib/events';
 import { isValidTime, laterTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
@@ -13,9 +13,10 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const pickMode = useAppStore((s) => s.pickMode);
+  const pickFor = useAppStore((s) => s.pickFor);
   const pickedPoint = useAppStore((s) => s.pickedPoint);
   const startPick = useAppStore((s) => s.startPick);
-  const finishPick = useAppStore((s) => s.finishPick);
+  const clearPick = useAppStore((s) => s.clearPick);
   const now = state?.now ?? '00:00';
   const engineers = state?.engineers ?? [];
   const initialTime = isValidTime(eventTime) ? laterTime(eventTime, now) : now;
@@ -31,7 +32,13 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   // Пока диспетчер не правил окно руками, окно следует за временем события.
   const [windowTouched, setWindowTouched] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
-  const point = pickedPoint ?? form.point;
+  // Точку из стора видит только диалог, начавший выбор; в форме она остаётся, даже когда карту займёт изменение заявки.
+  const picking = pickMode && pickFor === 'urgent';
+  const ownPoint = pickFor === 'urgent' ? pickedPoint : null;
+  useEffect(() => {
+    if (ownPoint) setForm((prev) => ({ ...prev, point: ownPoint }));
+  }, [ownPoint]);
+  const point = ownPoint ?? form.point;
 
   const update = <K extends keyof UrgentForm>(key: K, value: UrgentForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
 
@@ -48,7 +55,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
     }));
 
   const close = () => {
-    finishPick(null);
+    clearPick('urgent');
     onClose();
   };
 
@@ -71,8 +78,8 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
           <input value={form.address} onChange={(event) => update('address', event.target.value)} placeholder="Город Москва, ул.Ташкентская, д. 16к2" />
         </label>
         <div className="field-row">
-          <button type="button" className="btn btn-small" onClick={startPick} disabled={pickMode}>
-            {pickMode ? 'Кликните по карте…' : 'Указать точку на карте'}
+          <button type="button" className="btn btn-small" onClick={() => startPick('urgent')} disabled={picking}>
+            {picking ? 'Кликните по карте…' : 'Указать точку на карте'}
           </button>
           {point && (
             <span className="muted">

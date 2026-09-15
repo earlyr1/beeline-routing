@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { describeEvent } from '../lib/events';
+import { describeEvent, forecastLines, lateVisitsTitle } from '../lib/events';
 import { formatKm } from '../lib/format';
 import { byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
@@ -18,6 +18,10 @@ export function DiffBanner() {
   const before = diff.metrics_before;
   const after = diff.metrics_after;
   const shifts = diff.time_shifts.filter((item) => item.delta_min !== 0).length;
+  const forecast = diff.delay_forecast ?? null;
+  const forecastText = forecast ? forecastLines(forecast, byId(state.requests), engineers) : [];
+  const lateTitle = forecast ? lateVisitsTitle(forecast) : '';
+  const forecastWarns = forecast !== null && (forecast.late_without_replan.length > 0 || forecast.overtime_without_replan_min > 0);
 
   return (
     <div className="diff-banner" role="status">
@@ -31,6 +35,11 @@ export function DiffBanner() {
           Инженеров {before.engineers_used} → {after.engineers_used} · пробег {formatKm(before.total_km)} →{' '}
           {formatKm(after.total_km)} · не назначено {before.unassigned} → {after.unassigned}
         </span>
+        {forecastText.map((line) => (
+          <span key={line} className={forecastWarns ? 'warn-text' : undefined} title={lateTitle || undefined}>
+            {line}
+          </span>
+        ))}
         {reordered.length > 0 && <span>{`Изменён порядок: ${reordered.join(', ')}`}</span>}
       </div>
       <div className="segmented" role="group" aria-label="Какой план показать">

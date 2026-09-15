@@ -12,6 +12,9 @@ export const SESSION_DATASET_KEY = 'routing.datasetId';
 /** Время события по умолчанию для демо: середина рабочего дня, но не раньше текущего времени плана. */
 export const DEFAULT_EVENT_TIME: HHMM = '13:00';
 
+/** Диалог, для которого диспетчер указывает точку на карте. */
+export type PickOwner = 'urgent' | 'edit';
+
 export interface AppData {
   config: ClientConfig | null;
   datasetId: string | null;
@@ -26,8 +29,13 @@ export interface AppData {
   error: string | null;
   pickMode: boolean;
   pickedPoint: PickedPoint | null;
+  /** Чья точка на карте: точку видит только диалог, который начал выбор. */
+  pickFor: PickOwner | null;
   /** Заявка, открытая в диалоге «Изменить заявку»; null, когда диалог закрыт. */
   editingRequestId: string | null;
+  delayDialogOpen: boolean;
+  /** Инженер, выбранный в карточке маршрута для диалога «Задержка инженера»; null — выбрать в диалоге. */
+  delayEngineerId: string | null;
 }
 
 export interface AppActions {
@@ -43,11 +51,17 @@ export interface AppActions {
   setTab(tabId: string): void;
   setShowPrevious(value: boolean): void;
   setEventTime(value: HHMM): void;
-  startPick(): void;
+  /** Начать выбор точки на карте для диалога-владельца. */
+  startPick(owner?: PickOwner): void;
   finishPick(point: PickedPoint | null): void;
-  /** Открыть диалог изменения заявки; незаконченный выбор точки на карте сбрасывается. */
+  /** Сбросить выбор точки, только если он принадлежит этому диалогу. */
+  clearPick(owner: PickOwner): void;
+  /** Открыть диалог изменения заявки; точка, выбранная для прежнего изменения, сбрасывается. */
   startEdit(requestId: string): void;
   closeEdit(): void;
+  /** Открыть диалог задержки; engineerId из карточки маршрута, null — инженера выберут в диалоге. */
+  startDelay(engineerId: string | null): void;
+  closeDelay(): void;
   clearError(): void;
   reset(): void;
 }
@@ -68,7 +82,10 @@ export const initialAppData: AppData = {
   error: null,
   pickMode: false,
   pickedPoint: null,
+  pickFor: null,
   editingRequestId: null,
+  delayDialogOpen: false,
+  delayEngineerId: null,
 };
 
 const OFFLINE_CONFIG: ClientConfig = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: false };
@@ -128,6 +145,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
       selectedRequestId: null,
       selectedEngineerId: null,
       editingRequestId: null,
+      delayDialogOpen: false,
+      delayEngineerId: null,
     });
     try {
       let status = await uploadFile(file);
@@ -246,20 +265,34 @@ export const useAppStore = create<AppState>()((set, get) => ({
     set({ eventTime: value });
   },
 
-  startPick() {
-    set({ pickMode: true, pickedPoint: null });
+  startPick(owner) {
+    set({ pickMode: true, pickedPoint: null, pickFor: owner ?? null });
   },
 
   finishPick(point) {
     set({ pickMode: false, pickedPoint: point });
   },
 
+  clearPick(owner) {
+    if (get().pickFor === owner) set({ pickMode: false, pickedPoint: null, pickFor: null });
+  },
+
   startEdit(requestId) {
-    set({ editingRequestId: requestId, pickMode: false, pickedPoint: null });
+    set({ editingRequestId: requestId });
+    get().clearPick('edit');
   },
 
   closeEdit() {
-    set({ editingRequestId: null, pickMode: false, pickedPoint: null });
+    set({ editingRequestId: null });
+    get().clearPick('edit');
+  },
+
+  startDelay(engineerId) {
+    set({ delayDialogOpen: true, delayEngineerId: engineerId });
+  },
+
+  closeDelay() {
+    set({ delayDialogOpen: false, delayEngineerId: null });
   },
 
   clearError() {

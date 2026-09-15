@@ -854,6 +854,20 @@ h4 {
   overflow: auto;
 }
 
+/* Быстрый выбор минут в диалоге задержки */
+.delay-presets {
+  display: flex;
+  gap: 4px;
+  flex: none;
+  padding-bottom: 3px;
+}
+
+.delay-presets .btn[aria-pressed='true'] {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 .dialog__actions {
   display: flex;
   justify-content: flex-end;
