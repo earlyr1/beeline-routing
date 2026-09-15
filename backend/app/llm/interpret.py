@@ -29,6 +29,7 @@ NOTHING_FOUND = (
     "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена или возврат заявки, "
     "срочная заявка, изменение заявки, недоступность инженера, смена транспорта или задержка инженера."
 )
+URGENT_WINDOW_MISSING = "Укажите окно визита или отметьте, что заявка как можно скорее."
 
 
 def _norm(value: str) -> str:
@@ -77,11 +78,18 @@ class EngineerDelayArgs(EngineerArgs):
 
 class UrgentArgs(_TimedArgs):
     address: str = Field(min_length=3)
-    window_start: HHMM
-    window_end: HHMM
+    asap: bool = False
+    window_start: HHMM | None = None
+    window_end: HHMM | None = None
     duration_min: int = Field(gt=0, le=600)
     skill: Skill
     transport_required: Literal["car", "foot", "bike", "public", "none"] | None = None
+
+    @field_validator("asap", mode="before")
+    @classmethod
+    def _asap_null(cls, value: object) -> object:
+        """Модель иногда передаёт null вместо false."""
+        return False if value is None else value
 
 
 class RequestUpdateArgs(RequestArgs):
@@ -92,6 +100,7 @@ class RequestUpdateArgs(RequestArgs):
     skill: Skill | None = None
     priority: Priority | None = None
     transport_required: Literal["car", "foot", "bike", "public", "none"] | None = None
+    asap: bool | None = None
 
 
 class ClarifyArgs(BaseModel):
@@ -172,6 +181,13 @@ def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:
         raise Unresolved(
             f"Не понял, что изменить в заявке {stored.id}. Уточните окно, длительность, адрес или другое поле."
         )
+    if changes.get("asap"):
+        # Окно заявки «как можно скорее» задаёт backend, названное окно не используется.
+        changes.pop("window_start", None)
+        changes.pop("window_end", None)
+    elif stored.asap and "asap" not in changes and {"window_start", "window_end"} & changes.keys():
+        # Названное окно означает, что заявка больше не «как можно скорее».
+        changes["asap"] = False
     if "transport_required" in changes:
         required = changes["transport_required"]
         changes["transport_required"] = None if required == "none" else Transport(required)
@@ -186,7 +202,8 @@ def _request_update_event(session: PlanningSession, args: RequestUpdateArgs, tim
     request_id = resolve_request(session, args.request_id)
     stored = session.request(request_id)
     request = _updated_request(stored, args)
-    if request.window_end > request.window_start:
+    # Окно заявки «как можно скорее» задаёт backend при проверке события, порядок границ здесь не важен.
+    if request.asap or request.window_end > request.window_start:
         return Event(type=EventType.REQUEST_UPDATED, time=time, request_id=request_id, request=request)
     if request.window_end < request.window_start:
         # Заявку с концом окна раньше начала нельзя записать даже в черновик: в нём остаётся прежнее окно.
@@ -227,14 +244,22 @@ def _build_event(
             engineer_id=resolve_engineer(session, args.engineer_id),
             delay_min=args.delay_min,
         )
+    if args.asap:
+        # Окно заявки «как можно скорее» заполнит проверка события: от времени события до конца смен.
+        window_start = window_end = time
+    elif args.window_start is None or args.window_end is None:
+        raise Unresolved(URGENT_WINDOW_MISSING)
+    else:
+        window_start, window_end = args.window_start, args.window_end
     transport = None if args.transport_required in (None, "none") else Transport(args.transport_required)
     request = Request(
         id=new_request_id(),
         address=args.address.strip(),
         duration_min=args.duration_min,
-        window_start=args.window_start,
-        window_end=args.window_end,
+        window_start=window_start,
+        window_end=window_end,
         priority=Priority.URGENT,
+        asap=args.asap,
         skill=args.skill,
         transport_required=transport,
         source_type_bk="Срочная заявка из чата",

@@ -27,9 +27,18 @@ class EventRejected(ValueError):
 
 
 # Поля, которые меняет «Изменение заявки». Координаты и точность геокодирования следуют за источником места,
-# номер, статус, район и типы заявки всегда берутся из сохранённой заявки.
+# номер, статус, район и типы заявки всегда берутся из сохранённой заявки. Окно заявки «как можно скорее» задаёт backend.
 EDITABLE_REQUEST_FIELDS = frozenset(
-    {"address", "duration_min", "window_start", "window_end", "priority", "skill", "transport_required"}
+    {
+        "address",
+        "duration_min",
+        "window_start",
+        "window_end",
+        "priority",
+        "asap",
+        "skill",
+        "transport_required",
+    }
 )
 _NOT_FOUND = GeoResult(None, None, "none", None)
 
@@ -245,6 +254,22 @@ def _unavailable_since(engineer: Engineer) -> int:
     return engineer.unavailable_from if engineer.unavailable_from is not None else engineer.shift_start
 
 
+def _working_until(engineer: Engineer) -> int:
+    """Конец рабочего дня инженера: конец смены или время, с которого он недоступен."""
+    if engineer.available:
+        return engineer.shift_end
+    return min(engineer.shift_end, _unavailable_since(engineer))
+
+
+def asap_window(engineers: list[Engineer], now: int) -> dict[str, int]:
+    """Окно заявки «как можно скорее»: от времени события до самого позднего конца смен.
+
+    Считаются инженеры, доступные во время события: недоступный с более позднего времени работает до этого
+    времени, уже недоступный не считается. Если никто не работает позже now, конец окна равен началу.
+    """
+    return {"window_start": now, "window_end": max([now, *(_working_until(e) for e in engineers)])}
+
+
 def window_order_text(request_id: str) -> str:
     return f"Конец окна заявки {request_id} должен быть позже начала."
 
@@ -269,14 +294,22 @@ def _apply_to_inputs(
             raise EventRejected(
                 f"Заявка {stored.id} уже в работе с {fmt_hhmm(started[stored.id].start)}, изменить её нельзя."
             )
-        if sent.window_end < now:
-            raise EventRejected(
-                f"Окно заявки {stored.id} заканчивается в {fmt_hhmm(sent.window_end)}, это раньше времени "
-                f"события {fmt_hhmm(now)}."
-            )
-        if sent.window_end <= sent.window_start:
-            raise EventRejected(window_order_text(stored.id))
-        changes = sent.model_dump(include=EDITABLE_REQUEST_FIELDS)
+        if not sent.asap:
+            if sent.window_end < now:
+                raise EventRejected(
+                    f"Окно заявки {stored.id} заканчивается в {fmt_hhmm(sent.window_end)}, это раньше времени "
+                    f"события {fmt_hhmm(now)}."
+                )
+            if sent.window_end <= sent.window_start:
+                raise EventRejected(window_order_text(stored.id))
+            window = {}
+        elif stored.asap:
+            # Заявка остаётся «как можно скорее»: часы ожидания не перезапускаются, окно из запроса не используется.
+            window = {"window_start": stored.window_start, "window_end": stored.window_end}
+        else:
+            # Заявка стала «как можно скорее»: часы ожидания идут с этого события.
+            window = asap_window(engineers, now)
+        changes = {**sent.model_dump(include=EDITABLE_REQUEST_FIELDS), **window}
         merged = stored.model_copy(update={**changes, **_edited_location(stored, sent, ctx)})
         if merged == stored:
             raise EventRejected(f"В заявке {stored.id} ничего не изменилось.")
@@ -298,6 +331,11 @@ def _apply_to_inputs(
         else:
             if request.status != RequestStatus.CANCELLED:
                 raise EventRejected(f"Заявка {request.id} не отменена, возвращать нечего.")
+            if request.window_end < now and request.asap:
+                raise EventRejected(
+                    f"Заявка {request.id} как можно скорее с {fmt_hhmm(request.window_start)}: смены закончились "
+                    f"в {fmt_hhmm(request.window_end)}, вернуть её в план нельзя."
+                )
             if request.window_end < now:
                 raise EventRejected(
                     f"Окно заявки {request.id} ({fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}) "
@@ -342,6 +380,9 @@ def _apply_to_inputs(
     new = event.request.model_copy(update={"priority": Priority.URGENT, "status": RequestStatus.ACTIVE})
     if new.id in by_id:
         raise EventRejected(f"Заявка с номером {new.id} уже есть в плане.")
+    if new.asap:
+        # Окно из запроса не используется: заявка ждёт с времени события до конца смен.
+        new = new.model_copy(update=asap_window(engineers, now))
     if new.window_end < now:
         raise EventRejected(
             f"Окно срочной заявки заканчивается в {fmt_hhmm(new.window_end)}, это раньше времени события "
