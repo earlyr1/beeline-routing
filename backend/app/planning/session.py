@@ -105,7 +105,8 @@ def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
     """Закрепляет визиты, начатые до now, и визит, к которому инженер уже едет.
 
     Инженер продолжает день из точки последнего закреплённого визита в его время окончания.
-    Визит в пути остаётся не начатым: отменить его можно до начала работы.
+    Visit.pinned остаётся True только у начатой работы: для диспетчера «закреплена» значит «уже
+    в работе, отменить нельзя». Визит в пути солвер не трогает, но отменить его можно до начала работы.
     """
     routes = {route.engineer_id: route for route in plan.routes}
     open_ids = set(problem.open_request_ids)
@@ -126,7 +127,7 @@ def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
         if done:
             start_node = problem.request_node(done[-1].request_id)
             available_from = max(available_from, done[-1].end)
-        pinned[engineer_id] = [visit.model_copy(update={"pinned": True}) for visit in done]
+        pinned[engineer_id] = [visit.model_copy(update={"pinned": visit.start < now}) for visit in done]
         pinned_ids.update(visit.request_id for visit in done)
         previous_order[engineer_id] = rest
         previous_assignment.update({request_id: engineer_id for request_id in rest})

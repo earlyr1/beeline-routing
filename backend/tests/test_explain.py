@@ -83,11 +83,15 @@ def test_visit_on_the_way_is_explained_as_departed():
         context(),
     )
     explanation = _explain(updated, "B")
-    assert explanation.visit.pinned
-    assert explanation.summary == (
-        f"Исполнитель Инженер {busy} уже в пути к заявке, работа начнётся в 09:59, визит закреплён."
-    )
-    assert "в пути" in explanation.factors[0] and "до начала работы" in explanation.factors[0]
+    assert not explanation.visit.pinned
+    assert explanation.summary == f"Исполнитель Инженер {busy} уже в пути к заявке, работа начнётся в 09:59."
+    assert explanation.factors == [
+        "Инженер уже выехал к заявке, поэтому она не переназначается. Отменить заявку можно до начала работы."
+    ]
+    assert explanation.alternatives == []
+    later = _explain(updated, "C")
+    assert later.summary.startswith(f"Исполнитель Инженер {busy}")
+    assert "в пути" not in later.summary and "начал работу" not in later.summary
 
 
 def _shortcut_problem():

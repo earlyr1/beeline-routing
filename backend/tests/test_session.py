@@ -125,8 +125,24 @@ def test_event_while_engineer_is_on_the_way_does_not_shift_his_route():
     )
     assert visit_times(updated.plan, busy) == before
     assert updated.last_diff.time_shifts == []
+    assert [visit.request_id for visit in updated.problem.pinned[busy]] == ["A", "B"]
     route = next(route for route in updated.plan.routes if route.engineer_id == busy)
-    assert [visit.pinned for visit in route.visits] == [True, True, False]
+    # Для диспетчера «закреплена» только начатая работа: визит в пути можно отменить.
+    assert [visit.pinned for visit in route.visits] == [True, False, False]
+
+
+def test_visit_on_the_way_is_held_but_not_marked_as_started():
+    problem = problem_of(transit_requests(), [eng("E1")])
+    plan = build_plan(problem, "ortools", {"E1": ["A", "B", "C"]})
+    pinned = pin_problem(problem, plan, parse_hhmm(IN_TRANSIT_TO_B))
+    assert [(visit.request_id, visit.pinned) for visit in pinned.pinned["E1"]] == [("A", True), ("B", False)]
+    assert pinned.open_request_ids == ["C"]
+    rebuilt = build_plan(pinned, "ortools", {"E1": ["C"]})
+    assert [(visit.request_id, visit.pinned) for visit in rebuilt.routes[0].visits] == [
+        ("A", True),
+        ("B", False),
+        ("C", False),
+    ]
 
 
 def test_visit_on_the_way_can_be_cancelled_before_it_starts():

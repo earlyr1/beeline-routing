@@ -23,8 +23,8 @@ def build_plan(
     for state in problem.states:
         engineer_id = state.engineer.id
         sim = simulate_route(problem, state, sequences.get(engineer_id, []))
-        pinned = [visit.model_copy(update={"pinned": True}) for visit in problem.pinned.get(engineer_id, [])]
-        visits = pinned + sim.visits
+        # Флаг pinned у закреплённых визитов задаёт pin_problem: True только у начатой работы.
+        visits = list(problem.pinned.get(engineer_id, [])) + sim.visits
         violations.extend(sim.violations)
         placed.update(visit.request_id for visit in visits)
         routes.append(

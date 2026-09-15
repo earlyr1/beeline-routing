@@ -2,8 +2,10 @@ import json
 import threading
 
 from app.api.registry import DatasetRecord
+from app.domain.models import Bundle
 from app.ingest.geocode import GeoHit
 from tests.api_helpers import csv_bytes, make_client, sample_bundle, upload
+from tests.planning_helpers import OFFICE, day_engineers, transit_requests
 
 
 def _ready_dataset(client):
@@ -210,3 +212,23 @@ def test_urgent_address_is_geocoded_before_taking_dataset_lock(tmp_path):
     assert geocoder.lock_free == [True]
     stored = geocoder.record.session.events[0].event.request
     assert (stored.lat, stored.lon, stored.geocode_precision) == (55.75, 37.61, "house")
+
+
+def test_visit_on_the_way_is_not_shown_as_started_and_can_be_cancelled(tmp_path):
+    """В 09:10 инженеры уже выехали к первым заявкам, но работа ещё не началась."""
+    requests = [r.model_copy(update={"district": "Таганский"}) for r in transit_requests()]
+    bundle = Bundle(region="t", office=OFFICE, requests=requests, engineers=day_engineers())
+    client, _ = make_client(tmp_path, bundle=bundle)
+    base = f"/api/datasets/{upload(client, 'bundle.json', bundle.model_dump_json().encode())}"
+    plan = client.post(f"{base}/plan").json()["plan"]
+    starts = {v["request_id"]: v["start"] for route in plan["routes"] for v in route["visits"]}
+    assert sorted(starts) == ["A", "B", "C"] and min(starts.values()) > "09:10"
+
+    response = client.post(f"{base}/events", json={"type": "cancel", "time": "09:10", "request_id": "C"})
+    assert response.status_code == 200, response.text
+    visits = [v for route in response.json()["plan"]["routes"] for v in route["visits"]]
+    assert {v["request_id"]: v["start"] for v in visits} == {"A": starts["A"], "B": starts["B"]}
+    assert [v["pinned"] for v in visits] == [False, False]
+
+    cancelled = client.post(f"{base}/events", json={"type": "cancel", "time": "09:20", "request_id": "B"})
+    assert cancelled.status_code == 200, cancelled.text

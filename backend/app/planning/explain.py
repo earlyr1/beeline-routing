@@ -21,9 +21,15 @@ class Insertion:
     start: int
 
 
-def _open_sequence(plan: Plan, engineer_id: str) -> list[str]:
+def _held_ids(problem: Problem, engineer_id: str) -> set[str]:
+    """Визиты, которые солвер не трогает: начатая работа и визит, к которому инженер уже едет."""
+    return {visit.request_id for visit in problem.pinned.get(engineer_id, [])}
+
+
+def _open_sequence(problem: Problem, plan: Plan, engineer_id: str) -> list[str]:
     route = next((r for r in plan.routes if r.engineer_id == engineer_id), None)
-    return [visit.request_id for visit in route.visits if not visit.pinned] if route else []
+    held = _held_ids(problem, engineer_id)
+    return [visit.request_id for visit in route.visits if visit.request_id not in held] if route else []
 
 
 def _route_km(problem: Problem, state: EngineerState, sequence: list[str]) -> float:
@@ -70,7 +76,7 @@ def _alternative(
             engineer_id=engineer.id, feasible=False, reason=f"Инженер недоступен{since}"
         ), False
 
-    sequence = [rid for rid in _open_sequence(plan, engineer.id) if rid != request.id]
+    sequence = [rid for rid in _open_sequence(problem, plan, engineer.id) if rid != request.id]
     idle = not sequence and not problem.pinned.get(engineer.id)
     insertion = best_insertion(problem, state, sequence, request.id)
     if insertion is None:
@@ -116,7 +122,9 @@ def _window_detail(request: Request, visit: Visit) -> str:
     return text + f", запас до конца окна {request.window_end - visit.start} мин"
 
 
-def _assigned_constraints(request: Request, engineer: Engineer, visit: Visit) -> list[ConstraintCheck]:
+def _assigned_constraints(
+    request: Request, engineer: Engineer, visit: Visit, held: bool
+) -> list[ConstraintCheck]:
     required = request.transport_required
     if required is None:
         transport_detail = f"Требований к транспорту нет, у инженера «{TRANSPORT_RU[engineer.transport]}»"
@@ -125,7 +133,7 @@ def _assigned_constraints(request: Request, engineer: Engineer, visit: Visit) ->
             f"Нужен «{TRANSPORT_RU[required]}», у инженера «{TRANSPORT_RU[engineer.transport]}»"
         )
     until = engineer.shift_end
-    if not engineer.available and engineer.unavailable_from is not None and not visit.pinned:
+    if not engineer.available and engineer.unavailable_from is not None and not held:
         until = min(until, engineer.unavailable_from)
     return [
         ConstraintCheck(
@@ -219,18 +227,18 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
 
     engineer_id, visit = assigned
     engineer = problem.state(engineer_id).engineer
-    constraints = _assigned_constraints(request, engineer, visit)
-    if visit.pinned:
-        if visit.start < problem.now:
+    held = request.id in _held_ids(problem, engineer_id)
+    constraints = _assigned_constraints(request, engineer, visit, held)
+    if held:
+        if visit.pinned:
             summary = f"Исполнитель {engineer.name} начал работу в {fmt_hhmm(visit.start)}, визит закреплён."
             factor = "Работа уже началась к моменту последнего события, поэтому заявка не переназначается."
         else:
             summary = (
-                f"Исполнитель {engineer.name} уже в пути к заявке, работа начнётся в {fmt_hhmm(visit.start)}, "
-                "визит закреплён."
+                f"Исполнитель {engineer.name} уже в пути к заявке, работа начнётся в {fmt_hhmm(visit.start)}."
             )
             factor = (
-                "Инженер уже в пути к заявке, поэтому она не переназначается. "
+                "Инженер уже выехал к заявке, поэтому она не переназначается. "
                 "Отменить заявку можно до начала работы."
             )
         return Explanation(
@@ -244,7 +252,7 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
         )
 
     state = problem.state(engineer_id)
-    own_sequence = _open_sequence(plan, engineer_id)
+    own_sequence = _open_sequence(problem, plan, engineer_id)
     without = [rid for rid in own_sequence if rid != request.id]
     own_extra = round(_route_km(problem, state, own_sequence) - _route_km(problem, state, without), 2)
 
