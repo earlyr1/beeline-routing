@@ -1,7 +1,9 @@
 import type { PlanDiff, PlanningState, Proposal, ProposalStatus } from '../api/types';
-import { carDowngradeHint, carRequiredVisitsFrom, requestChanges } from './events';
-import { formatKm, formatWindow, shortAddress, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from './format';
+import { carDowngradeHint, carRequiredVisitsFrom, requestChanges, visitsFrom } from './events';
+import { formatKm, formatWindow, plural, shortAddress, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from './format';
 import { byId } from './planView';
+
+export { plural } from './format';
 
 export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, string> = {
   pending: 'Ждёт решения',
@@ -9,14 +11,6 @@ export const PROPOSAL_STATUS_LABELS: Record<ProposalStatus, string> = {
   rejected: 'Отклонено',
   failed: 'Не применилось',
 };
-
-export function plural(count: number, one: string, few: string, many: string): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
-}
 
 /** Подробности предложения языком диспетчера: что затронет изменение в текущем плане. */
 export function proposalDetails(proposal: Proposal, state: PlanningState): string[] {
@@ -55,6 +49,13 @@ export function proposalDetails(proposal: Proposal, state: PlanningState): strin
       if (carOnly > 0) details.push(carDowngradeHint(carOnly, event.time));
     }
     return details;
+  }
+
+  if (event.type === 'engineer_delayed') {
+    const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
+    const left = event.engineer_id ? visitsFrom(state.plan, event.engineer_id, event.time) : 0;
+    const delay = event.delay_min != null ? `задержка ${event.delay_min} мин` : 'задержка';
+    return [`${name}: ${delay} с ${event.time}`, `В маршруте после ${event.time}: ${left} ${plural(left, 'заявка', 'заявки', 'заявок')}`];
   }
 
   if (event.type === 'request_updated') {

@@ -11,6 +11,7 @@ export function EventToolbar() {
   const setEventTime = useAppStore((s) => s.setEventTime);
   const busy = useAppStore((s) => s.busy);
   const showPrevious = useAppStore((s) => s.showPrevious);
+  const startDelay = useAppStore((s) => s.startDelay);
   const [dialog, setDialog] = useState<'urgent' | 'transport' | 'unavailable' | null>(null);
   if (!state) return null;
 
@@ -27,6 +28,10 @@ export function EventToolbar() {
       </button>
       <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => setDialog('transport')}>
         Смена транспорта
+      </button>
+      {/* Диалог задержки один на экран: его открывает и карточка маршрута, поэтому он живёт в MainScreen. */}
+      <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => startDelay(null)}>
+        Задержка
       </button>
       <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => setDialog('unavailable')}>
         Инженер недоступен

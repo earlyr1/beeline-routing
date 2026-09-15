@@ -1,5 +1,6 @@
 import type {
   DatasetStatus,
+  DelayForecast,
   Engineer,
   Explanation,
   Metrics,
@@ -233,6 +234,47 @@ export function makeRequestUpdateEvent(overrides: Partial<PlanEvent> = {}): Plan
     engineer_id: null,
     previous_request: previous,
     ...overrides,
+  };
+}
+
+/** Задержка Бригады Арташкин на 150 минут в 13:30, пока она едет к заявке 50104. */
+export function makeDelayEvent(overrides: Partial<PlanEvent> = {}): PlanEvent {
+  return {
+    type: 'engineer_delayed',
+    time: '13:30',
+    request: null,
+    request_id: null,
+    engineer_id: 'E01',
+    delay_min: 150,
+    ...overrides,
+  };
+}
+
+/**
+ * Прогноз для задержки из makeDelayEvent: с опозданием на 150 минут инженер не успевает к окну 50104,
+ * поэтому едет от закреплённого визита 86160 не раньше 16:00 и опаздывает к обоим оставшимся клиентам.
+ */
+export function makeDelayForecast(overrides: Partial<DelayForecast> = {}): DelayForecast {
+  return {
+    engineer_id: 'E01',
+    delay_min: 150,
+    late_without_replan: [
+      { request_id: '50104', planned_start: '14:00', forecast_start: '16:35', late_min: 35 },
+      { request_id: '46393', planned_start: '15:10', forecast_start: '17:45', late_min: 45 },
+    ],
+    overtime_without_replan_min: 0,
+    ...overrides,
+  };
+}
+
+/** Состояние после применённой задержки: последнее событие и прогноз опозданий в last_diff. */
+export function makeDelayedState(forecast: Partial<DelayForecast> = {}): PlanningState {
+  const state = makePlanningState();
+  return {
+    ...state,
+    version: 5,
+    events: [...state.events, { id: 'ev_4', event: makeDelayEvent(), version: 5 }],
+    last_diff: { ...state.last_diff!, delay_forecast: makeDelayForecast(forecast) },
   };
 }
 

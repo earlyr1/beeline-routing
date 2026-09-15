@@ -205,19 +205,54 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ pickMode: false, pickedPoint: { lat: 55.7, lon: 37.8 } });
   });
 
-  it('opens and closes the request edit, leaving the map pick mode', () => {
-    useAppStore.getState().startPick();
+  it('opens and closes the request edit, leaving its own map pick mode', () => {
+    useAppStore.getState().startPick('edit');
     useAppStore.getState().startEdit('50104');
-    expect(useAppStore.getState()).toMatchObject({ editingRequestId: '50104', pickMode: false, pickedPoint: null });
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: '50104', pickMode: false, pickedPoint: null, pickFor: null });
 
-    useAppStore.getState().startPick();
+    useAppStore.getState().startPick('edit');
     useAppStore.getState().finishPick({ lat: 55.7, lon: 37.8 });
     useAppStore.getState().closeEdit();
-    expect(useAppStore.getState()).toMatchObject({ editingRequestId: null, pickMode: false, pickedPoint: null });
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: null, pickMode: false, pickedPoint: null, pickFor: null });
 
     useAppStore.getState().startEdit('46393');
     useAppStore.getState().reset();
     expect(useAppStore.getState().editingRequestId).toBeNull();
+  });
+
+  it('remembers which dialog picks a point and keeps the urgent request point through the request edit', () => {
+    const point = { lat: 55.71, lon: 37.8 };
+    useAppStore.getState().startPick('urgent');
+    expect(useAppStore.getState()).toMatchObject({ pickMode: true, pickFor: 'urgent', pickedPoint: null });
+    useAppStore.getState().finishPick(point);
+    expect(useAppStore.getState()).toMatchObject({ pickMode: false, pickFor: 'urgent', pickedPoint: point });
+
+    useAppStore.getState().startEdit('50104');
+    useAppStore.getState().closeEdit();
+    expect(useAppStore.getState()).toMatchObject({ pickFor: 'urgent', pickedPoint: point });
+
+    useAppStore.getState().clearPick('edit');
+    expect(useAppStore.getState()).toMatchObject({ pickFor: 'urgent', pickedPoint: point });
+    useAppStore.getState().clearPick('urgent');
+    expect(useAppStore.getState()).toMatchObject({ pickMode: false, pickFor: null, pickedPoint: null });
+
+    useAppStore.getState().startPick('urgent');
+    useAppStore.getState().reset();
+    expect(useAppStore.getState()).toMatchObject({ pickMode: false, pickFor: null });
+  });
+
+  it('opens the delay dialog for any engineer or for a chosen one and closes it', () => {
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
+    useAppStore.getState().startDelay(null);
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: null });
+    useAppStore.getState().startDelay('E02');
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E02' });
+    useAppStore.getState().closeDelay();
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
+
+    useAppStore.getState().startDelay('E01');
+    useAppStore.getState().reset();
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
   });
 
   it('falls back to an offline config and keeps config on reset', async () => {

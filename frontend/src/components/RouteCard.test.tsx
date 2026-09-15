@@ -72,6 +72,26 @@ describe('RouteCard', () => {
     expect(within(card()).queryByRole('table')).not.toBeInTheDocument();
   });
 
+  it('opens the delay dialog for the engineer of the route', () => {
+    render(<RouteCard />);
+    const button = within(card()).getByRole('button', { name: 'Задержка' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E01' });
+  });
+
+  it('disables the delay while replanning, before the event and for an unavailable engineer', () => {
+    const delayButton = () => within(card()).getByRole('button', { name: 'Задержка' });
+    const cases = [{ busy: true }, { showPrevious: true }, { selectedEngineerId: 'E03' }];
+    for (const patch of cases) {
+      resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', ...patch });
+      const view = render(<RouteCard />);
+      expect(delayButton()).toBeDisabled();
+      view.unmount();
+    }
+    expect(useAppStore.getState().delayDialogOpen).toBe(false);
+  });
+
   it('renders nothing without a selected engineer or while a request card is open', () => {
     useAppStore.setState({ selectedEngineerId: null });
     const first = render(<RouteCard />);

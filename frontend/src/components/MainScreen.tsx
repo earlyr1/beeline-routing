@@ -1,6 +1,7 @@
 import { useAppStore } from '../store/useAppStore';
 import { DiffBanner } from './DiffBanner';
 import { ErrorToast } from './ErrorToast';
+import { EngineerDelayDialog } from './events/EngineerDelayDialog';
 import { EventToolbar } from './events/EventToolbar';
 import { RequestEditDialog } from './events/RequestEditDialog';
 import { MapView } from './map/MapView';
@@ -9,10 +10,16 @@ import { RightPanel } from './panel/RightPanel';
 
 export function MainScreen() {
   const pickMode = useAppStore((s) => s.pickMode);
+  const pickFor = useAppStore((s) => s.pickFor);
   const editingRequestId = useAppStore((s) => s.editingRequestId);
-  const pickHint = editingRequestId
-    ? `Кликните по карте, чтобы указать новое место заявки ${editingRequestId}`
-    : 'Кликните по карте, чтобы указать место срочной заявки';
+  const delayDialogOpen = useAppStore((s) => s.delayDialogOpen);
+  // Подсказка называет диалог, который начал выбор точки: оба диалога могут быть открыты одновременно.
+  const pickHint =
+    pickFor === 'edit' && editingRequestId
+      ? `Кликните по карте, чтобы указать новое место заявки ${editingRequestId}`
+      : pickFor === 'urgent'
+        ? 'Кликните по карте, чтобы указать место срочной заявки'
+        : 'Кликните по карте, чтобы указать точку';
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -28,6 +35,7 @@ export function MainScreen() {
         <RightPanel />
       </div>
       {editingRequestId && <RequestEditDialog />}
+      {delayDialogOpen && <EngineerDelayDialog />}
       <ErrorToast />
     </div>
   );

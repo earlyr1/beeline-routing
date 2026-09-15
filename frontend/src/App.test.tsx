@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./api/client', async (importOriginal) => {
@@ -54,6 +54,34 @@ describe('App', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Отмена' }));
     expect(screen.queryByRole('dialog', { name: 'Изменить заявку' })).not.toBeInTheDocument();
     expect(useAppStore.getState()).toMatchObject({ editingRequestId: null, pickMode: false });
+    expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
+  });
+
+  it('opens one delay dialog from the toolbar and from the route card of an engineer', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00' });
+    render(<App />);
+    expect(screen.queryByRole('dialog', { name: 'Задержка инженера' })).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Задержка' }));
+    const fromToolbar = screen.getByRole('dialog', { name: 'Задержка инженера' });
+    expect((within(fromToolbar).getByLabelText('Инженер') as HTMLSelectElement).value).toBe('E01');
+    fireEvent.click(within(fromToolbar).getByRole('button', { name: 'Отмена' }));
+    expect(screen.queryByRole('dialog', { name: 'Задержка инженера' })).not.toBeInTheDocument();
+
+    act(() => useAppStore.getState().selectEngineer('E02'));
+    fireEvent.click(within(screen.getByRole('region', { name: 'Маршрут инженера' })).getByRole('button', { name: 'Задержка' }));
+    expect(screen.getAllByRole('dialog', { name: 'Задержка инженера' })).toHaveLength(1);
+    expect((within(screen.getByRole('dialog', { name: 'Задержка инженера' })).getByLabelText('Инженер') as HTMLSelectElement).value).toBe(
+      'E02',
+    );
+    expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
+  });
+
+  it('names the dialog that is picking a point on the map', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), editingRequestId: '50104', pickMode: true, pickFor: 'urgent' });
+    render(<App />);
+    expect(screen.getByText('Кликните по карте, чтобы указать место срочной заявки')).toBeInTheDocument();
+    act(() => useAppStore.getState().startPick('edit'));
+    expect(screen.getByText('Кликните по карте, чтобы указать новое место заявки 50104')).toBeInTheDocument();
     expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
   });
 

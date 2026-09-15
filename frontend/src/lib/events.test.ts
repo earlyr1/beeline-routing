@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceRequest } from '../api/types';
-import { makePlanningState, makeRequestUpdateEvent } from '../test/fixtures';
+import { makeDelayEvent, makeDelayForecast, makePlanningState, makeRequestUpdateEvent } from '../test/fixtures';
 import {
   buildUrgentEvent,
   busiestEngineerId,
@@ -8,8 +8,11 @@ import {
   carRequiredVisitsFrom,
   defaultNewTransport,
   defaultUrgentWindow,
+  DELAY_PRESETS,
+  delayEvent,
   describeEvent,
   earliestShiftStart,
+  forecastLines,
   isWorkStarted,
   newUrgentId,
   requestChanges,
@@ -19,6 +22,7 @@ import {
   timeError,
   transportChangeEvent,
   unavailableEvent,
+  validateDelay,
   validateRequestEdit,
   validateUrgentForm,
   visitsFrom,
@@ -288,5 +292,68 @@ describe('request update', () => {
     );
     expect(describeEvent(makeRequestUpdateEvent({ previous_request: null }), engineers)).toBe('Изменена заявка 50104 с 13:30');
     expect(EVENT_LABELS.request_updated).toBe('Изменение заявки');
+  });
+});
+
+describe('engineer delay', () => {
+  const state = makePlanningState();
+  const engineers = byId(state.engineers);
+  const requests = byId(state.requests);
+  const late = (requestId: string, lateMin: number) => ({ request_id: requestId, planned_start: '14:00', forecast_start: '16:30', late_min: lateMin });
+
+  it('builds a delay event with the engineer and the minutes', () => {
+    expect(delayEvent('E01', 30, '13:30')).toEqual({
+      type: 'engineer_delayed',
+      time: '13:30',
+      request: null,
+      request_id: null,
+      engineer_id: 'E01',
+      delay_min: 30,
+    });
+    expect(DELAY_PRESETS).toEqual([15, 30, 60]);
+    expect(EVENT_LABELS.engineer_delayed).toBe('Задержка инженера');
+  });
+
+  it('accepts a whole number of minutes from 5 to 480', () => {
+    expect([5, 30, 480].map(validateDelay)).toEqual([null, null, null]);
+    for (const value of [4, 481, 0, -15, 12.5, Number.NaN]) {
+      expect(validateDelay(value)).toBe('Задержка должна быть от 5 до 480 минут');
+    }
+  });
+
+  it('describes a delay with the engineer name, the minutes and the time', () => {
+    expect(describeEvent(makeDelayEvent(), engineers)).toBe('Задержка: Бригада Арташкин на 150 мин с 13:30');
+    expect(describeEvent(delayEvent('E99', 15, '14:00'), engineers)).toBe('Задержка: E99 на 15 мин с 14:00');
+  });
+
+  it('forecasts how late the clients would be without replanning', () => {
+    expect(forecastLines(makeDelayForecast(), requests, engineers)).toEqual(['Без перепланирования опоздали бы к 2 клиентам на 35–45 мин']);
+    const five = ['1', '2', '3', '4', '5'].map((id, index) => late(id, 10 + index * 5));
+    expect(forecastLines(makeDelayForecast({ late_without_replan: five }), requests, engineers)).toEqual([
+      'Без перепланирования опоздали бы к 5 клиентам на 10–30 мин',
+    ]);
+  });
+
+  it('names a single lateness value when every client is equally late', () => {
+    expect(forecastLines(makeDelayForecast({ late_without_replan: [late('50104', 35)] }), requests, engineers)).toEqual([
+      'Без перепланирования опоздали бы к 1 клиенту на 35 мин',
+    ]);
+    const same = [late('50104', 20), late('46393', 20)];
+    expect(forecastLines(makeDelayForecast({ late_without_replan: same }), requests, engineers)).toEqual([
+      'Без перепланирования опоздали бы к 2 клиентам на 20 мин',
+    ]);
+  });
+
+  it('says when the delay would not make anyone late', () => {
+    expect(forecastLines(makeDelayForecast({ late_without_replan: [] }), requests, engineers)).toEqual(['Задержка не привела бы к опозданиям']);
+  });
+
+  it('adds the overtime the delay would cause', () => {
+    expect(forecastLines(makeDelayForecast({ overtime_without_replan_min: 25 }), requests, engineers)).toEqual([
+      'Без перепланирования опоздали бы к 2 клиентам на 35–45 мин и переработка 25 мин',
+    ]);
+    expect(forecastLines(makeDelayForecast({ late_without_replan: [], overtime_without_replan_min: 25 }), requests, engineers)).toEqual([
+      'Без перепланирования была бы переработка 25 мин',
+    ]);
   });
 });

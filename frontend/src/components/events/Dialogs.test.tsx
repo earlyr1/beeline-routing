@@ -5,6 +5,7 @@ import { toMinutes } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
+import { EngineerDelayDialog } from './EngineerDelayDialog';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
 import { EventToolbar } from './EventToolbar';
 import { RequestEditDialog } from './RequestEditDialog';
@@ -103,12 +104,158 @@ describe('UrgentRequestDialog', () => {
   });
 
   it('uses a point picked on the map and starts picking mode', () => {
-    useAppStore.setState({ pickedPoint: { lat: 55.71234, lon: 37.80123 } });
+    useAppStore.setState({ pickFor: 'urgent', pickedPoint: { lat: 55.71234, lon: 37.80123 } });
     render(<UrgentRequestDialog onClose={() => undefined} />);
     expect(screen.getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
-    expect(useAppStore.getState().pickMode).toBe(true);
+    expect(useAppStore.getState()).toMatchObject({ pickMode: true, pickFor: 'urgent' });
     expect(screen.getByRole('button', { name: 'Кликните по карте…' })).toBeDisabled();
+  });
+});
+
+describe('map point ownership', () => {
+  const noop = () => undefined;
+  const dialog = (name: string) => within(screen.getByRole('dialog', { name }));
+
+  beforeEach(() => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:30', editingRequestId: '46393' });
+  });
+
+  it('keeps the points of the urgent request and the request edit apart while both dialogs are open', () => {
+    render(
+      <>
+        <UrgentRequestDialog onClose={noop} />
+        <RequestEditDialog />
+      </>,
+    );
+    fireEvent.click(dialog('Срочная заявка').getByRole('button', { name: 'Указать точку на карте' }));
+    expect(dialog('Изменить заявку').getByRole('button', { name: 'Указать точку на карте' })).toBeInTheDocument();
+    act(() => useAppStore.getState().finishPick({ lat: 55.71234, lon: 37.80123 }));
+    expect(dialog('Срочная заявка').getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
+    expect(dialog('Изменить заявку').queryByText(/Точка:/)).not.toBeInTheDocument();
+    expect(dialog('Изменить заявку').queryByText(/Изменится/)).not.toBeInTheDocument();
+
+    fireEvent.click(dialog('Изменить заявку').getByRole('button', { name: 'Указать точку на карте' }));
+    act(() => useAppStore.getState().finishPick({ lat: 55.72, lon: 37.69 }));
+    expect(dialog('Изменить заявку').getByText('Точка: 55.72000, 37.69000')).toBeInTheDocument();
+    expect(dialog('Изменить заявку').getByText('Изменится: точка на карте')).toBeInTheDocument();
+    expect(dialog('Срочная заявка').getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
+    expect(dialog('Срочная заявка').queryByText('Точка: 55.72000, 37.69000')).not.toBeInTheDocument();
+  });
+
+  it('does not hand a point picked for the request edit to an urgent request, and closing that dialog keeps it', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    const onClose = vi.fn();
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    act(() => useAppStore.getState().finishPick({ lat: 55.72, lon: 37.69 }));
+
+    const urgent = render(<UrgentRequestDialog onClose={onClose} />);
+    const form = within(urgent.container);
+    expect(form.queryByText(/Точка:/)).not.toBeInTheDocument();
+    fireEvent.change(form.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
+    fireEvent.click(form.getByRole('button', { name: 'Добавить и перепланировать' }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ lat: null, lon: null, geocode_precision: 'none' });
+    expect(useAppStore.getState()).toMatchObject({ pickFor: 'edit', pickedPoint: { lat: 55.72, lon: 37.69 } });
+    expect(dialog('Изменить заявку').getByText('Точка: 55.72000, 37.69000')).toBeInTheDocument();
+  });
+});
+
+describe('EngineerDelayDialog', () => {
+  const submitButton = () => screen.getByRole('button', { name: 'Перепланировать' });
+
+  beforeEach(() => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', delayDialogOpen: true });
+  });
+
+  it('preselects the busiest engineer, sets the minutes from presets and submits the delay', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<EngineerDelayDialog />);
+    expect(screen.getByRole('dialog', { name: 'Задержка инженера' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Задержка инженера' })).toBeInTheDocument();
+    expect(optionsOf('Инженер')).toEqual(['Бригада Арташкин (визитов после 14:00: 2)', 'Бригада Белузин (визитов после 14:00: 0)']);
+    expect(valueOf('Инженер')).toBe('E01');
+    expect([valueOf('На сколько минут'), valueOf('Задержка с')]).toEqual(['30', '14:00']);
+    expect(screen.getByText('Если инженер не успевает к клиентам, их заявки перейдут другим')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '30 мин' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: '60 мин' }));
+    expect(valueOf('На сколько минут')).toBe('60');
+    expect(screen.getByRole('button', { name: '60 мин' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: '30 мин' })).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.change(screen.getByLabelText('На сколько минут'), { target: { value: '45' } });
+    expect(['15 мин', '30 мин', '60 мин'].map((name) => screen.getByRole('button', { name }).getAttribute('aria-pressed'))).toEqual([
+      'false',
+      'false',
+      'false',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: '15 мин' }));
+    expect(valueOf('На сколько минут')).toBe('15');
+
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(useAppStore.getState().delayDialogOpen).toBe(false));
+    expect(applyEvent).toHaveBeenCalledWith({
+      type: 'engineer_delayed',
+      time: '14:00',
+      request: null,
+      request_id: null,
+      engineer_id: 'E01',
+      delay_min: 15,
+    });
+  });
+
+  it('preselects the engineer of the route card and keeps it when the time changes', () => {
+    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true, delayEngineerId: 'E01' });
+    render(<EngineerDelayDialog />);
+    expect(valueOf('Инженер')).toBe('E01');
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '16:00' } });
+    expect(valueOf('Инженер')).toBe('E01');
+  });
+
+  it('follows the busiest engineer when the time changes until the dispatcher picks one', () => {
+    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true });
+    render(<EngineerDelayDialog />);
+    expect(valueOf('Инженер')).toBe('E02');
+    expect(screen.getByRole('option', { name: 'Бригада Белузин (визитов после 13:00: 3)' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '16:00' } });
+    expect(valueOf('Инженер')).toBe('E01');
+
+    fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: 'E02' } });
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '13:30' } });
+    expect(valueOf('Инженер')).toBe('E02');
+  });
+
+  it('checks the minutes and the time before replanning', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<EngineerDelayDialog />);
+    const minutes = screen.getByLabelText('На сколько минут');
+    for (const value of ['4', '481', '']) {
+      fireEvent.change(minutes, { target: { value } });
+      fireEvent.click(submitButton());
+      expect(await screen.findByText('Задержка должна быть от 5 до 480 минут')).toBeInTheDocument();
+    }
+    fireEvent.change(minutes, { target: { value: '480' } });
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '12:00' } });
+    fireEvent.click(submitButton());
+    expect(await screen.findByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
+    expect(screen.queryByText('Задержка должна быть от 5 до 480 минут')).not.toBeInTheDocument();
+    expect(applyEvent).not.toHaveBeenCalled();
+  });
+
+  it('stays open when the server rejects the delay and closes on «Отмена»', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(false);
+    useAppStore.setState({ applyEvent, delayEngineerId: 'E02' });
+    render(<EngineerDelayDialog />);
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0]).toMatchObject({ engineer_id: 'E02', delay_min: 30 });
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E02' });
+    fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
   });
 });
 
@@ -391,20 +538,33 @@ describe('EventToolbar', () => {
     expect(screen.getByRole('dialog', { name: 'Инженер недоступен' })).toBeInTheDocument();
   });
 
-  it('opens the transport change dialog from a button between the urgent request and the unavailability', () => {
+  it('opens the transport change dialog from a button between the urgent request and the delay', () => {
     render(<EventToolbar />);
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
       'Срочная заявка',
       'Смена транспорта',
+      'Задержка',
       'Инженер недоступен',
     ]);
     fireEvent.click(screen.getByRole('button', { name: 'Смена транспорта' }));
     expect(screen.getByRole('dialog', { name: 'Смена транспорта' })).toBeInTheDocument();
   });
 
-  it('disables the transport change while showing the plan before the event', () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', showPrevious: true });
+  it('opens the delay dialog without a chosen engineer', () => {
+    useAppStore.setState({ delayEngineerId: 'E02' });
     render(<EventToolbar />);
+    fireEvent.click(screen.getByRole('button', { name: 'Задержка' }));
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: null });
+  });
+
+  it('disables the transport change and the delay while showing the plan before the event or replanning', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', showPrevious: true });
+    const view = render(<EventToolbar />);
     expect(screen.getByRole('button', { name: 'Смена транспорта' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Задержка' })).toBeDisabled();
+    view.unmount();
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', busy: true });
+    render(<EventToolbar />);
+    expect(screen.getByRole('button', { name: 'Задержка' })).toBeDisabled();
   });
 });

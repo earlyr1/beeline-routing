@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import type { HHMM, Priority, ServiceRequest, Skill, Transport } from '../../api/types';
 import {
   requestChanges,
@@ -30,14 +30,21 @@ function EditRequestForm({ original, now }: { original: ServiceRequest; now: HHM
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const pickMode = useAppStore((s) => s.pickMode);
+  const pickFor = useAppStore((s) => s.pickFor);
   const pickedPoint = useAppStore((s) => s.pickedPoint);
   const startPick = useAppStore((s) => s.startPick);
   const closeEdit = useAppStore((s) => s.closeEdit);
   const [form, setForm] = useState<RequestEditForm>(() => requestEditForm(original));
   const [time, setTime] = useState(() => (isValidTime(eventTime) ? laterTime(eventTime, now) : now));
   const [errors, setErrors] = useState<string[]>([]);
-  // Точку с карты хранит стор: её ставит клик по карте, пока диалог открыт.
-  const candidate: RequestEditForm = { ...form, point: pickedPoint };
+  // Точку с карты хранит стор, но видит её только этот диалог, если выбор начал он; в форме она остаётся и после.
+  const picking = pickMode && pickFor === 'edit';
+  const ownPoint = pickFor === 'edit' ? pickedPoint : null;
+  useEffect(() => {
+    if (ownPoint) setForm((prev) => ({ ...prev, point: ownPoint }));
+  }, [ownPoint]);
+  const point = ownPoint ?? form.point;
+  const candidate: RequestEditForm = { ...form, point };
   const changes = requestChanges(original, updatedRequest(original, candidate));
 
   const update = <K extends keyof RequestEditForm>(key: K, value: RequestEditForm[K]) =>
@@ -60,12 +67,12 @@ function EditRequestForm({ original, now }: { original: ServiceRequest; now: HHM
           <input value={form.address} onChange={(event) => update('address', event.target.value)} />
         </label>
         <div className="field-row">
-          <button type="button" className="btn btn-small" onClick={startPick} disabled={pickMode}>
-            {pickMode ? 'Кликните по карте…' : 'Указать точку на карте'}
+          <button type="button" className="btn btn-small" onClick={() => startPick('edit')} disabled={picking}>
+            {picking ? 'Кликните по карте…' : 'Указать точку на карте'}
           </button>
-          {pickedPoint && (
+          {point && (
             <span className="muted">
-              Точка: {pickedPoint.lat.toFixed(5)}, {pickedPoint.lon.toFixed(5)}
+              Точка: {point.lat.toFixed(5)}, {point.lon.toFixed(5)}
             </span>
           )}
         </div>

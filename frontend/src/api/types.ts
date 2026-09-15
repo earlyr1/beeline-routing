@@ -12,7 +12,8 @@ export type EventType =
   | 'restore'
   | 'engineer_unavailable'
   | 'engineer_transport_changed'
-  | 'request_updated';
+  | 'request_updated'
+  | 'engineer_delayed';
 export type ReasonCode =
   | 'no_skill'
   | 'no_transport'
@@ -79,6 +80,8 @@ export interface PlanEvent {
   previous_transport?: Transport | null;
   /** Заявка до изменения у request_updated; заполняет сервер у применённого события, клиентское значение игнорируется. */
   previous_request?: ServiceRequest | null;
+  /** На сколько минут задерживается инженер у engineer_delayed, от 5 до 480. */
+  delay_min?: number | null;
 }
 
 export interface Visit {
@@ -200,6 +203,24 @@ export interface DiffShift {
   delta_min: number;
 }
 
+/** Визит, к которому инженер опоздал бы, если после задержки не перепланировать день. */
+export interface LateVisitForecast {
+  request_id: string;
+  /** Начало в плане до задержки. */
+  planned_start: HHMM;
+  forecast_start: HHMM;
+  /** Насколько прогнозное начало позже конца окна, минут. */
+  late_min: number;
+}
+
+/** Прогноз последствий задержки без перепланирования: только у engineer_delayed. */
+export interface DelayForecast {
+  engineer_id: string;
+  delay_min: number;
+  late_without_replan: LateVisitForecast[];
+  overtime_without_replan_min: number;
+}
+
 export interface PlanDiff {
   moved: DiffMove[];
   added: DiffAssign[];
@@ -208,6 +229,8 @@ export interface PlanDiff {
   time_shifts: DiffShift[];
   metrics_before: Metrics;
   metrics_after: Metrics;
+  /** Прогноз опозданий для задержки инженера; null у остальных событий. */
+  delay_forecast?: DelayForecast | null;
 }
 
 export interface PlanningState {
