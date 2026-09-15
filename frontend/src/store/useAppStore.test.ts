@@ -132,35 +132,44 @@ describe('useAppStore', () => {
     resetStore({ datasetId: 'd_test', eventTime: '10:00' });
     vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState());
     await useAppStore.getState().plan();
-    expect(api.buildPlan).toHaveBeenCalledWith('d_test', 2);
+    expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 1, lunch: true });
     expect(useAppStore.getState()).toMatchObject({ eventTime: '13:00', showPrevious: false, busy: false });
     expect(useAppStore.getState().state?.version).toBe(4);
   });
 
-  it('builds the plan with the chosen workload level and takes the level of every received state', async () => {
+  it('builds the plan with the chosen workload level and lunch and takes both from every received state', async () => {
     resetStore({ datasetId: 'd_test' });
-    expect(useAppStore.getState().workloadLevel).toBe(2);
+    expect(useAppStore.getState()).toMatchObject({ workloadLevel: 1, lunchEnabled: true });
     useAppStore.getState().setWorkloadLevel(0);
-    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0 }));
+    useAppStore.getState().setLunchEnabled(false);
+    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false }));
     await useAppStore.getState().plan();
-    expect(api.buildPlan).toHaveBeenCalledWith('d_test', 0);
-    expect(useAppStore.getState().workloadLevel).toBe(0);
+    expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 0, lunch: false });
+    expect(useAppStore.getState()).toMatchObject({ workloadLevel: 0, lunchEnabled: false });
 
-    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 4 }));
-    expect(useAppStore.getState().workloadLevel).toBe(4);
+    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 2, lunch_enabled: true }));
+    expect(useAppStore.getState()).toMatchObject({ workloadLevel: 2, lunchEnabled: true });
+  });
+
+  it('treats a state without the lunch flag from an older backend as a day with lunch', () => {
+    useAppStore.getState().setLunchEnabled(false);
+    const olderState: Partial<PlanningState> = makePlanningState({ lunch_enabled: false });
+    delete olderState.lunch_enabled;
+    useAppStore.getState().setPlanningState(olderState as PlanningState);
+    expect(useAppStore.getState().lunchEnabled).toBe(true);
   });
 
   it('keeps the workload level inside the scale', () => {
     useAppStore.getState().setWorkloadLevel(9);
-    expect(useAppStore.getState().workloadLevel).toBe(4);
+    expect(useAppStore.getState().workloadLevel).toBe(2);
     useAppStore.getState().setWorkloadLevel(-3);
     expect(useAppStore.getState().workloadLevel).toBe(0);
   });
 
-  it('keeps the chosen workload level after «Другой файл»', () => {
-    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 3 }));
+  it('keeps the chosen workload level and lunch after «Другой файл»', () => {
+    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 2, lunch_enabled: false }));
     useAppStore.getState().reset();
-    expect(useAppStore.getState()).toMatchObject({ state: null, workloadLevel: 3 });
+    expect(useAppStore.getState()).toMatchObject({ state: null, workloadLevel: 2, lunchEnabled: false });
   });
 
   it('applies an event and keeps the previous state on error', async () => {

@@ -210,7 +210,8 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       },
     ],
     matrix_source: 'osrm',
-    workload_level: 2,
+    workload_level: 1,
+    lunch_enabled: true,
     ...overrides,
   };
 }

@@ -1,6 +1,6 @@
 import { formatKm, formatSigned } from '../lib/format';
 import { displayedPlan } from '../lib/planView';
-import { workloadLevel } from '../lib/workload';
+import { dayModeText, lunchEnabledOf } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
 
 interface MetricProps {
@@ -37,7 +37,6 @@ export function MetricsStrip() {
 
   const current = displayedPlan(state, showPrevious).metrics;
   const base = state.baseline.metrics;
-  const workload = workloadLevel(state.workload_level);
   return (
     <div className="metrics-strip">
       <div className="metrics-strip__title">
@@ -62,7 +61,7 @@ export function MetricsStrip() {
       <Metric label="Не назначено" value={String(current.unassigned)} warn={current.unassigned > 0} />
       <Metric
         label="Нагрузка"
-        value={`${workload.emoji} ${workload.title}`}
+        value={dayModeText(state.workload_level, lunchEnabledOf(state.lunch_enabled))}
         compact
         title="Стоимость нового инженера для оптимизатора зависит от нагрузки дня"
       />

@@ -7,6 +7,7 @@ import type {
   Explanation,
   PlanEvent,
   PlanningState,
+  PlanRequest,
   Proposal,
   ReverseGeocode,
   RouteGeometry,
@@ -74,12 +75,14 @@ export function uploadFile(file: File): Promise<DatasetStatus> {
 
 export const getDatasetStatus = (datasetId: string) => request<DatasetStatus>(dataset(datasetId));
 
-/** Построить план дня; без уровня нагрузки сервер оставляет уровень сессии. */
-export const buildPlan = (datasetId: string, workloadLevel?: number) =>
-  request<PlanningState>(
+/** Построить план дня; пропущенные нагрузку и обед сервер берёт из сессии. */
+export function buildPlan(datasetId: string, body: PlanRequest = {}): Promise<PlanningState> {
+  const given = Object.fromEntries(Object.entries(body).filter(([, value]) => value !== undefined));
+  return request<PlanningState>(
     `${dataset(datasetId)}/plan`,
-    workloadLevel === undefined ? { method: 'POST' } : postJson({ workload_level: workloadLevel }),
+    Object.keys(given).length === 0 ? { method: 'POST' } : postJson(given),
   );
+}
 
 export const getPlanningState = (datasetId: string) => request<PlanningState>(`${dataset(datasetId)}/state`);
 

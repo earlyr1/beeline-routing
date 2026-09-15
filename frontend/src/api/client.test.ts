@@ -33,18 +33,23 @@ describe('api client', () => {
     expect(JSON.parse(init.body as string)).toEqual(cancel);
   });
 
-  it('sends the workload level with the plan request only when it is given', async () => {
+  it('sends the workload level and the lunch with the plan request only when they are given', async () => {
     const fetchMock = vi.fn().mockResolvedValue(reply(200, { version: 2 }));
     vi.stubGlobal('fetch', fetchMock);
-    await buildPlan('d 1', 0);
+    await buildPlan('d 1', { workload_level: 0, lunch: false });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('/api/datasets/d%201/plan');
     expect(init.method).toBe('POST');
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
-    expect(JSON.parse(init.body as string)).toEqual({ workload_level: 0 });
+    expect(JSON.parse(init.body as string)).toEqual({ workload_level: 0, lunch: false });
+
+    await buildPlan('d1', { lunch: true });
+    expect(JSON.parse((fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string)).toEqual({ lunch: true });
 
     await buildPlan('d1');
-    expect(fetchMock.mock.calls[1]).toEqual(['/api/datasets/d1/plan', { method: 'POST' }]);
+    expect(fetchMock.mock.calls[2]).toEqual(['/api/datasets/d1/plan', { method: 'POST' }]);
+    await buildPlan('d1', {});
+    expect(fetchMock.mock.calls[3]).toEqual(['/api/datasets/d1/plan', { method: 'POST' }]);
   });
 
   it('passes the plan kind to the geometry endpoint', async () => {
