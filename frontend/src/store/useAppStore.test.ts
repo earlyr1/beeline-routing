@@ -132,9 +132,35 @@ describe('useAppStore', () => {
     resetStore({ datasetId: 'd_test', eventTime: '10:00' });
     vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState());
     await useAppStore.getState().plan();
-    expect(api.buildPlan).toHaveBeenCalledWith('d_test');
+    expect(api.buildPlan).toHaveBeenCalledWith('d_test', 2);
     expect(useAppStore.getState()).toMatchObject({ eventTime: '13:00', showPrevious: false, busy: false });
     expect(useAppStore.getState().state?.version).toBe(4);
+  });
+
+  it('builds the plan with the chosen workload level and takes the level of every received state', async () => {
+    resetStore({ datasetId: 'd_test' });
+    expect(useAppStore.getState().workloadLevel).toBe(2);
+    useAppStore.getState().setWorkloadLevel(0);
+    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0 }));
+    await useAppStore.getState().plan();
+    expect(api.buildPlan).toHaveBeenCalledWith('d_test', 0);
+    expect(useAppStore.getState().workloadLevel).toBe(0);
+
+    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 4 }));
+    expect(useAppStore.getState().workloadLevel).toBe(4);
+  });
+
+  it('keeps the workload level inside the scale', () => {
+    useAppStore.getState().setWorkloadLevel(9);
+    expect(useAppStore.getState().workloadLevel).toBe(4);
+    useAppStore.getState().setWorkloadLevel(-3);
+    expect(useAppStore.getState().workloadLevel).toBe(0);
+  });
+
+  it('keeps the chosen workload level after «Другой файл»', () => {
+    useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 3 }));
+    useAppStore.getState().reset();
+    expect(useAppStore.getState()).toMatchObject({ state: null, workloadLevel: 3 });
   });
 
   it('applies an event and keeps the previous state on error', async () => {

@@ -33,6 +33,20 @@ describe('api client', () => {
     expect(JSON.parse(init.body as string)).toEqual(cancel);
   });
 
+  it('sends the workload level with the plan request only when it is given', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply(200, { version: 2 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await buildPlan('d 1', 0);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/datasets/d%201/plan');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(init.body as string)).toEqual({ workload_level: 0 });
+
+    await buildPlan('d1');
+    expect(fetchMock.mock.calls[1]).toEqual(['/api/datasets/d1/plan', { method: 'POST' }]);
+  });
+
   it('passes the plan kind to the geometry endpoint', async () => {
     const fetchMock = vi.fn().mockResolvedValue(reply(200, { legs: [] }));
     vi.stubGlobal('fetch', fetchMock);
