@@ -11,7 +11,7 @@ OFFICE = Office(
 
 
 def context(**overrides):
-    values = dict(model=TravelModel(), traffic=TrafficProfile({}), time_limit_s=1)
+    values = dict(model=TravelModel(), traffic=TrafficProfile({}), time_limit_s=1, time_limit_lunch_s=1)
     values.update(overrides)
     return PlanningContext(**values)
 
@@ -28,7 +28,9 @@ def day_engineers():
     return [eng("E1"), eng("E2")]
 
 
-def new_session(ctx=None, requests=None, engineers=None, workload_level=DEFAULT_WORKLOAD_LEVEL):
+def new_session(
+    ctx=None, requests=None, engineers=None, workload_level=DEFAULT_WORKLOAD_LEVEL, lunch_enabled=True
+):
     return start_session(
         "d_test",
         "t",
@@ -38,6 +40,7 @@ def new_session(ctx=None, requests=None, engineers=None, workload_level=DEFAULT_
         None,
         ctx or context(),
         workload_level=workload_level,
+        lunch_enabled=lunch_enabled,
     )
 
 

@@ -20,7 +20,7 @@ from app.ingest.beeline_csv import RawFile, parse_beeline_csv
 from app.ingest.bundle import save_bundle
 from app.ingest.geocode import Geocoder, JsonGeocodeCache, NominatimGeocoder, geocode_address
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
-from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
+from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import make_problem
@@ -148,7 +148,8 @@ def prepare_region(
         k: (r.lat, r.lon) for k, r in enumerate(requests) if r.lat is not None and r.lon is not None
     }
     engineers, crew_to_engineer = build_engineers(cfg, region, control, office, row_points)
-    # Бандл считается на уровне нагрузки по умолчанию: отчёт совпадает с тем, что сервис покажет без выбора уровня.
+    # Бандл считается как день сервиса по умолчанию: уровень нагрузки по умолчанию и обед по плану, лимит OR-Tools
+    # по умолчанию как у дня с обедом. Отчёт совпадает с тем, что сервис покажет без выбора уровня и обеда.
     problem = make_problem(
         requests,
         engineers,
@@ -157,6 +158,7 @@ def prepare_region(
         osrm=osrm,
         cache=cache,
         buffer=travel_buffer(DEFAULT_WORKLOAD_LEVEL),
+        lunch=True,
     )
     fcfs = FcfsSolver().solve(problem)
     optimized = OrToolsSolver(
@@ -197,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--geocoder", choices=["nominatim", "cache-only"], default="nominatim")
     parser.add_argument(
-        "--time-limit", type=int, default=DEFAULT_SOLVER_TIME_LIMIT_S, help="секунд на OR-Tools"
+        "--time-limit", type=int, default=DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, help="секунд на OR-Tools"
     )
     return parser
 

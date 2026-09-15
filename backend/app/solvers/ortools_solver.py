@@ -133,7 +133,7 @@ class OrToolsSolver:
                 routing.SetFixedCostOfVehicle(0, v)
 
         # Обед: перерыв 45 минут с началом в окне обеда, который не пересекает работу на объекте. Точное место
-        # обеда и итоговое время визитов потом ставит прогон маршрута.
+        # обеда и итоговое время визитов потом ставит прогон маршрута. В день без обеда перерывов в модели нет.
         visit_transits = [service[manager.IndexToNode(index)] for index in range(routing.Size() + v_count)]
         for v, state in enumerate(vehicles):
             window = problem.lunch_window(state)

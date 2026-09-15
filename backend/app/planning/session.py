@@ -17,7 +17,7 @@ from app.planning.delay import delay_engineer, delayed_until, forecast_delay, ke
 from app.planning.diff import compute_diff
 from app.planning.models import AppliedEvent, PlanDiff
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
-from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
+from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import EngineerState, Problem, make_problem
@@ -50,8 +50,15 @@ class PlanningContext:
     traffic: TrafficProfile
     osrm: OsrmClient | None = None
     cache: KVCache | None = None
+    # Лимит OR-Tools на день без обеда и на перепланирование по событию.
     time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S
+    # Лимит OR-Tools на весь день с обедом.
+    time_limit_lunch_s: int = DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
     geocode: Callable[[str, str], GeoResult] | None = None
+
+    def day_time_limit_s(self, lunch_enabled: bool) -> int:
+        """Лимит на план всего дня с нуля: с обедом поиск дольше, без обеда как у перепланирования."""
+        return self.time_limit_lunch_s if lunch_enabled else self.time_limit_s
 
 
 @dataclass(frozen=True)
@@ -72,6 +79,8 @@ class PlanningSession:
     version: int = 1
     # Уровень нагрузки дня (app/planning/workload.py): веса OR-Tools и запас на дорогу во всех решениях сессии.
     workload_level: int = DEFAULT_WORKLOAD_LEVEL
+    # Обед по плану, выбранный для дня: действует во всех решениях сессии, включая FCFS и перепланирование.
+    lunch_enabled: bool = True
 
     def request(self, request_id: str) -> Request | None:
         return next((r for r in self.requests if r.id == request_id), None)
@@ -81,9 +90,16 @@ class PlanningSession:
 
 
 def _day_problem(
-    requests: list[Request], engineers: list[Engineer], ctx: PlanningContext, workload_level: int
+    requests: list[Request],
+    engineers: list[Engineer],
+    ctx: PlanningContext,
+    workload_level: int,
+    lunch_enabled: bool,
 ) -> Problem:
-    """Задача на начало дня с запасом на дорогу уровня нагрузки. Базовая матрица берётся из кэша, если уже была."""
+    """Задача на начало дня с запасом на дорогу уровня нагрузки и выбранным обедом.
+
+    Базовая матрица берётся из кэша, если уже была.
+    """
     return make_problem(
         requests,
         engineers,
@@ -92,12 +108,13 @@ def _day_problem(
         osrm=ctx.osrm,
         cache=ctx.cache,
         buffer=travel_buffer(workload_level),
+        lunch=lunch_enabled,
     )
 
 
-def _solve(problem: Problem, ctx: PlanningContext, workload_level: int) -> tuple[Plan, Plan]:
+def _solve(problem: Problem, workload_level: int, time_limit_s: int) -> tuple[Plan, Plan]:
     """Оптимизированный план с весами уровня нагрузки и базовый FCFS. Стоимость инженера FCFS не использует."""
-    optimizer = OrToolsSolver(time_limit_s=ctx.time_limit_s, weights=workload_weights(workload_level))
+    optimizer = OrToolsSolver(time_limit_s=time_limit_s, weights=workload_weights(workload_level))
     return optimizer.solve(problem), FcfsSolver().solve(problem)
 
 
@@ -111,9 +128,11 @@ def start_session(
     ctx: PlanningContext,
     *,
     workload_level: int = DEFAULT_WORKLOAD_LEVEL,
+    lunch_enabled: bool = True,
 ) -> PlanningSession:
-    problem = _day_problem(requests, engineers, ctx, workload_level)
-    plan, baseline = _solve(problem, ctx, workload_level)
+    """План всего дня с нуля: предподсчёт загрузки и пересборка дня. Лимит OR-Tools зависит от обеда."""
+    problem = _day_problem(requests, engineers, ctx, workload_level, lunch_enabled)
+    plan, baseline = _solve(problem, workload_level, ctx.day_time_limit_s(lunch_enabled))
     return PlanningSession(
         dataset_id=dataset_id,
         region=region,
@@ -125,6 +144,7 @@ def start_session(
         plan=plan,
         baseline=baseline,
         workload_level=workload_level,
+        lunch_enabled=lunch_enabled,
     )
 
 
@@ -463,13 +483,14 @@ def check_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
 def apply_event(session: PlanningSession, event: Event, ctx: PlanningContext) -> PlanningSession:
     """Применяет одно событие дня и возвращает НОВУЮ сессию; входная не меняется.
 
-    Бросает EventRejected, если событие противоречит текущему состоянию. Уровень нагрузки остаётся уровнем сессии.
+    Бросает EventRejected, если событие противоречит текущему состоянию. Уровень нагрузки и обед остаются как в
+    сессии. Лимит OR-Tools обычный и с обедом: перепланирование стартует от текущего плана.
     """
     _check_time(session, event)
     requests, engineers, stored_event = _apply_to_inputs(session, event, ctx)
-    base = _day_problem(requests, engineers, ctx, session.workload_level)
+    base = _day_problem(requests, engineers, ctx, session.workload_level, session.lunch_enabled)
     problem = _pinned_problem(base, session, stored_event)
-    plan, baseline = _solve(problem, ctx, session.workload_level)
+    plan, baseline = _solve(problem, session.workload_level, ctx.time_limit_s)
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}
     diff = compute_diff(session.plan, plan, cancelled)
     if stored_event.type == EventType.ENGINEER_DELAYED:

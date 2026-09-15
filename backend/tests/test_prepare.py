@@ -5,6 +5,7 @@ from app.domain.models import Metrics
 from app.geo.matrix import TrafficProfile
 from app.ingest.geocode import GeoHit
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
+from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import make_problem
 from app.synth import prepare as prepare_module
@@ -37,11 +38,13 @@ class HashGeocoder:
 
 
 def test_prepare_region_end_to_end(tmp_path, monkeypatch):
-    buffers, weights = [], []
+    buffers, weights, lunches = [], [], []
 
     def spy_problem(*args, **kwargs):
         buffers.append(kwargs.get("buffer"))
-        return make_problem(*args, **kwargs)
+        problem = make_problem(*args, **kwargs)
+        lunches.append(problem.lunch)
+        return problem
 
     class SpySolver(OrToolsSolver):
         def __init__(self, *args, **kwargs):
@@ -85,9 +88,11 @@ def test_prepare_region_end_to_end(tmp_path, monkeypatch):
         if route.visits
     )
     assert "| Оптимизированный (OR-Tools) | 1 |" in result.report
-    # Бандл считается на уровне нагрузки по умолчанию: отчёт совпадает с тем, что сервис покажет без выбора уровня.
-    assert buffers == [travel_buffer(DEFAULT_WORKLOAD_LEVEL)]
-    assert weights == [workload_weights(DEFAULT_WORKLOAD_LEVEL)]
+    # Бандл считается как день сервиса по умолчанию: «Обычный день» и обед по плану.
+    assert DEFAULT_WORKLOAD_LEVEL == 1
+    assert buffers == [travel_buffer(1)]
+    assert weights == [workload_weights(1)]
+    assert lunches == [True]
     cache = json.loads((tmp_path / "data" / "geocode_cache.json").read_text(encoding="utf-8"))
     assert "Москва, Юных Ленинцев улица, 83с4" in cache
 
@@ -100,6 +105,7 @@ def test_self_check_requires_strict_improvement():
     assert not self_check(better, worse)[0]
 
 
-def test_cli_time_limit_defaults_to_five_seconds():
-    assert build_parser().parse_args([]).time_limit == 5
+def test_cli_time_limit_defaults_to_lunch_limit():
+    """Бандл считается с обедом, поэтому и лимит OR-Tools по умолчанию как у дня с обедом."""
+    assert build_parser().parse_args([]).time_limit == DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S == 15
     assert build_parser().parse_args(["--time-limit", "10"]).time_limit == 10

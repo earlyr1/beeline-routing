@@ -9,14 +9,22 @@ from app.domain.models import Event
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.planning import session as session_module
 from app.planning.session import apply_event
-from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, WORKLOAD_LEVELS, travel_buffer, workload_weights
+from app.planning.workload import (
+    DEFAULT_WORKLOAD_LEVEL,
+    WORKLOAD_LEVEL_TEXT,
+    WORKLOAD_LEVELS,
+    is_workload_level,
+    travel_buffer,
+    workload,
+    workload_weights,
+)
 from app.solvers.assemble import build_plan
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import ObjectiveWeights, OrToolsSolver
 from app.solvers.problem import NO_BUFFER, TravelBuffer, make_problem
 from app.solvers.simulate import simulate_route
 from tests.helpers import at, eng, problem_of, req
-from tests.planning_helpers import context, new_session, routes
+from tests.planning_helpers import EXACT_TRAVEL_LEVEL, context, new_session, routes
 
 
 def buffered_problem(requests, engineers, level=DEFAULT_WORKLOAD_LEVEL):
@@ -26,17 +34,28 @@ def buffered_problem(requests, engineers, level=DEFAULT_WORKLOAD_LEVEL):
 
 
 def test_level_table_matches_contract():
-    assert DEFAULT_WORKLOAD_LEVEL == 2
+    """Три уровня: это прежние уровни 0, 2 и 4 из пяти, с теми же стоимостью инженера и запасом на дорогу."""
+    assert DEFAULT_WORKLOAD_LEVEL == 1
     table = [
         (item.title, item.emoji, item.vehicle_fixed_cost, item.travel_buffer) for item in WORKLOAD_LEVELS
     ]
     assert table == [
         ("Спокойный день", "😌", 20_000, TravelBuffer(1.30, 5)),
-        ("Без спешки", "🙂", 150_000, TravelBuffer(1.20, 5)),
         ("Обычный день", "😐", 1_000_000, TravelBuffer(1.10, 5)),
-        ("Плотный день", "😓", 3_000_000, TravelBuffer(1.05, 0)),
         ("На пределе", "🥵", 6_000_000, TravelBuffer(1.00, 0)),
     ]
+    # Сценарии с минутами, посчитанными прямо по матрице, планируются на уровне без запаса.
+    assert EXACT_TRAVEL_LEVEL == 2
+
+
+def test_level_outside_zero_to_two_is_rejected_with_dispatcher_text():
+    assert WORKLOAD_LEVEL_TEXT == "уровень нагрузки должен быть от 0 до 2"
+    assert [level for level in range(-1, 5) if is_workload_level(level)] == [0, 1, 2]
+    for level in (-1, 3, 4):
+        with pytest.raises(ValueError, match="^уровень нагрузки должен быть от 0 до 2$"):
+            workload(level)
+        with pytest.raises(ValueError, match="от 0 до 2"):
+            workload_weights(level)
 
 
 def test_level_changes_only_the_new_engineer_cost():
@@ -54,10 +73,8 @@ def test_level_changes_only_the_new_engineer_cost():
     ("level", "trips"),
     [
         (0, {0: 0, 1: 6, 10: 15, 40: 52}),
-        (1, {0: 0, 1: 6, 10: 15, 40: 48}),
-        (2, {0: 0, 1: 6, 10: 15, 60: 66, 100: 110}),
-        (3, {0: 0, 1: 2, 20: 21, 100: 105}),
-        (4, {0: 0, 1: 1, 37: 37}),
+        (1, {0: 0, 1: 6, 10: 15, 60: 66, 100: 110}),
+        (2, {0: 0, 1: 1, 37: 37}),
     ],
 )
 def test_buffer_is_factor_rounded_up_but_not_less_than_minimum_extra(level, trips):
@@ -134,7 +151,7 @@ def test_calm_day_uses_more_engineers_than_day_at_the_limit():
         solver = OrToolsSolver(time_limit_s=1, weights=workload_weights(level))
         return solver.solve(buffered_problem(requests, engineers, level))
 
-    calm, limit = plan_at(0), plan_at(4)
+    calm, limit = plan_at(0), plan_at(2)
     assert routes(calm) == {"E1": ["R1"], "E2": ["R2"]}
     assert (calm.metrics.engineers_used, limit.metrics.engineers_used) == (2, 1)
     assert calm.unassigned == limit.unassigned == []

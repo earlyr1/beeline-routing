@@ -87,6 +87,7 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         osrm=osrm,
         cache=kv,
         time_limit_s=settings.solver_time_limit_s,
+        time_limit_lunch_s=settings.solver_time_limit_lunch_s,
         geocode=geocode,
     )
     ingest = IngestDeps(
