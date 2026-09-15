@@ -100,11 +100,19 @@ export interface Visit {
   pinned: boolean;
 }
 
+/** Обед по плану: 45 минут между визитами, в окне от трёх до шести часов после начала смены. */
+export interface RouteLunch {
+  start: HHMM;
+  end: HHMM;
+}
+
 export interface Route {
   engineer_id: string;
   visits: Visit[];
   total_km: number;
   total_travel_min: number;
+  /** null: у инженера нет визитов, смена короче шести часов, окно обеда прошло без обеда или это план диспетчеров. */
+  lunch: RouteLunch | null;
 }
 
 export interface Unassigned {

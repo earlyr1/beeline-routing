@@ -101,6 +101,16 @@ describe('panel tabs', () => {
     expect(screen.getByText('09:00')).toBeInTheDocument();
   });
 
+  it('TimelineTab draws a grey lunch bar that opens nothing and no bar without a lunch', () => {
+    const { container } = render(<TimelineTab />);
+    expect(screen.getByTitle('Обед 15:55–16:40')).toHaveTextContent('Обед');
+    expect(screen.getByTitle('Обед 14:05–14:50')).toHaveClass('timeline__lunch');
+    expect(container.querySelectorAll('.timeline__lunch')).toHaveLength(2);
+    expect(screen.queryByRole('button', { name: /Обед/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Обед 14:05–14:50'));
+    expect(useAppStore.getState()).toMatchObject({ selectedRequestId: null, selectedEngineerId: null });
+  });
+
   it('TimelineTab opens the brigade page from an engineer label', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104' });
     render(<TimelineTab />);

@@ -1,7 +1,7 @@
 import { engineerColor } from '../lib/colors';
 import { describeEvent } from '../lib/events';
 import { formatDuration, formatKm, formatWindow, requestWindowText, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from '../lib/format';
-import { byId, displayedPlan, engineerIdsOf, routeSummary, type RouteStop } from '../lib/planView';
+import { byId, displayedPlan, engineerIdsOf, routeRows, routeSummary, type RouteStop } from '../lib/planView';
 import { percent, timelineRow, timeScale } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
 import { TimelineTicks, TimelineTrack } from './panel/TimelineTrack';
@@ -132,20 +132,32 @@ export function RouteCard() {
             </tr>
           </thead>
           <tbody>
-            {stops.map((stop) => (
-              <tr key={stop.visit.request_id} className="route-card__row" onClick={() => selectRequest(stop.visit.request_id)}>
-                <td>{stop.order}</td>
-                <td>
-                  <strong>{stop.visit.request_id}</strong>
-                  {stop.visit.pinned && <span className="badge">Закреплена</span>}
-                </td>
-                <td>{stop.request ? requestWindowText(stop.request) : '—'}</td>
-                <td>{stop.visit.arrival}</td>
-                <td>{stop.visit.start}</td>
-                <td className={stop.slackMin !== null && stop.slackMin < 0 ? 'warn-text' : undefined}>{slackText(stop)}</td>
-                <td>{formatKm(stop.visit.leg_km)}</td>
-              </tr>
-            ))}
+            {routeRows(summary).map((row) => {
+              if (row.kind === 'lunch') {
+                return (
+                  <tr key="__lunch" className="route-card__lunch">
+                    <td />
+                    <td>Обед</td>
+                    <td colSpan={5}>{formatWindow(row.lunch.start, row.lunch.end)}</td>
+                  </tr>
+                );
+              }
+              const { stop } = row;
+              return (
+                <tr key={stop.visit.request_id} className="route-card__row" onClick={() => selectRequest(stop.visit.request_id)}>
+                  <td>{stop.order}</td>
+                  <td>
+                    <strong>{stop.visit.request_id}</strong>
+                    {stop.visit.pinned && <span className="badge">Закреплена</span>}
+                  </td>
+                  <td>{stop.request ? requestWindowText(stop.request) : '—'}</td>
+                  <td>{stop.visit.arrival}</td>
+                  <td>{stop.visit.start}</td>
+                  <td className={stop.slackMin !== null && stop.slackMin < 0 ? 'warn-text' : undefined}>{slackText(stop)}</td>
+                  <td>{formatKm(stop.visit.leg_km)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

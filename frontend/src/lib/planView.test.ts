@@ -7,6 +7,7 @@ import {
   diffMarks,
   displayedPlan,
   routeRequestIds,
+  routeRows,
   routeSummary,
   sortRequestsForList,
   straightLegs,
@@ -100,6 +101,17 @@ describe('planView', () => {
       'С опозданием к окну: 50104 на 10 мин.',
       'Работы заканчиваются в 16:55, позже конца смены в 16:30.',
     ]);
+  });
+
+  it('puts the lunch between the visits in time order or after the last visit', () => {
+    const before = routeSummary(state, state.previous_plan!, 'E01');
+    expect(before?.lunch).toEqual({ start: '13:30', end: '14:15' });
+    const rows = (summary: ReturnType<typeof routeSummary>) =>
+      routeRows(summary!).map((row) => (row.kind === 'lunch' ? `Обед ${row.lunch.start}` : row.stop.visit.request_id));
+    expect(rows(before)).toEqual(['74198', '86160', 'Обед 13:30', '46393']);
+    expect(rows(routeSummary(state, state.plan, 'E01'))).toEqual(['74198', '86160', '50104', '46393', 'Обед 15:55']);
+    expect(routeSummary(state, state.plan, 'E03')?.lunch).toBeNull();
+    expect(rows(routeSummary(state, state.control!, 'E01'))).toEqual(['74198', '86160']);
   });
 
   it('returns route order for one engineer', () => {

@@ -6,6 +6,7 @@ import type {
   PlanningState,
   Route,
   RouteLeg,
+  RouteLunch,
   ServiceRequest,
   Unassigned,
   Visit,
@@ -113,6 +114,20 @@ export interface RouteSummary {
   travelMin: number;
   endOfWork: HHMM | null;
   sentences: string[];
+  /** Обед по плану; null, если обеда в маршруте нет. */
+  lunch: RouteLunch | null;
+}
+
+/** Строка таблицы визитов бригады: визит или обед между визитами. */
+export type RouteRow = { kind: 'visit'; stop: RouteStop } | { kind: 'lunch'; lunch: RouteLunch };
+
+/** Визиты по порядку, обед на своём месте по времени: перед первым визитом, который начинается не раньше обеда. */
+export function routeRows({ stops, lunch }: Pick<RouteSummary, 'stops' | 'lunch'>): RouteRow[] {
+  const rows: RouteRow[] = stops.map((stop) => ({ kind: 'visit', stop }));
+  if (!lunch) return rows;
+  const index = stops.findIndex((stop) => toMinutes(stop.visit.start) >= toMinutes(lunch.start));
+  rows.splice(index === -1 ? rows.length : index, 0, { kind: 'lunch', lunch });
+  return rows;
 }
 
 function orderSentence(stops: RouteStop[], totalKm: number, planKm: number): string {
@@ -192,7 +207,7 @@ export function routeSummary(state: PlanningState, plan: Plan, engineerId: strin
     const pinned = pinnedSentence(stops);
     if (pinned) sentences.push(pinned);
   }
-  return { engineer, stops, totalKm, travelMin, endOfWork, sentences };
+  return { engineer, stops, totalKm, travelMin, endOfWork, sentences, lunch: route?.lunch ?? null };
 }
 
 /** Прямые отрезки от старта инженера через заявки: запасной вариант, пока нет геометрии OSRM. */

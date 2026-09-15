@@ -24,13 +24,18 @@ interface TimelineTrackProps {
   onSelect(requestId: string): void;
 }
 
-/** Дорожка одного инженера: смена, окна визитов, работы, недоступность и текущее время. Общая для таймлайна и страницы бригады. */
+/** Дорожка одного инженера: смена, обед, окна визитов, работы, недоступность и текущее время. Общая для таймлайна и страницы бригады. */
 export function TimelineTrack({ row, color, nowLeft, selectedRequestId, onSelect }: TimelineTrackProps) {
   return (
     <div className="timeline__track">
       <div className="timeline__shift" style={{ left: `${row.shiftLeft}%`, width: `${row.shiftWidth}%` }} />
       {row.unavailableLeft !== null && (
         <div className="timeline__unavailable" style={{ left: `${row.unavailableLeft}%` }} title="Инженер недоступен" />
+      )}
+      {row.lunch && (
+        <div className="timeline__lunch" style={{ left: `${row.lunch.left}%`, width: `${row.lunch.width}%` }} title={`Обед ${row.lunch.label}`}>
+          Обед
+        </div>
       )}
       {row.bars.map((bar) => (
         <Fragment key={bar.requestId}>
