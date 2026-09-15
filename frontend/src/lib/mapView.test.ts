@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { makePlanningState } from '../test/fixtures';
-import { overviewBounds } from './mapView';
+import { overviewBounds, toLatLng, toLatLngBounds } from './mapView';
+
+describe('Leaflet coordinates', () => {
+  it('puts latitude first', () => {
+    expect(toLatLng([37.7862, 55.7075])).toEqual([55.7075, 37.7862]);
+  });
+
+  it('turns top-left and bottom-right corners into south-west and north-east', () => {
+    expect(
+      toLatLngBounds([
+        [37.6, 55.8],
+        [37.9, 55.6],
+      ]),
+    ).toEqual([
+      [55.6, 37.6],
+      [55.8, 37.9],
+    ]);
+  });
+});
 
 describe('overviewBounds', () => {
   it('covers office, engineer starts and requests with top-left and bottom-right corners', () => {

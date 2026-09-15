@@ -1,0 +1,44 @@
+/* Запасная карта на Leaflet и OpenStreetMap, когда Яндекс Карты недоступны. */
+
+.fallback-map {
+  position: relative;
+  height: 100%;
+  /* Слои Leaflet с z-index 400–1000 не должны перекрывать кнопку «Весь план» и подсказку выбора точки. */
+  isolation: isolate;
+}
+
+.fallback-map__canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.fallback-map__canvas.leaflet-container {
+  background: #eceef2;
+  font-family: inherit;
+}
+
+/* Обёртка divIcon без размеров: маркер центрируется своим transform из .marker. */
+.fallback-map__icon {
+  background: none;
+  border: 0;
+}
+
+.fallback-map__note {
+  position: absolute;
+  z-index: 1000;
+  left: 8px;
+  bottom: 8px;
+  max-width: calc(100% - 16px);
+  padding: 2px 8px;
+  border-radius: var(--radius, 6px);
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--muted, #6b7280);
+  font-size: 11px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+
+.map-area--picking .fallback-map__canvas.leaflet-container,
+.map-area--picking .fallback-map__canvas .leaflet-interactive {
+  cursor: crosshair;
+}

@@ -1,7 +1,11 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from '../../store/useAppStore';
+import { FallbackMap } from './FallbackMap';
 import { MapContent } from './MapContent';
 import { loadYandexMaps, type YMapsComponents } from './yandexLoader';
+
+export const NO_KEY_NOTE = 'Подложка OpenStreetMap: ключ Яндекс Карт не задан';
+export const YANDEX_FAILED_NOTE = 'Яндекс Карты недоступны, показана подложка OpenStreetMap';
 
 export function MapPlaceholder({ title, text }: { title: string; text?: string }) {
   return (
@@ -30,7 +34,8 @@ function YandexMap({ apiKey }: { apiKey: string }) {
     };
   }, [apiKey]);
 
-  if (loadError) return <MapPlaceholder title="Карта не загрузилась" text={loadError} />;
+  // Лимит ключа исчерпан или нет сети: план всё равно виден на OpenStreetMap.
+  if (loadError) return <FallbackMap note={YANDEX_FAILED_NOTE} detail={loadError} />;
   if (!components) return <MapPlaceholder title="Загружаем Яндекс Карты…" />;
   return <MapContent components={components} />;
 }
@@ -38,13 +43,6 @@ function YandexMap({ apiKey }: { apiKey: string }) {
 export function MapView() {
   const config = useAppStore((s) => s.config);
   if (!config) return <MapPlaceholder title="Загружаем настройки карты…" />;
-  if (!config.yandex_maps_api_key) {
-    return (
-      <MapPlaceholder
-        title="Карта отключена"
-        text="Ключ Яндекс Карт не задан. Добавьте YANDEX_MAPS_API_KEY в .env и перезапустите backend. Список заявок, таймлайн и перепланирование работают без карты."
-      />
-    );
-  }
+  if (!config.yandex_maps_api_key) return <FallbackMap note={NO_KEY_NOTE} />;
   return <YandexMap apiKey={config.yandex_maps_api_key} />;
 }
