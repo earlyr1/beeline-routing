@@ -151,6 +151,17 @@ h4 {
   margin: 8px 0;
 }
 
+/* Поле в строке сжимается под ширину диалога: длинный пункт списка не выталкивает соседнее поле за край. */
+.field-row .field {
+  min-width: 0;
+}
+
+.field-row .field input,
+.field-row .field select {
+  width: 100%;
+  min-width: 0;
+}
+
 .dot {
   width: 10px;
   height: 10px;
