@@ -255,6 +255,28 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
   });
 
+  it('keeps only one of the delay and request edit dialogs open', () => {
+    useAppStore.getState().startEdit('50104');
+    useAppStore.getState().startPick('edit');
+    useAppStore.getState().startDelay('E02');
+    expect(useAppStore.getState()).toMatchObject({
+      delayDialogOpen: true,
+      delayEngineerId: 'E02',
+      editingRequestId: null,
+      pickMode: false,
+      pickFor: null,
+    });
+
+    useAppStore.getState().startEdit('46393');
+    expect(useAppStore.getState()).toMatchObject({ editingRequestId: '46393', delayDialogOpen: false, delayEngineerId: null });
+
+    const point = { lat: 55.71, lon: 37.8 };
+    useAppStore.getState().startPick('urgent');
+    useAppStore.getState().finishPick(point);
+    useAppStore.getState().startDelay(null);
+    expect(useAppStore.getState()).toMatchObject({ pickFor: 'urgent', pickedPoint: point });
+  });
+
   it('falls back to an offline config and keeps config on reset', async () => {
     vi.mocked(api.getConfig).mockRejectedValue(new api.ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.'));
     await useAppStore.getState().loadConfig();

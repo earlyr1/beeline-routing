@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from app.domain.enums import TRANSPORT_RU, EventType, Priority, Skill, Transport
 from app.domain.models import DELAY_RANGE_TEXT, MAX_DELAY_MIN, MIN_DELAY_MIN, Event, Request
 from app.domain.timeutil import HHMM
+from app.domain.validation_text import validation_text
 from app.llm.client import LlmResult, ToolCall
 from app.planning.session import (
     EDITABLE_REQUEST_FIELDS,
@@ -161,10 +162,7 @@ def resolve_request(session: PlanningSession, value: str) -> str:
 
 
 def _validation_text(error: ValidationError) -> str:
-    first = error.errors()[0]
-    location = ".".join(str(part) for part in first["loc"])
-    message = str(first["msg"]).removeprefix("Value error, ")
-    return f"{location}: {message}" if location else message
+    return validation_text(error.errors(), limit=1)
 
 
 def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:

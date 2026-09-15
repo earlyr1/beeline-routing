@@ -7,16 +7,13 @@ from fastapi.responses import JSONResponse
 from app.api.deps import AppDeps, build_deps
 from app.api.proposals import router as proposals_router
 from app.api.routes import router
+from app.domain.validation_text import validation_text
 from app.settings import Settings
 
 
 async def _validation_error(_, error: RequestValidationError) -> JSONResponse:
-    parts = []
-    for item in error.errors()[:3]:
-        location = ".".join(str(part) for part in item.get("loc", ()) if part != "body")
-        message = str(item.get("msg", "")).removeprefix("Value error, ")
-        parts.append(f"{location}: {message}" if location else message)
-    return JSONResponse(status_code=422, content={"detail": "Некорректный запрос: " + "; ".join(parts)})
+    detail = "Некорректный запрос: " + validation_text(error.errors(), skip=("body",))
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 def create_app(deps: AppDeps | None = None) -> FastAPI:

@@ -278,7 +278,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   startEdit(requestId) {
-    set({ editingRequestId: requestId });
+    // Диалоги задержки и изменения заявки открываются на одном месте: одновременно открыт только один.
+    set({ editingRequestId: requestId, delayDialogOpen: false, delayEngineerId: null });
     get().clearPick('edit');
   },
 
@@ -288,7 +289,8 @@ export const useAppStore = create<AppState>()((set, get) => ({
   },
 
   startDelay(engineerId) {
-    set({ delayDialogOpen: true, delayEngineerId: engineerId });
+    set({ delayDialogOpen: true, delayEngineerId: engineerId, editingRequestId: null });
+    get().clearPick('edit');
   },
 
   closeDelay() {

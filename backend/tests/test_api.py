@@ -184,6 +184,10 @@ def test_delay_event_returns_forecast_and_russian_422(tmp_path):
         incomplete.json()["detail"]
         == "Некорректный запрос: для задержки инженера нужны engineer_id и delay_min"
     )
+    for bad, text in (("abc", "нужно целое число"), (12.5, "нужно целое число без дробной части")):
+        wrong = client.post(f"{base}/events", json={**event, "time": "10:20", "delay_min": bad})
+        assert wrong.status_code == 422
+        assert wrong.json()["detail"] == f"Некорректный запрос: delay_min: {text}"
 
     other = "E1" if busy["engineer_id"] == "E2" else "E2"
     unavailable = {"type": "engineer_unavailable", "time": "10:30", "engineer_id": other}
