@@ -17,7 +17,7 @@
 - `Transport`: `car` (Автомобиль), `foot` (Пешеход), `bike` (Велосипед), `public` (Общественный транспорт)
 - `Priority`: `normal` (Обычная), `urgent` (Срочная)
 - `RequestStatus`: `active`, `cancelled`
-- `EventType`: `urgent`, `cancel`, `restore`, `engineer_unavailable`
+- `EventType`: `urgent`, `cancel`, `restore`, `engineer_unavailable`, `engineer_transport_changed`
 - `ReasonCode`: `no_skill`, `no_transport`, `does_not_fit_window_or_shift`, `no_free_engineer_in_window`, `address_not_found`
 - `GeocodePrecision`: `house`, `street`, `locality`, `none`
 - `DatasetStatusValue`: `processing`, `ready`, `failed`
@@ -170,3 +170,4 @@
 11. В `frontend/src/api/types.ts` контрактный `Request` называется `ServiceRequest`, `Event` называется `PlanEvent`, чтобы не затенять DOM-типы. Поля совпадают.
 12. `Visit.pinned = true` только у работы, начатой до `now`: её нельзя отменить. Визит, к которому инженер уже едет, солвер не переназначает, но у него `pinned = false`, и отмена до начала работы разрешена. Объяснение такого визита: «Исполнитель <имя> уже в пути к заявке, работа начнётся в HH:MM.», альтернатив нет.
 13. Время события по умолчанию во фронте 13:00, но не раньше `now`. Окно срочной заявки по умолчанию начинается не раньше самого раннего начала смены доступных инженеров.
+14. Событие `engineer_transport_changed` («Смена транспорта»): клиент передаёт `engineer_id`, новый `transport` и `time`. У всех событий есть необязательные поля `transport` и `previous_transport` (по умолчанию `null`); `previous_transport` заполняет backend в сохранённом событии. Ошибки 422: «Инженер <id> не найден.», «<имя> недоступен с HH:MM, сменить транспорт нельзя.», «У <имя> уже транспорт «<название>».». Начатые визиты и визит в пути сохраняются, дальше маршрут считается по новому транспорту. LLM-помощник предлагает событие инструментом `propose_engineer_transport_change`.
