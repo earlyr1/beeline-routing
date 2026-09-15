@@ -42,6 +42,13 @@ class Request(BaseModel):
 # Ожидание срочной заявки «как можно скорее» (начало работы минус начало окна) до 4 часов не штрафуется.
 ASAP_FREE_WAIT_MIN = 240
 
+# Обед по плану: 45 минут между визитами, начало не раньше чем через 3 часа и не позже чем через 6 часов после
+# начала смены (для смены 10:00–22:00 с 13:00 до 16:00). При рабочем дне короче 6 часов обеда в плане нет.
+LUNCH_MIN = 45
+LUNCH_EARLIEST_MIN = 180
+LUNCH_LATEST_MIN = 360
+LUNCH_WORKDAY_MIN = 360
+
 
 class Engineer(BaseModel):
     id: str
@@ -125,11 +132,18 @@ class Visit(BaseModel):
     pinned: bool = False
 
 
+class Lunch(BaseModel):
+    start: HHMM
+    end: HHMM
+
+
 class Route(BaseModel):
     engineer_id: str
     visits: list[Visit] = Field(default_factory=list)
     total_km: float = 0.0
     total_travel_min: int = 0
+    # Обед инженера в наших планах; null у инженера без визитов, при коротком дне и в плане диспетчеров.
+    lunch: Lunch | None = None
 
 
 class Unassigned(BaseModel):

@@ -86,7 +86,8 @@ def test_visit_on_the_way_is_explained_as_departed():
     assert not explanation.visit.pinned
     assert explanation.summary == f"Исполнитель Инженер {busy} уже в пути к заявке, работа начнётся в 09:59."
     assert explanation.factors == [
-        "Инженер уже выехал к заявке, поэтому она не переназначается. Отменить заявку можно до начала работы."
+        "Инженер уже выехал к заявке, поэтому она не переназначается. Отменить заявку можно до начала работы.",
+        "Обед 12:00–12:45.",
     ]
     assert explanation.alternatives == []
     later = _explain(updated, "C")

@@ -31,4 +31,5 @@ def build_control_plan(
         sequences[engineer_id].append(request_id)
     for sequence in sequences.values():
         sequence.sort(key=lambda rid: (problem.request(rid).window_start, problem.request(rid).window_end))
-    return build_plan(problem, CONTROL_SOLVER, sequences, fixed_unassigned=fixed)
+    # План диспетчеров показывается как есть: обеда в нём нет, и визиты обедом не сдвигаются.
+    return build_plan(problem, CONTROL_SOLVER, sequences, fixed_unassigned=fixed, lunch=False)

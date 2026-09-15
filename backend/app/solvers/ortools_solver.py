@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from app.domain.enums import Priority
-from app.domain.models import ASAP_FREE_WAIT_MIN, Plan
+from app.domain.models import ASAP_FREE_WAIT_MIN, LUNCH_MIN, Plan
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.assemble import build_plan
 from app.solvers.eligibility import exclusion
@@ -131,6 +131,19 @@ class OrToolsSolver:
             if problem.pinned.get(state.engineer.id):
                 # Инженер уже работал сегодня и в метрике учтён в любом случае: не штрафуем за продолжение.
                 routing.SetFixedCostOfVehicle(0, v)
+
+        # Обед: перерыв 45 минут с началом в окне обеда, который не пересекает работу на объекте. Точное место
+        # обеда и итоговое время визитов потом ставит прогон маршрута.
+        visit_transits = [service[manager.IndexToNode(index)] for index in range(routing.Size() + v_count)]
+        for v, state in enumerate(vehicles):
+            window = problem.lunch_window(state)
+            if window is None:
+                continue
+            earliest, latest = window
+            lunch = routing.solver().FixedDurationIntervalVar(
+                max(earliest, state.available_from), latest, LUNCH_MIN, False, f"lunch_{v}"
+            )
+            time_dimension.SetBreakIntervalsOfVehicle([lunch], v, visit_transits)
 
         params = pywrapcp.DefaultRoutingSearchParameters()
         params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC

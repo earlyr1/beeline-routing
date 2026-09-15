@@ -15,14 +15,16 @@ def build_plan(
     sequences: dict[str, list[str]],
     *,
     fixed_unassigned: dict[str, Unassigned] | None = None,
+    lunch: bool = True,
 ) -> Plan:
+    """План по последовательностям. lunch=False — план без обеда (план диспетчеров показывается как есть)."""
     fixed_unassigned = fixed_unassigned or {}
     routes: list[Route] = []
     violations: list[str] = []
     placed: set[str] = set()
     for state in problem.states:
         engineer_id = state.engineer.id
-        sim = simulate_route(problem, state, sequences.get(engineer_id, []))
+        sim = simulate_route(problem, state, sequences.get(engineer_id, []), lunch=lunch)
         # Флаг pinned у закреплённых визитов задаёт pin_problem: True только у начатой работы.
         visits = list(problem.pinned.get(engineer_id, [])) + sim.visits
         violations.extend(sim.violations)
@@ -33,6 +35,8 @@ def build_plan(
                 visits=visits,
                 total_km=round(sum(visit.leg_km for visit in visits), 2),
                 total_travel_min=sum(visit.leg_min for visit in visits),
+                # Начатый до события обед остаётся как в прежнем плане, остальной ставит прогон маршрута.
+                lunch=(problem.pinned_lunch.get(engineer_id) or sim.lunch) if lunch else None,
             )
         )
     unassigned = list(problem.unplannable)
