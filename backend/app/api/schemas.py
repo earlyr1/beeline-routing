@@ -4,13 +4,14 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt, model_validator
 
 from app.domain.enums import Transport
 from app.domain.models import Engineer, Office, Plan, Request
 from app.domain.timeutil import HHMM
 from app.planning.models import AppliedEvent, PlanDiff
 from app.planning.session import PlanningSession
+from app.planning.workload import WORKLOAD_LEVEL_TEXT, is_workload_level
 
 DatasetStatusValue = Literal["processing", "ready", "failed"]
 DatasetStage = Literal["parsing", "geocoding", "matrix", "solving", "ready"]
@@ -54,9 +55,23 @@ class DatasetStatus(BaseModel):
     error: str | None = None
 
 
+class PlanRequest(BaseModel):
+    """Тело POST /plan. Без тела или без поля workload_level остаётся уровень нагрузки сессии."""
+
+    workload_level: StrictInt | None = None
+
+    @model_validator(mode="after")
+    def _known_level(self) -> PlanRequest:
+        # Ошибка уровня модели, а не поля: диспетчер видит только текст, без имени поля.
+        if self.workload_level is not None and not is_workload_level(self.workload_level):
+            raise ValueError(WORKLOAD_LEVEL_TEXT)
+        return self
+
+
 class PlanningState(BaseModel):
     dataset_id: str
     version: int
+    workload_level: int
     region: str
     office: Office
     now: HHMM
@@ -100,6 +115,7 @@ def to_planning_state(session: PlanningSession) -> PlanningState:
     return PlanningState(
         dataset_id=session.dataset_id,
         version=session.version,
+        workload_level=session.workload_level,
         region=session.region,
         office=session.office,
         now=session.now,

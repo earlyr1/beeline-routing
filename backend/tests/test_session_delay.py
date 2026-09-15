@@ -7,6 +7,7 @@ from app.domain.models import Event
 from app.planning.session import EventRejected, apply_event, check_event
 from tests.helpers import eng
 from tests.planning_helpers import (
+    EXACT_TRAVEL_LEVEL,
     IN_TRANSIT_TO_B,
     busy_engineer,
     context,
@@ -18,6 +19,7 @@ from tests.planning_helpers import (
     visit_times,
 )
 
+# Минуты в пути без запаса на дорогу (EXACT_TRAVEL_LEVEL).
 # В дне transit_session у занятого инженера A 09:16–09:46, B 09:59–10:29 (окно до 10:15), C 10:42–11:12.
 # Переезды A→B и B→C по 13 минут. В 09:30 инженер на объекте A.
 ON_SITE_A = "09:30"
@@ -103,7 +105,7 @@ def test_delay_on_the_way_waits_for_window_start():
     ctx = context()
     requests = transit_requests()
     requests[1] = requests[1].model_copy(update={"window_start": 610, "window_end": 640})
-    session = new_session(ctx=ctx, requests=requests)
+    session = new_session(ctx=ctx, requests=requests, workload_level=EXACT_TRAVEL_LEVEL)
     busy = busy_engineer(session.plan)
     assert visit_times(session.plan, busy)[1] == ("B", 599, 610, 640)
 
@@ -158,7 +160,7 @@ def test_delay_that_ends_before_departure_changes_nothing():
 
 def test_delay_past_shift_end_on_site_keeps_started_work_and_stops_new_visits():
     ctx = context()
-    session = new_session(ctx=ctx)
+    session = new_session(ctx=ctx, workload_level=EXACT_TRAVEL_LEVEL)
     busy = busy_engineer(session.plan)
     assert visit_times(session.plan, busy)[0] == ("R1", 544, 600, 630)
 
@@ -205,7 +207,9 @@ def test_forecast_lists_visits_that_would_miss_their_windows():
 def test_forecast_counts_overtime_and_is_empty_when_nothing_is_late():
     ctx = context()
     short = [eng("E1", shift=("09:00", "11:15")), eng("E2", shift=("09:00", "11:15"))]
-    session = new_session(ctx=ctx, requests=transit_requests(), engineers=short)
+    session = new_session(
+        ctx=ctx, requests=transit_requests(), engineers=short, workload_level=EXACT_TRAVEL_LEVEL
+    )
     busy = busy_engineer(session.plan)
     assert visit_times(session.plan, busy)[2] == ("C", 642, 642, 672)
 
@@ -235,7 +239,9 @@ def test_forecast_after_released_hold_starts_from_delayed_position():
 def test_forecast_overtime_of_extended_visit_without_remaining_visits():
     ctx = context()
     evening = [eng("E1", shift=("09:00", "17:00")), eng("E2", shift=("09:00", "17:00"))]
-    session = new_session(ctx=ctx, requests=transit_requests()[:1], engineers=evening)
+    session = new_session(
+        ctx=ctx, requests=transit_requests()[:1], engineers=evening, workload_level=EXACT_TRAVEL_LEVEL
+    )
     busy = busy_engineer(session.plan)
     assert visit_times(session.plan, busy) == [("A", 556, 556, 586)]
 

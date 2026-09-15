@@ -1,6 +1,8 @@
 from app.domain.models import Office
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.planning.session import PlanningContext, start_session
+from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, WORKLOAD_LEVELS
+from app.solvers.problem import NO_BUFFER
 from tests.helpers import OFFICE_LAT, OFFICE_LON, eng, req
 
 OFFICE = Office(
@@ -26,7 +28,7 @@ def day_engineers():
     return [eng("E1"), eng("E2")]
 
 
-def new_session(ctx=None, requests=None, engineers=None):
+def new_session(ctx=None, requests=None, engineers=None, workload_level=DEFAULT_WORKLOAD_LEVEL):
     return start_session(
         "d_test",
         "t",
@@ -35,6 +37,7 @@ def new_session(ctx=None, requests=None, engineers=None):
         engineers or day_engineers(),
         None,
         ctx or context(),
+        workload_level=workload_level,
     )
 
 
@@ -46,7 +49,13 @@ def busy_engineer(plan):
     return next(route.engineer_id for route in plan.routes if route.visits)
 
 
-# Окна задают порядок A, B, C без ожиданий: A 09:16–09:46, к B выезд в 09:46, прибытие и начало
+# Уровень нагрузки без запаса на дорогу («На пределе»). На нём планируются сценарии, где минуты выездов,
+# задержек и переездов посчитаны вручную прямо по матрице; уровень нагрузки в этих сценариях не проверяется.
+EXACT_TRAVEL_LEVEL = next(
+    level for level, item in enumerate(WORKLOAD_LEVELS) if item.travel_buffer == NO_BUFFER
+)
+
+# На уровне EXACT_TRAVEL_LEVEL окна задают порядок A, B, C без ожиданий: A 09:16–09:46, к B выезд в 09:46, прибытие и начало
 # в 09:59, C с 10:42. В 09:47 инженер уже в пути к B.
 IN_TRANSIT_TO_B = "09:47"
 
@@ -60,7 +69,7 @@ def transit_requests():
 
 
 def transit_session(ctx=None):
-    return new_session(ctx=ctx, requests=transit_requests())
+    return new_session(ctx=ctx, requests=transit_requests(), workload_level=EXACT_TRAVEL_LEVEL)
 
 
 def other_engineer(engineer_id):

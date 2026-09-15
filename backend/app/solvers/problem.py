@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from app.domain.enums import ReasonCode, RequestStatus
@@ -9,6 +10,27 @@ from app.domain.models import Engineer, Request, Unassigned, Visit
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_matrix
 from app.geo.osrm import OsrmClient
+
+
+@dataclass(frozen=True)
+class TravelBuffer:
+    """Запас времени на дорогу, который задаёт нагрузка дня (app/planning/workload.py).
+
+    Поездка t > 0 минут планируется как max(ceil(t * factor), t + min_extra). Поездка в ту же точку остаётся
+    нулевой. Километры, линии маршрутов и метрика пробега от запаса не зависят.
+    """
+
+    factor: float = 1.0
+    min_extra: int = 0
+
+    def minutes(self, travel_min: int) -> int:
+        if travel_min <= 0:
+            return travel_min
+        # round убирает хвост двоичной дроби: 100 * 1.1 = 110.00000000000001 даёт 110 минут, а не 111.
+        return max(math.ceil(round(travel_min * self.factor, 6)), travel_min + self.min_extra)
+
+
+NO_BUFFER = TravelBuffer()
 
 
 @dataclass
@@ -43,6 +65,7 @@ class Problem:
     previous_assignment: dict[str, str] = field(default_factory=dict)
     previous_order: dict[str, list[str]] = field(default_factory=dict)
     now: int = 0
+    buffer: TravelBuffer = NO_BUFFER  # запас на дорогу по нагрузке дня, входит в travel_min
 
     def __post_init__(self) -> None:
         offset = len(self.engineers)
@@ -70,8 +93,13 @@ class Problem:
         return self.travel.km(from_node, to_node, engineer.transport)
 
     def travel_min(self, from_node: int, to_node: int, engineer: Engineer) -> int:
-        """Коэффициент пробок берётся по началу окна заявки назначения."""
-        return self.travel.minutes(from_node, to_node, engineer.transport, self._slot[to_node])
+        """Минуты в пути с запасом нагрузки дня. Коэффициент пробок берётся по началу окна заявки назначения.
+
+        Это единственный источник времени в пути для солверов, прогона маршрута, причин, объяснений и прогнозов.
+        """
+        return self.buffer.minutes(
+            self.travel.minutes(from_node, to_node, engineer.transport, self._slot[to_node])
+        )
 
 
 def make_problem(
@@ -82,8 +110,12 @@ def make_problem(
     traffic: TrafficProfile,
     osrm: OsrmClient | None = None,
     cache: KVCache | None = None,
+    buffer: TravelBuffer = NO_BUFFER,
 ) -> Problem:
-    """Задача на начало дня: все инженеры в стартовых точках, все активные заявки открыты."""
+    """Задача на начало дня: все инженеры в стартовых точках, все активные заявки открыты.
+
+    buffer — запас на дорогу по нагрузке дня. Базовая матрица от него не зависит: OSRM берётся из кэша.
+    """
     located = [r for r in requests if r.lat is not None and r.lon is not None]
     unplannable = [
         Unassigned(
@@ -98,4 +130,4 @@ def make_problem(
     travel = TravelTimes(build_base_matrix(points, model, osrm=osrm, cache=cache), model, traffic)
     states = [initial_state(engineer, k) for k, engineer in enumerate(engineers)]
     open_ids = [r.id for r in located if r.status == RequestStatus.ACTIVE]
-    return Problem(located, list(engineers), travel, states, open_ids, unplannable)
+    return Problem(located, list(engineers), travel, states, open_ids, unplannable, buffer=buffer)
