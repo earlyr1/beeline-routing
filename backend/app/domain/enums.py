@@ -31,6 +31,7 @@ class EventType(StrEnum):
     CANCEL = "cancel"
     RESTORE = "restore"
     ENGINEER_UNAVAILABLE = "engineer_unavailable"
+    ENGINEER_TRANSPORT_CHANGED = "engineer_transport_changed"
 
 
 class ReasonCode(StrEnum):

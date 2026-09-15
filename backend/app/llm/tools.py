@@ -73,6 +73,27 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "required": ["engineer_id", "rationale"],
         },
     },
+    "propose_engineer_transport_change": {
+        "description": (
+            "Предложить сменить тип транспорта инженера с указанного времени: машина сломалась, "
+            "пересел на велосипед, выдали автомобиль и т.п."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "engineer_id": {"type": "string", "description": "id или фамилия инженера из состояния дня"},
+                "transport": {
+                    "type": "string",
+                    "enum": ["car", "foot", "bike", "public"],
+                    "description": "Новый транспорт: car автомобиль, foot пешком, bike велосипед, "
+                    "public общественный транспорт",
+                },
+                "time": _TIME,
+                "rationale": _RATIONALE,
+            },
+            "required": ["engineer_id", "transport", "rationale"],
+        },
+    },
     "ask_clarification": {
         "description": "Задать диспетчеру короткий уточняющий вопрос, если непонятно, кого или что менять.",
         "parameters": {

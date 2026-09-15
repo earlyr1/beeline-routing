@@ -98,6 +98,41 @@ def test_event_errors_are_russian_422(tmp_path):
     assert rejected.status_code == 422 and rejected.json()["detail"] == "Заявка NOPE не найдена."
 
 
+def test_transport_change_event_updates_engineer_transport(tmp_path):
+    client, _ = make_client(tmp_path)
+    base = f"/api/datasets/{_ready_dataset(client)}"
+    event = {"type": "engineer_transport_changed", "time": "13:00", "engineer_id": "E1", "transport": "bike"}
+
+    response = client.post(f"{base}/events", json={**event, "previous_transport": "public"})
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert {engineer["id"]: engineer["transport"] for engineer in state["engineers"]} == {
+        "E1": "bike",
+        "E2": "car",
+    }
+    stored = state["events"][0]["event"]
+    assert (stored["type"], stored["engineer_id"], stored["previous_transport"], stored["transport"]) == (
+        "engineer_transport_changed",
+        "E1",
+        "car",
+        "bike",
+    )
+    assert state["version"] == 2 and state["now"] == "13:00" and state["last_diff"] is not None
+    assert client.get(f"{base}/state").json()["engineers"][0]["transport"] == "bike"
+
+    same = client.post(f"{base}/events", json={**event, "time": "13:30"})
+    assert same.status_code == 422 and same.json()["detail"] == "У Инженер E1 уже транспорт «Велосипед»."
+
+    incomplete = client.post(
+        f"{base}/events", json={"type": "engineer_transport_changed", "time": "13:30", "engineer_id": "E1"}
+    )
+    assert incomplete.status_code == 422
+    assert (
+        incomplete.json()["detail"]
+        == "Некорректный запрос: для смены транспорта нужны engineer_id и transport"
+    )
+
+
 def test_upload_csv_with_known_ids_reuses_region_bundle(tmp_path):
     client, _ = make_client(tmp_path)
     rows = [(r.id, "10:00", "12:00", r.address) for r in sample_bundle().requests]

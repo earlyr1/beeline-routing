@@ -9,9 +9,9 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from app.domain.enums import EventType, Priority, Skill, Transport
+from app.domain.enums import TRANSPORT_RU, EventType, Priority, Skill, Transport
 from app.domain.models import Event, Request
 from app.domain.timeutil import HHMM
 from app.llm.client import LlmResult, ToolCall
@@ -19,8 +19,12 @@ from app.planning.session import EventRejected, PlanningContext, PlanningSession
 
 NOTHING_FOUND = (
     "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена или возврат заявки, "
-    "срочная заявка или недоступность инженера."
+    "срочная заявка, недоступность инженера или смена транспорта."
 )
+
+
+def _norm(value: str) -> str:
+    return " ".join(value.casefold().replace("ё", "е").split())
 
 
 class _TimedArgs(BaseModel):
@@ -34,6 +38,22 @@ class RequestArgs(_TimedArgs):
 
 class EngineerArgs(_TimedArgs):
     engineer_id: str = Field(min_length=1)
+
+
+class TransportChangeArgs(EngineerArgs):
+    transport: Transport
+
+    @field_validator("transport", mode="before")
+    @classmethod
+    def _known_transport(cls, value: object) -> Transport:
+        """Модель иногда пишет транспорт по-русски или заглавными: принимаем код и русское название."""
+        if isinstance(value, str):
+            key = _norm(value)
+            for transport in Transport:
+                if key in (transport.value, _norm(TRANSPORT_RU[transport])):
+                    return transport
+        allowed = ", ".join(transport.value for transport in Transport)
+        raise ValueError(f"неизвестный тип транспорта «{value}», допустимы {allowed}")
 
 
 class UrgentArgs(_TimedArgs):
@@ -54,6 +74,7 @@ ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "propose_cancel": RequestArgs,
     "propose_restore": RequestArgs,
     "propose_engineer_unavailable": EngineerArgs,
+    "propose_engineer_transport_change": TransportChangeArgs,
     "ask_clarification": ClarifyArgs,
 }
 
@@ -73,10 +94,6 @@ class Interpretation:
 
 class Unresolved(ValueError):
     """Модель назвала инженера или заявку, которых нельзя однозначно найти."""
-
-
-def _norm(value: str) -> str:
-    return " ".join(value.casefold().replace("ё", "е").split())
 
 
 def resolve_engineer(session: PlanningSession, value: str) -> str:
@@ -125,6 +142,13 @@ def _build_event(
             type=EventType.ENGINEER_UNAVAILABLE,
             time=time,
             engineer_id=resolve_engineer(session, args.engineer_id),
+        )
+    if name == "propose_engineer_transport_change":
+        return Event(
+            type=EventType.ENGINEER_TRANSPORT_CHANGED,
+            time=time,
+            engineer_id=resolve_engineer(session, args.engineer_id),
+            transport=args.transport,
         )
     transport = None if args.transport_required in (None, "none") else Transport(args.transport_required)
     request = Request(
@@ -180,7 +204,14 @@ def _interpret_call(
         return
 
     request = event.request
-    key = (event.type, event.request_id, event.engineer_id, event.time, request.address if request else None)
+    key = (
+        event.type,
+        event.request_id,
+        event.engineer_id,
+        event.transport,
+        event.time,
+        request.address if request else None,
+    )
     if key in seen:
         return
     seen.add(key)
