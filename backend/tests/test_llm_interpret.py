@@ -1,10 +1,11 @@
 from app.domain.enums import EventType, Priority, Skill, Transport
+from app.domain.timeutil import fmt_hhmm
 from app.ingest.geocode import GeoResult
 from app.llm.client import LlmResult, ToolCall
 from app.llm.interpret import NOTHING_FOUND, interpret
 from app.llm.prompt import build_messages
 from tests.llm_helpers import ids, named_session
-from tests.planning_helpers import context
+from tests.planning_helpers import context, day_requests, new_session
 
 
 def run(calls, ctx=None, session=None, text=None):
@@ -216,6 +217,131 @@ def test_prompt_carries_now_engineers_and_assignments():
     assert '"planned_start": "' in user["content"] and user["content"].endswith(
         "Арташкин заболел после обеда"
     )
+
+
+def test_request_update_by_street_merges_new_window_into_current_request():
+    ctx = context()
+    session = named_session(ctx)
+    before = session.request("R2")
+    arguments = {
+        "request_id": "Дубининская",
+        "window_start": "15:00",
+        "window_end": "17:00",
+        "time": "13:00",
+        "rationale": "Клиент просит приехать позже",
+    }
+    out = run([ToolCall("propose_request_update", arguments)], ctx=ctx, session=session)
+    assert out.clarifications == []
+    [draft] = out.drafts
+    assert (draft.event.type, draft.event.request_id, draft.event.time, draft.error) == (
+        EventType.REQUEST_UPDATED,
+        "R2",
+        780,
+        None,
+    )
+    assert draft.event.request == before.model_copy(update={"window_start": 900, "window_end": 1020})
+    assert draft.event.previous_request == before
+    assert draft.rationale == "Клиент просит приехать позже"
+
+
+def test_request_update_changes_address_skill_priority_and_transport():
+    geocoded = []
+
+    def geocode(address, district):
+        geocoded.append(address)
+        return GeoResult(55.76, 37.62, "street", address)
+
+    ctx = context(geocode=geocode)
+    requests = day_requests()
+    requests[2] = requests[2].model_copy(update={"transport_required": Transport.CAR})
+    session = new_session(ctx=ctx, requests=requests)
+    arguments = {
+        "request_id": "R3",
+        "address": " Москва, ул. Новая, 5 ",
+        "duration_min": 50,
+        "skill": "emergency",
+        "priority": "urgent",
+        "transport_required": "none",
+        "rationale": "Авария по новому адресу",
+    }
+    out = run([ToolCall("propose_request_update", arguments)], ctx=ctx, session=session)
+    [draft] = out.drafts
+    assert draft.error is None and geocoded == ["Москва, ул. Новая, 5"]
+    assert draft.event.request == session.request("R3").model_copy(
+        update={
+            "address": "Москва, ул. Новая, 5",
+            "lat": 55.76,
+            "lon": 37.62,
+            "geocode_precision": "street",
+            "duration_min": 50,
+            "skill": Skill.EMERGENCY,
+            "priority": Priority.URGENT,
+            "transport_required": None,
+        }
+    )
+    assert draft.event.time == 0
+
+
+def test_request_update_without_fields_conflicts_and_unknown_address():
+    ctx = context(geocode=lambda address, district: GeoResult(None, None, "none", None))
+    session = named_session(ctx)
+    started = next(v for route in session.plan.routes for v in route.visits if v.request_id == "R1")
+    assert started.start < 780
+    out = run(
+        [
+            ToolCall(
+                "propose_request_update", {"request_id": "Дубининская", "time": "13:00", "rationale": "?"}
+            ),
+            ToolCall(
+                "propose_request_update",
+                {"request_id": "R1", "duration_min": 90, "time": "13:00", "rationale": "Дольше"},
+            ),
+            ToolCall(
+                "propose_request_update",
+                {"request_id": "R3", "window_start": "16:00", "window_end": "16:00", "rationale": "Позже"},
+            ),
+            ToolCall(
+                "propose_request_update",
+                {"request_id": "R3", "address": "Нигде, д. 1", "rationale": "Переезд"},
+            ),
+            ToolCall(
+                "propose_request_update", {"request_id": "R3", "duration_min": 30, "rationale": "Как было"}
+            ),
+        ],
+        ctx=ctx,
+        session=session,
+    )
+    assert out.clarifications == [
+        "Не понял, что изменить в заявке R2. Уточните окно, длительность, адрес или другое поле."
+    ]
+    assert [(d.event.request_id, d.error) for d in out.drafts] == [
+        ("R1", f"Заявка R1 уже в работе с {fmt_hhmm(started.start)}, изменить её нельзя."),
+        ("R3", "Конец окна заявки R3 должен быть позже начала."),
+        ("R3", "Адрес «Нигде, д. 1» не найден на карте. Укажите точку на карте."),
+        ("R3", "В заявке R3 ничего не изменилось."),
+    ]
+
+
+def test_separate_edits_of_one_request_are_not_merged_as_duplicates():
+    arguments = {"request_id": "R3", "time": "13:00", "rationale": "Изменение"}
+    out = run(
+        [
+            ToolCall("propose_request_update", {**arguments, "duration_min": 45}),
+            ToolCall("propose_request_update", {**arguments, "duration_min": 60}),
+            ToolCall("propose_request_update", {**arguments, "duration_min": 45}),
+        ]
+    )
+    assert [d.event.request.duration_min for d in out.drafts] == [45, 60]
+
+
+def test_prompt_and_nothing_found_hint_mention_request_update():
+    system, user = build_messages(
+        "Клиент на Дубининской просит перенести визит на вечер", named_session(context())
+    )
+    assert "изменение заявки" in system["content"]
+    assert "propose_request_update" in system["content"]
+    assert '"duration_min": 30' in user["content"]
+    assert "изменение заявки" in NOTHING_FOUND
 
 
 def test_prompt_and_nothing_found_hint_mention_transport_change():

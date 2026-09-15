@@ -94,6 +94,40 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "required": ["engineer_id", "transport", "rationale"],
         },
     },
+    "propose_request_update": {
+        "description": (
+            "Предложить изменить заявку: перенести окно, поменять длительность, адрес, навык, приоритет "
+            "или требование к транспорту."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string",
+                    "description": "id заявки или часть её адреса из состояния дня",
+                },
+                "address": {"type": "string", "description": "Новый адрес, только если он меняется"},
+                "window_start": {**_TIME, "description": "Новое начало окна визита HH:MM"},
+                "window_end": {**_TIME, "description": "Новый конец окна визита HH:MM"},
+                "duration_min": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 600,
+                    "description": "Новая длительность работ в минутах",
+                },
+                "skill": {"type": "string", "enum": ["local", "connection", "emergency"]},
+                "priority": {"type": "string", "enum": ["normal", "urgent"]},
+                "transport_required": {
+                    "type": "string",
+                    "enum": ["car", "foot", "bike", "public", "none"],
+                    "description": "Новое требование к транспорту; none снимает требование",
+                },
+                "time": _TIME,
+                "rationale": _RATIONALE,
+            },
+            "required": ["request_id", "rationale"],
+        },
+    },
     "ask_clarification": {
         "description": "Задать диспетчеру короткий уточняющий вопрос, если непонятно, кого или что менять.",
         "parameters": {

@@ -32,6 +32,7 @@ class EventType(StrEnum):
     RESTORE = "restore"
     ENGINEER_UNAVAILABLE = "engineer_unavailable"
     ENGINEER_TRANSPORT_CHANGED = "engineer_transport_changed"
+    REQUEST_UPDATED = "request_updated"
 
 
 class ReasonCode(StrEnum):

@@ -74,7 +74,82 @@ def test_transport_change_goes_from_provider_to_pending_draft(mode):
         assert "смена транспорта" in last["messages"][0]["content"]
 
 
-def test_tools_mode_sends_six_tools_and_parses_calls():
+REQUEST_UPDATE = {
+    "request_id": "Дубининская",
+    "window_start": "18:00",
+    "window_end": "20:00",
+    "time": "13:00",
+    "rationale": "Клиент просит перенести визит на вечер",
+}
+
+
+def test_request_update_tool_spec():
+    spec = TOOL_SPECS["propose_request_update"]
+    assert spec["description"] == (
+        "Предложить изменить заявку: перенести окно, поменять длительность, адрес, навык, приоритет "
+        "или требование к транспорту."
+    )
+    properties = spec["parameters"]["properties"]
+    assert set(properties) == {
+        "request_id",
+        "address",
+        "window_start",
+        "window_end",
+        "duration_min",
+        "skill",
+        "priority",
+        "transport_required",
+        "time",
+        "rationale",
+    }
+    assert properties["skill"]["enum"] == ["local", "connection", "emergency"]
+    assert properties["priority"]["enum"] == ["normal", "urgent"]
+    assert properties["transport_required"]["enum"] == ["car", "foot", "bike", "public", "none"]
+    assert spec["parameters"]["required"] == ["request_id", "rationale"]
+    schemas = json.loads(json_mode_instruction().split("\n", 1)[1])
+    assert schemas["propose_request_update"]["required"] == ["request_id", "rationale"]
+    assert schemas["propose_request_update"]["description"] == spec["description"]
+
+
+@pytest.mark.parametrize("mode", ["tools", "json"])
+def test_request_update_goes_from_provider_to_pending_draft(mode):
+    if mode == "tools":
+        provider = ScriptedProvider(
+            completion(tool_calls=[tool_call("propose_request_update", REQUEST_UPDATE)])
+        )
+    else:
+        action = {"actions": [{"tool": "propose_request_update", "arguments": REQUEST_UPDATE}]}
+        provider = ScriptedProvider(
+            httpx.Response(400, json={"error": {"message": "tools are not supported"}}),
+            completion(content=json.dumps(action, ensure_ascii=False)),
+        )
+    ctx = context()
+    session = named_session(ctx)
+    result = provider.client().complete(build_messages("Дубининскую перенести на вечер", session))
+
+    assert result.mode == mode
+    interpretation = interpret(result, session, ctx, ids())
+    assert interpretation.clarifications == []
+    [draft] = interpretation.drafts
+    before = session.request("R2")
+    assert (draft.event.type, draft.event.request_id, draft.event.time, draft.error) == (
+        EventType.REQUEST_UPDATED,
+        "R2",
+        780,
+        None,
+    )
+    assert draft.event.request == before.model_copy(update={"window_start": 1080, "window_end": 1200})
+    assert draft.event.previous_request == before
+    last = provider.bodies()[-1]
+    if mode == "tools":
+        assert "propose_request_update" in [tool["function"]["name"] for tool in last["tools"]]
+    else:
+        assert "tools" not in last
+        assert '"propose_request_update"' in last["messages"][0]["content"]
+        assert "изменение заявки" in last["messages"][0]["content"]
+
+
+def test_tools_mode_sends_seven_tools_and_parses_calls():
     provider = ScriptedProvider(
         completion(
             tool_calls=[
@@ -103,6 +178,7 @@ def test_tools_mode_sends_six_tools_and_parses_calls():
         "propose_restore",
         "propose_engineer_unavailable",
         "propose_engineer_transport_change",
+        "propose_request_update",
         "ask_clarification",
     ]
     assert body["messages"] == MESSAGES
@@ -127,6 +203,7 @@ def test_json_mode_parses_fenced_actions_and_sends_no_tools():
     assert "tools" not in body
     assert len(body["messages"]) == 2 and '"actions"' in body["messages"][0]["content"]
     assert '"propose_engineer_transport_change"' in body["messages"][0]["content"]
+    assert '"propose_request_update"' in body["messages"][0]["content"]
 
 
 def test_auto_mode_falls_back_to_json_when_provider_rejects_tools():

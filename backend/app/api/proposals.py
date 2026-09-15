@@ -14,7 +14,7 @@ from app.llm.client import LlmError
 from app.llm.interpret import NOTHING_FOUND, interpret
 from app.llm.prompt import build_messages
 from app.llm.schemas import STATUS_DONE_RU, ChatRequest, ChatResponse, Proposal
-from app.planning.session import EventRejected, PlanningSession, apply_event
+from app.planning.session import EventRejected, PlanningSession, apply_event, replay_checked_event
 
 router = APIRouter(prefix="/api/datasets/{dataset_id}")
 
@@ -51,14 +51,18 @@ def _approve(deps: AppDeps, record: DatasetRecord, proposal: Proposal) -> Propos
     """Применяет одно предложение через общий конвейер событий. Вызывать под record.lock."""
     session = _session(record)
     event = _refreshed(proposal.event, session)
+    replayed, ctx = replay_checked_event(event, deps.ingest.planning)
     try:
-        updated = apply_event(session, event, deps.ingest.planning)
+        updated = apply_event(session, replayed, ctx)
     except EventRejected as error:
         result = proposal.model_copy(update={"status": "failed", "event": event, "error": str(error)})
     else:
         record.session = updated
+        # Сохраняется применённое событие: previous_request и previous_transport на момент применения,
+        # а не на момент, когда помощник составил предложение.
+        applied = updated.events[-1].event
         result = proposal.model_copy(
-            update={"status": "approved", "event": event, "result_diff": updated.last_diff, "error": None}
+            update={"status": "approved", "event": applied, "result_diff": updated.last_diff, "error": None}
         )
     deps.proposals.save(record.dataset_id, result)
     return result

@@ -14,7 +14,13 @@ from app.api.schemas import ClientConfig, DatasetStatus, PlanningState, RouteGeo
 from app.domain.models import Event
 from app.planning.explain import build_explanation
 from app.planning.models import Explanation
-from app.planning.session import EventRejected, PlanningSession, apply_event, geocode_urgent, start_session
+from app.planning.session import (
+    EventRejected,
+    PlanningSession,
+    apply_event,
+    geocode_before_lock,
+    start_session,
+)
 
 router = APIRouter(prefix="/api")
 
@@ -104,14 +110,16 @@ def get_state(dataset_id: str, deps: Deps) -> PlanningState:
 @router.post("/datasets/{dataset_id}/events", response_model=PlanningState)
 def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
     record = _record(deps, dataset_id)
-    ctx = deps.ingest.planning
-    # Геокодер может отвечать долго: адрес срочной заявки ищем до блокировки датасета, чтобы не держать
-    # остальные запросы к нему. Повторно под блокировкой не геокодируем, даже если адрес не нашёлся.
-    event = geocode_urgent(event, ctx)
+    with record.lock:
+        snapshot = _session(record)
+    # Геокодер может отвечать долго: адрес срочной заявки и новый адрес изменённой заявки ищем до блокировки
+    # датасета, чтобы не держать остальные запросы к нему. Повторно под блокировкой не геокодируем, даже если
+    # адрес не нашёлся.
+    event, ctx = geocode_before_lock(event, snapshot, deps.ingest.planning)
     with record.lock:
         session = _session(record)
         try:
-            updated = apply_event(session, event, replace(ctx, geocode=None))
+            updated = apply_event(session, event, ctx)
         except EventRejected as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         record.session = updated

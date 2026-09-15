@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, field, replace
+from typing import Any
 
 from app.domain.enums import TRANSPORT_RU, EventType, Priority, RequestStatus
 from app.domain.models import Engineer, Event, Office, Plan, Request, Visit
@@ -22,6 +23,14 @@ from app.solvers.problem import EngineerState, Problem, make_problem
 
 class EventRejected(ValueError):
     """Событие нельзя применить. Текст сообщения показывается диспетчеру (HTTP 422)."""
+
+
+# Поля, которые меняет «Изменение заявки». Координаты и точность геокодирования следуют за источником места,
+# номер, статус, район и типы заявки всегда берутся из сохранённой заявки.
+EDITABLE_REQUEST_FIELDS = frozenset(
+    {"address", "duration_min", "window_start", "window_end", "priority", "skill", "transport_required"}
+)
+_NOT_FOUND = GeoResult(None, None, "none", None)
 
 
 @dataclass
@@ -101,12 +110,13 @@ def _on_the_way(problem: Problem, state: EngineerState, visit: Visit, now: int, 
     return max(now + visit.leg_min, window_start) > visit.start
 
 
-def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
+def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str] = ()) -> Problem:
     """Закрепляет визиты, начатые до now, и визит, к которому инженер уже едет.
 
     Инженер продолжает день из точки последнего закреплённого визита в его время окончания.
     Visit.pinned остаётся True только у начатой работы: для диспетчера «закреплена» значит «уже
     в работе, отменить нельзя». Визит в пути солвер не трогает, но отменить его можно до начала работы.
+    Визит в пути к заявке из released (её только что изменили) не удерживается: солвер решает заново.
     """
     routes = {route.engineer_id: route for route in plan.routes}
     open_ids = set(problem.open_request_ids)
@@ -120,7 +130,11 @@ def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
         visits = routes[engineer_id].visits if engineer_id in routes else []
         done = [visit for visit in visits if visit.start < now]
         upcoming = [visit for visit in visits if visit.start >= now]
-        if upcoming and _on_the_way(problem, state, upcoming[0], now, open_ids):
+        if (
+            upcoming
+            and upcoming[0].request_id not in released
+            and _on_the_way(problem, state, upcoming[0], now, open_ids)
+        ):
             done.append(upcoming.pop(0))
         rest = [visit.request_id for visit in upcoming]
         start_node, available_from = state.start_node, max(state.available_from, now)
@@ -143,22 +157,76 @@ def pin_problem(problem: Problem, plan: Plan, now: int) -> Problem:
     )
 
 
+def _has_point(request: Request) -> bool:
+    return request.lat is not None and request.lon is not None
+
+
 def _located(request: Request, ctx: PlanningContext) -> Request:
-    if (request.lat is not None and request.lon is not None) or ctx.geocode is None:
+    if _has_point(request) or ctx.geocode is None:
         return request
     geo = ctx.geocode(request.address, request.district)
     return request.model_copy(update={"lat": geo.lat, "lon": geo.lon, "geocode_precision": geo.precision})
 
 
-def geocode_urgent(event: Event, ctx: PlanningContext) -> Event:
-    """Координаты срочной заявки по адресу, если их не передали. Другие события не меняются.
+def _known_addresses(answers: dict[str, GeoResult]) -> Callable[[str, str], GeoResult]:
+    """Геокодер из готовых ответов: адрес, которого нет среди них, не найден."""
+    return lambda address, district: answers.get(address, _NOT_FOUND)
 
-    Геокодер может отвечать долго, поэтому API вызывает функцию до блокировки датасета.
+
+def geocode_before_lock(
+    event: Event, session: PlanningSession, ctx: PlanningContext
+) -> tuple[Event, PlanningContext]:
+    """Ищет адрес события заранее и возвращает событие и контекст для apply_event под блокировкой датасета.
+
+    Геокодер может отвечать долго, поэтому API вызывает функцию до блокировки. Срочная заявка получает
+    координаты в самом событии. Новый адрес изменённой заявки ищется, если точку на карте не передали и адрес
+    отличается от сохранённого; ответ геокодера лежит в возвращённом контексте. Под блокировкой геокодер
+    больше не вызывается: адрес, который не искали заранее, считается не найденным.
     """
-    if event.type != EventType.URGENT or event.request is None:
-        return event
-    located = _located(event.request, ctx)
-    return event if located is event.request else event.model_copy(update={"request": located})
+    locked = replace(ctx, geocode=None)
+    sent = event.request
+    if sent is None or ctx.geocode is None:
+        return event, locked
+    if event.type == EventType.URGENT:
+        located = _located(sent, ctx)
+        return (event if located is sent else event.model_copy(update={"request": located})), locked
+    stored = session.request(event.request_id or "") if event.type == EventType.REQUEST_UPDATED else None
+    if stored is None or _has_point(sent) or sent.address == stored.address:
+        return event, locked
+    answer = ctx.geocode(sent.address, stored.district)
+    return event, replace(ctx, geocode=_known_addresses({sent.address: answer}))
+
+
+def replay_checked_event(event: Event, ctx: PlanningContext) -> tuple[Event, PlanningContext]:
+    """Готовит к применению изменение заявки, которое уже прошло check_event (предложение помощника).
+
+    Координаты в таком событии дал геокодер, а не точка на карте. Они передаются как готовый ответ геокодера
+    на адрес заявки: точность адреса сохраняется, геокодер не вызывается, а если адрес совпадает с сохранённым,
+    остаются текущие координаты заявки. Другие события возвращаются без изменений.
+    """
+    sent = event.request
+    if event.type != EventType.REQUEST_UPDATED or sent is None:
+        return event, ctx
+    answer = GeoResult(sent.lat, sent.lon, sent.geocode_precision, None)
+    unlocated = sent.model_copy(update={"lat": None, "lon": None})
+    return (
+        event.model_copy(update={"request": unlocated}),
+        replace(ctx, geocode=_known_addresses({sent.address: answer})),
+    )
+
+
+def _edited_location(stored: Request, sent: Request, ctx: PlanningContext) -> dict[str, Any]:
+    """Место изменённой заявки: точка на карте, новый адрес через геокодер или прежние координаты."""
+    if _has_point(sent):
+        if (sent.lat, sent.lon) == (stored.lat, stored.lon):
+            return {}
+        return {"lat": sent.lat, "lon": sent.lon, "geocode_precision": "house"}
+    if sent.address == stored.address:
+        return {}
+    geo = ctx.geocode(sent.address, stored.district) if ctx.geocode is not None else _NOT_FOUND
+    if geo.lat is None or geo.lon is None:
+        raise EventRejected(f"Адрес «{sent.address}» не найден на карте. Укажите точку на карте.")
+    return {"lat": geo.lat, "lon": geo.lon, "geocode_precision": geo.precision}
 
 
 def _started_visits(plan: Plan, now: int) -> dict[str, Visit]:
@@ -176,10 +244,35 @@ def _apply_to_inputs(
     session: PlanningSession, event: Event, ctx: PlanningContext
 ) -> tuple[list[Request], list[Engineer], Event]:
     now = event.time
+    # previous_transport и previous_request заполняет только backend.
+    event = event.model_copy(update={"previous_transport": None, "previous_request": None})
     requests = [request.model_copy() for request in session.requests]
     engineers = [engineer.model_copy() for engineer in session.engineers]
     by_id = {request.id: request for request in requests}
     started = _started_visits(session.plan, now)
+
+    if event.type == EventType.REQUEST_UPDATED:
+        index = next((k for k, request in enumerate(requests) if request.id == event.request_id), None)
+        if index is None:
+            raise EventRejected(f"Заявка {event.request_id} не найдена.")
+        stored, sent = requests[index], event.request
+        if stored.id in started:
+            raise EventRejected(
+                f"Заявка {stored.id} уже в работе с {fmt_hhmm(started[stored.id].start)}, изменить её нельзя."
+            )
+        if sent.window_end < now:
+            raise EventRejected(
+                f"Окно заявки {stored.id} заканчивается в {fmt_hhmm(sent.window_end)}, это раньше времени "
+                f"события {fmt_hhmm(now)}."
+            )
+        if sent.window_end <= sent.window_start:
+            raise EventRejected(f"Конец окна заявки {stored.id} должен быть позже начала.")
+        changes = sent.model_dump(include=EDITABLE_REQUEST_FIELDS)
+        merged = stored.model_copy(update={**changes, **_edited_location(stored, sent, ctx)})
+        if merged == stored:
+            raise EventRejected(f"В заявке {stored.id} ничего не изменилось.")
+        requests[index] = merged
+        return requests, engineers, event.model_copy(update={"request": merged, "previous_request": stored})
 
     if event.type in (EventType.CANCEL, EventType.RESTORE):
         request = by_id.get(event.request_id or "")
@@ -269,7 +362,9 @@ def apply_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
     base = make_problem(
         requests, engineers, model=ctx.model, traffic=ctx.traffic, osrm=ctx.osrm, cache=ctx.cache
     )
-    problem = pin_problem(base, session.plan, event.time)
+    # Изменённую заявку солвер планирует заново, даже если инженер уже едет к ней.
+    released = [stored_event.request_id] if stored_event.type == EventType.REQUEST_UPDATED else []
+    problem = pin_problem(base, session.plan, event.time, released)
     plan, baseline = _solve(problem, ctx)
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}
     version = session.version + 1

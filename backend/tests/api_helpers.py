@@ -14,9 +14,12 @@ HEADER = "Заявка;Тип заявки BK;Тип заявки HD;Начал�
 
 
 class HashGeocoder:
+    def __init__(self, category="building"):
+        self.category = category
+
     def lookup(self, query):
         digest = hashlib.sha256(query.encode()).digest()
-        return GeoHit(55.74 + digest[0] / 255 * 0.02, 37.59 + digest[1] / 255 * 0.03, "building")
+        return GeoHit(55.74 + digest[0] / 255 * 0.02, 37.59 + digest[1] / 255 * 0.03, self.category)
 
 
 def sample_bundle():
