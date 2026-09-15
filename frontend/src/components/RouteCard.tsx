@@ -1,6 +1,6 @@
 import { engineerColor } from '../lib/colors';
 import { describeEvent } from '../lib/events';
-import { formatDuration, formatKm, formatWindow, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from '../lib/format';
+import { formatDuration, formatKm, formatWindow, requestWindowText, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from '../lib/format';
 import { byId, displayedPlan, engineerIdsOf, routeSummary, type RouteStop } from '../lib/planView';
 import { percent, timelineRow, timeScale } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
@@ -139,7 +139,7 @@ export function RouteCard() {
                   <strong>{stop.visit.request_id}</strong>
                   {stop.visit.pinned && <span className="badge">Закреплена</span>}
                 </td>
-                <td>{stop.request ? formatWindow(stop.request.window_start, stop.request.window_end) : '—'}</td>
+                <td>{stop.request ? requestWindowText(stop.request) : '—'}</td>
                 <td>{stop.visit.arrival}</td>
                 <td>{stop.visit.start}</td>
                 <td className={stop.slackMin !== null && stop.slackMin < 0 ? 'warn-text' : undefined}>{slackText(stop)}</td>

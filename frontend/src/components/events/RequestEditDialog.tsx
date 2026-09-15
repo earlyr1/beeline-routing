@@ -10,6 +10,7 @@ import {
 } from '../../lib/events';
 import { isValidTime, laterTime, PRIORITY_LABELS, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
+import { AsapToggle } from './AsapToggle';
 
 const SKILLS = Object.keys(SKILL_LABELS) as Skill[];
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as Priority[];
@@ -76,15 +77,21 @@ function EditRequestForm({ original, now }: { original: ServiceRequest; now: HHM
             </span>
           )}
         </div>
+        <AsapToggle checked={form.asap} onChange={(checked) => update('asap', checked)} />
         <div className="field-row">
-          <label className="field">
-            <span>Окно с</span>
-            <input type="time" value={form.windowStart} onChange={(event) => update('windowStart', event.target.value)} />
-          </label>
-          <label className="field">
-            <span>Окно до</span>
-            <input type="time" value={form.windowEnd} onChange={(event) => update('windowEnd', event.target.value)} />
-          </label>
+          {/* Поля окна скрыты, пока стоит «Как можно скорее»; введённые значения остаются в форме. */}
+          {!form.asap && (
+            <>
+              <label className="field">
+                <span>Окно с</span>
+                <input type="time" value={form.windowStart} onChange={(event) => update('windowStart', event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Окно до</span>
+                <input type="time" value={form.windowEnd} onChange={(event) => update('windowEnd', event.target.value)} />
+              </label>
+            </>
+          )}
           <label className="field">
             <span>Длительность, мин</span>
             <input

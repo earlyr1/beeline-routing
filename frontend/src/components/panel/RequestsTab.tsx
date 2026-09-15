@@ -1,6 +1,6 @@
 import type { ServiceRequest } from '../../api/types';
 import { engineerColor } from '../../lib/colors';
-import { formatWindow, shortAddress } from '../../lib/format';
+import { capitalize, requestWindowPhrase, shortAddress } from '../../lib/format';
 import {
   assignmentIndex,
   byId,
@@ -79,12 +79,13 @@ export function RequestsTab() {
                   <span>{shortAddress(request.address)}</span>
                 </div>
                 <div className="request-row__meta">
-                  <span>Окно {formatWindow(request.window_start, request.window_end)}</span>
+                  <span>{capitalize(requestWindowPhrase(request))}</span>
                   <span>{info ? `Начало ${info.visit.start}` : cancelled ? 'Отменена' : 'Не назначена'}</span>
                   <span>{engineer ? <EngineerLink engineerId={engineer.id} name={engineer.name} /> : '—'}</span>
                 </div>
                 <div className="badges">
                   {request.priority === 'urgent' && <span className="badge badge--urgent">Срочная</span>}
+                  {request.asap && <span className="badge badge--asap">Как можно скорее</span>}
                   {cancelled && <span className="badge badge--cancelled">Отменена</span>}
                   {pinned && <span className="badge">Закреплена</span>}
                   {badge && (

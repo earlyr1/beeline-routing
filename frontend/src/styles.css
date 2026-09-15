@@ -982,6 +982,26 @@ h4 {
   font-size: 12px;
 }
 
+.field-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin: 8px 0 0;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.field-check input {
+  margin: 0;
+}
+
+.badge--asap {
+  background: transparent;
+  color: var(--danger);
+  box-shadow: inset 0 0 0 1px var(--danger);
+}
+
 /* Диалоги и уведомления */
 .dialog {
   position: absolute;

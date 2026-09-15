@@ -1,4 +1,4 @@
-import { formatWindow, REASON_LABELS, shortAddress, SKILL_LABELS } from '../../lib/format';
+import { REASON_LABELS, requestWindowPhrase, shortAddress, SKILL_LABELS } from '../../lib/format';
 import { byId, displayedPlan } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
 
@@ -24,7 +24,7 @@ export function UnassignedTab() {
             </div>
             {request && (
               <div className="muted">
-                {shortAddress(request.address)} · окно {formatWindow(request.window_start, request.window_end)} ·{' '}
+                {shortAddress(request.address)} · {requestWindowPhrase(request)} ·{' '}
                 {SKILL_LABELS[request.skill]}
               </div>
             )}

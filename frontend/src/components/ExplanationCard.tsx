@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { getExplanation } from '../api/client';
 import type { Explanation } from '../api/types';
-import { brigadeName, formatKm, formatSigned, formatWindow, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
+import { brigadeName, formatKm, formatSigned, requestWindowPhrase, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
 import { byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 import { EngineerLink } from './EngineerLink';
@@ -64,7 +64,7 @@ export function ExplanationCard() {
           <h3>Заявка {selectedRequestId}</h3>
           {request && (
             <p className="muted">
-              {shortAddress(request.address)} · окно {formatWindow(request.window_start, request.window_end)} ·{' '}
+              {shortAddress(request.address)} · {requestWindowPhrase(request)} ·{' '}
               {request.duration_min} мин · {SKILL_LABELS[request.skill]}
               {request.transport_required ? ` · нужен транспорт «${TRANSPORT_LABELS[request.transport_required]}»` : ''}
               {request.priority === 'urgent' ? ' · срочная' : ''}

@@ -61,6 +61,7 @@ function request(
     duration_min: durationMin,
     window_start: windowStart,
     window_end: windowEnd,
+    asap: false,
     priority: 'normal',
     skill,
     transport_required: null,
@@ -234,6 +235,31 @@ export function makeRequestUpdateEvent(overrides: Partial<PlanEvent> = {}): Plan
     engineer_id: null,
     previous_request: previous,
     ...overrides,
+  };
+}
+
+/** Срочная заявка «как можно скорее», добавленная в 13:00: сервер поставил окно от времени события до конца смен в 22:00. */
+export function makeAsapRequest(overrides: Partial<ServiceRequest> = {}): ServiceRequest {
+  return request('URG-002', 'Город Москва, ул.Перовская, д. 42 к 1', 55.751, 37.787, 'emergency', '13:00', '22:00', 60, {
+    priority: 'urgent',
+    asap: true,
+    transport_required: 'car',
+    source_type_bk: 'Срочная заявка диспетчера',
+    source_type_hd: '',
+    ...overrides,
+  });
+}
+
+/** План с заявкой «как можно скорее» URG-002: Бригада Белузин едет к ней после URG-001. */
+export function makeAsapState(): PlanningState {
+  const state = makePlanningState();
+  const routes = state.plan.routes.map((item) =>
+    item.engineer_id === 'E02' ? route('E02', [...item.visits, visit('URG-002', '14:25', '14:25', '15:25', 4.2, 20)]) : item,
+  );
+  return {
+    ...state,
+    requests: [...state.requests, makeAsapRequest()],
+    plan: { ...state.plan, routes, metrics: metrics(routes, state.plan.unassigned.length) },
   };
 }
 

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../store/useAppStore';
-import { makePlanningState } from '../../test/fixtures';
+import { makeAsapState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { RequestsTab } from './RequestsTab';
 
@@ -87,6 +87,19 @@ describe('RequestsTab', () => {
     expect(within(rowOf('74198')).getByRole('button', { name: 'Отменить' })).toBeDisabled();
     expect(within(rowOf('50104')).getByRole('button', { name: 'Изменить' })).not.toHaveAttribute('title');
     expect(within(rowOf('10135')).getByRole('button', { name: 'Изменить' })).toBeEnabled();
+  });
+
+  it('shows «как можно скорее» with the start of waiting instead of the window and a badge next to «Срочная»', () => {
+    resetStore({ datasetId: 'd_test', state: makeAsapState(), eventTime: '13:30' });
+    render(<RequestsTab />);
+    const asap = rowOf('URG-002');
+    expect(within(asap).getByText('Как можно скорее с 13:00')).toBeInTheDocument();
+    expect(within(asap).queryByText(/^Окно/)).not.toBeInTheDocument();
+    expect(Array.from(asap.querySelectorAll('.badge')).map((badge) => badge.textContent)).toEqual(['Срочная', 'Как можно скорее']);
+
+    const windowed = rowOf('URG-001');
+    expect(within(windowed).getByText('Окно 13:00–15:00')).toBeInTheDocument();
+    expect(within(windowed).queryByText('Как можно скорее')).not.toBeInTheDocument();
   });
 
   it('disables editing while an event is being applied', () => {

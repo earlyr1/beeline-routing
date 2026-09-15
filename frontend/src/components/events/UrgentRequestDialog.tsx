@@ -3,6 +3,7 @@ import type { Skill, Transport } from '../../api/types';
 import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type PickedPoint, type UrgentForm } from '../../lib/events';
 import { isValidTime, laterTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
+import { AsapToggle } from './AsapToggle';
 
 const SKILLS: Skill[] = ['emergency', 'connection', 'local'];
 const TRANSPORTS: Transport[] = ['car', 'foot', 'bike', 'public'];
@@ -32,6 +33,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
     skill: 'emergency',
     transport: 'car',
     time: initialTime,
+    asap: false,
   }));
   // Пока диспетчер не правил окно руками, окно следует за временем события.
   const [windowTouched, setWindowTouched] = useState(false);
@@ -97,7 +99,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
     const found = validateUrgentForm(candidate, now);
     setErrors(found);
     if (found.length > 0) return;
-    const ok = await applyEvent(buildUrgentEvent(candidate, newUrgentId(Date.now())));
+    const ok = await applyEvent(buildUrgentEvent(candidate, newUrgentId(Date.now()), engineers));
     if (ok) close();
   };
 
@@ -120,15 +122,21 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
             </span>
           )}
         </div>
+        <AsapToggle checked={form.asap} onChange={(checked) => update('asap', checked)} />
         <div className="field-row">
-          <label className="field">
-            <span>Окно с</span>
-            <input type="time" value={form.windowStart} onChange={(event) => updateWindow('windowStart', event.target.value)} />
-          </label>
-          <label className="field">
-            <span>Окно до</span>
-            <input type="time" value={form.windowEnd} onChange={(event) => updateWindow('windowEnd', event.target.value)} />
-          </label>
+          {/* Поля окна скрыты, пока стоит «Как можно скорее»; введённые значения остаются в форме. */}
+          {!form.asap && (
+            <>
+              <label className="field">
+                <span>Окно с</span>
+                <input type="time" value={form.windowStart} onChange={(event) => updateWindow('windowStart', event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Окно до</span>
+                <input type="time" value={form.windowEnd} onChange={(event) => updateWindow('windowEnd', event.target.value)} />
+              </label>
+            </>
+          )}
           <label className="field">
             <span>Длительность, мин</span>
             <input type="number" min={5} step={5} value={form.durationMin} onChange={(event) => update('durationMin', Number(event.target.value))} />

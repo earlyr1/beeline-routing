@@ -29,6 +29,8 @@ export interface UrgentForm {
   skill: Skill;
   transport: Transport | '';
   time: HHMM;
+  /** Как можно скорее: окно задаёт сервер, от времени события до конца смен; поля окна скрыты. */
+  asap: boolean;
 }
 
 /** Форма изменения заявки. Время события хранится отдельно: оно не часть заявки. */
@@ -42,9 +44,11 @@ export interface RequestEditForm {
   skill: Skill;
   priority: Priority;
   transport: Transport | '';
+  /** Как можно скорее: поля окна скрыты, окно задаёт сервер. */
+  asap: boolean;
 }
 
-type VisitFields = Pick<UrgentForm, 'address' | 'point' | 'windowStart' | 'windowEnd' | 'durationMin'>;
+type VisitFields = Pick<UrgentForm, 'address' | 'point' | 'windowStart' | 'windowEnd' | 'durationMin' | 'asap'>;
 
 export function timeError(time: string, now: HHMM): string | null {
   if (!isValidTime(time)) return 'Укажите время в формате ЧЧ:ММ';
@@ -52,15 +56,18 @@ export function timeError(time: string, now: HHMM): string | null {
   return null;
 }
 
+/** Проверки окна визита; окно заявки «как можно скорее» задаёт сервер, его поля скрыты и не проверяются. */
+function windowErrors({ asap, windowStart, windowEnd }: VisitFields): string[] {
+  if (asap) return [];
+  if (!isValidTime(windowStart) || !isValidTime(windowEnd)) return ['Укажите окно визита в формате ЧЧ:ММ'];
+  return toMinutes(windowEnd) <= toMinutes(windowStart) ? ['Конец окна должен быть позже начала'] : [];
+}
+
 /** Общие проверки места, окна и длительности визита для срочной и изменённой заявки. */
 function visitErrors(form: VisitFields): string[] {
   const errors: string[] = [];
   if (!form.address.trim() && !form.point) errors.push('Укажите адрес или точку на карте');
-  if (!isValidTime(form.windowStart) || !isValidTime(form.windowEnd)) {
-    errors.push('Укажите окно визита в формате ЧЧ:ММ');
-  } else if (toMinutes(form.windowEnd) <= toMinutes(form.windowStart)) {
-    errors.push('Конец окна должен быть позже начала');
-  }
+  errors.push(...windowErrors(form));
   if (!Number.isFinite(form.durationMin) || form.durationMin <= 0) errors.push('Длительность должна быть больше нуля');
   return errors;
 }
@@ -80,6 +87,16 @@ export function earliestShiftStart(engineers: Engineer[]): HHMM | null {
     if (earliest === null || toMinutes(engineer.shift_start) < toMinutes(earliest)) earliest = engineer.shift_start;
   }
   return earliest;
+}
+
+/** Самый поздний конец смены среди доступных инженеров; null, если доступных нет. */
+export function latestShiftEnd(engineers: Engineer[]): HHMM | null {
+  let latest: HHMM | null = null;
+  for (const engineer of engineers) {
+    if (!engineer.available) continue;
+    if (latest === null || toMinutes(engineer.shift_end) > toMinutes(latest)) latest = engineer.shift_end;
+  }
+  return latest;
 }
 
 /** Окно срочной заявки по умолчанию: с времени события, но не раньше начала смен, длиной два часа. */
@@ -181,8 +198,15 @@ export function newUrgentId(timestamp: number): string {
 
 const pointAddress = (point: PickedPoint) => `Точка на карте ${point.lat.toFixed(5)}, ${point.lon.toFixed(5)}`;
 
-export function buildUrgentEvent(form: UrgentForm, requestId: string): PlanEvent {
+/**
+ * Срочная заявка из диалога. У заявки «как можно скорее» окно от времени события до самого позднего конца смен
+ * доступных инженеров: сервер задаёт такое окно сам, введённое в скрытых полях не отправляется.
+ */
+export function buildUrgentEvent(form: UrgentForm, requestId: string, engineers: Engineer[]): PlanEvent {
   const point = form.point;
+  const visitWindow = form.asap
+    ? { window_start: form.time, window_end: latestShiftEnd(engineers) ?? form.time }
+    : { window_start: form.windowStart, window_end: form.windowEnd };
   const address = form.address.trim() || (point ? pointAddress(point) : 'Срочная заявка');
   const request: ServiceRequest = {
     id: requestId,
@@ -192,8 +216,8 @@ export function buildUrgentEvent(form: UrgentForm, requestId: string): PlanEvent
     geocode_precision: point ? 'house' : 'none',
     district: '',
     duration_min: Math.round(form.durationMin),
-    window_start: form.windowStart,
-    window_end: form.windowEnd,
+    ...visitWindow,
+    asap: form.asap,
     priority: 'urgent',
     skill: form.skill,
     transport_required: form.transport === '' ? null : form.transport,
@@ -215,6 +239,7 @@ export function requestEditForm(request: ServiceRequest): RequestEditForm {
     skill: request.skill,
     priority: request.priority,
     transport: request.transport_required ?? '',
+    asap: request.asap,
   };
 }
 
@@ -238,8 +263,10 @@ export function updatedRequest(original: ServiceRequest, form: RequestEditForm):
     address,
     ...location,
     duration_min: Math.round(form.durationMin),
-    window_start: form.windowStart,
-    window_end: form.windowEnd,
+    // Окно заявки «как можно скорее» задаёт сервер: отправляем сохранённое, скрытые поля окна ни на что не влияют.
+    window_start: form.asap ? original.window_start : form.windowStart,
+    window_end: form.asap ? original.window_end : form.windowEnd,
+    asap: form.asap,
     priority: form.priority,
     skill: form.skill,
     transport_required: form.transport === '' ? null : form.transport,
@@ -268,7 +295,10 @@ export function requestChanges(prev: ServiceRequest, next: ServiceRequest): stri
     // Координаты null при том же адресе сервер заменит прежними, поэтому новой точкой считаем только заданные.
     changes.push('точка на карте');
   }
-  if (next.window_start !== prev.window_start || next.window_end !== prev.window_end) {
+  if (next.asap !== prev.asap) {
+    // Окно заявки «как можно скорее» задаёт сервер, поэтому вместо окна называем смену режима.
+    changes.push(next.asap ? 'как можно скорее' : 'окно вместо «как можно скорее»');
+  } else if (!next.asap && (next.window_start !== prev.window_start || next.window_end !== prev.window_end)) {
     changes.push(`окно ${formatWindow(prev.window_start, prev.window_end)} → ${formatWindow(next.window_start, next.window_end)}`);
   }
   if (next.duration_min !== prev.duration_min) changes.push(`длительность ${prev.duration_min} → ${next.duration_min} мин`);
@@ -398,6 +428,7 @@ export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>
       return `Смена транспорта: ${name} на ${next} с ${event.time}`;
     }
     case 'urgent':
+      if (event.request?.asap) return `Срочная заявка ${event.request.id} как можно скорее, ${event.time}`;
       return `Срочная заявка ${event.request?.id ?? ''} в ${event.time}`;
     case 'cancel':
       return `Отмена заявки ${event.request_id} в ${event.time}`;

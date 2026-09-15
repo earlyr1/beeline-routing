@@ -39,6 +39,11 @@ export interface ServiceRequest {
   duration_min: number;
   window_start: HHMM;
   window_end: HHMM;
+  /**
+   * Срочная заявка «как можно скорее»: окно задаёт сервер, от времени события до самого позднего конца смен.
+   * Ожидание до 4 часов после window_start бесплатно, дольше небольшой штраф.
+   */
+  asap: boolean;
   priority: Priority;
   skill: Skill;
   transport_required: Transport | null;

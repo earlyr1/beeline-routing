@@ -9,7 +9,7 @@ vi.mock('../api/client', async (importOriginal) => {
 import * as api from '../api/client';
 import { cancelEvent, restoreEvent } from '../lib/events';
 import { useAppStore } from '../store/useAppStore';
-import { makeExplanation, makePlanningState } from '../test/fixtures';
+import { makeAsapState, makeExplanation, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { ExplanationCard } from './ExplanationCard';
 
@@ -129,6 +129,17 @@ describe('ExplanationCard', () => {
     render(<ExplanationCard />);
     await screen.findByText(/Назначена Бригада Арташкин/);
     expect(within(card()).queryByRole('button', { name: /^←/ })).not.toBeInTheDocument();
+  });
+
+  it('shows «как можно скорее» instead of the window in the header', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation({ request_id: 'URG-002' }));
+    resetStore({ datasetId: 'd_test', state: makeAsapState(), selectedRequestId: 'URG-002' });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(
+      within(card()).getByText(/^ул\.Перовская, д\. 42 к 1 · как можно скорее с 13:00 · 60 мин · Аварийные работы · нужен транспорт/),
+    ).toBeInTheDocument();
+    expect(within(card()).queryByText(/· окно /)).not.toBeInTheDocument();
   });
 
   it('renders nothing without a selection', () => {

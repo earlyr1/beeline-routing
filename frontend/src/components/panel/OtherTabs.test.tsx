@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ENGINEER_PALETTE } from '../../lib/colors';
 import { useAppStore } from '../../store/useAppStore';
-import { makePlanningState } from '../../test/fixtures';
+import { makeAsapState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { BrigadesTab } from './BrigadesTab';
 import { ComparisonTab } from './ComparisonTab';
@@ -56,6 +56,15 @@ describe('panel tabs', () => {
     expect(screen.getByText(/даже без других заявок Бригада Белузин/)).toBeInTheDocument();
     fireEvent.click(screen.getByText('18754'));
     expect(useAppStore.getState().selectedRequestId).toBe('18754');
+  });
+
+  it('UnassignedTab shows the window of a request and «как можно скорее» instead of it', () => {
+    const state = makeAsapState();
+    const asap = { request_id: 'URG-002', reason_code: 'no_free_engineer_in_window' as const, reason_text: 'Сегодня никто не успевает.' };
+    resetStore({ state: { ...state, plan: { ...state.plan, unassigned: [...state.plan.unassigned, asap] } } });
+    render(<UnassignedTab />);
+    expect(screen.getByText('ул.1-я Новокузьминская, д. 16 к 1 · окно 18:00–20:00 · Работы на подключение и дозаказы')).toBeInTheDocument();
+    expect(screen.getByText('ул.Перовская, д. 42 к 1 · как можно скорее с 13:00 · Аварийные работы')).toBeInTheDocument();
   });
 
   it('UnassignedTab shows an empty message when everything is assigned', () => {
