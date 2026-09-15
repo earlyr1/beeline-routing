@@ -278,6 +278,8 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
     engineer = problem.state(engineer_id).engineer
     held = request.id in _held_ids(problem, engineer_id)
     constraints = _assigned_constraints(request, engineer, visit, held)
+    lunch = next((route.lunch for route in plan.routes if route.engineer_id == engineer_id), None)
+    lunch_factors = [f"Обед {fmt_hhmm(lunch.start)}–{fmt_hhmm(lunch.end)}."] if lunch else []
     if held:
         if visit.pinned:
             summary = f"Исполнитель {engineer.name} начал работу в {fmt_hhmm(visit.start)}, визит закреплён."
@@ -295,7 +297,7 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
             status="assigned",
             engineer_id=engineer_id,
             summary=summary,
-            factors=[factor],
+            factors=[factor, *lunch_factors],
             constraints=constraints,
             visit=visit,
         )
@@ -341,6 +343,7 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
         f"В плане задействовано инженеров: {plan.metrics.engineers_used}, суммарный пробег "
         f"{plan.metrics.total_km:.1f} км."
     )
+    factors.extend(lunch_factors)
     added = (
         "заявка почти не удлиняет маршрут"
         if own_extra <= KM_EPSILON

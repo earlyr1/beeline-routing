@@ -76,6 +76,14 @@ def test_prepare_region_end_to_end(tmp_path, monkeypatch):
     assert result.self_check_ok
     assert len(result.bundle.engineers) == 2 and len(result.bundle.requests) == 2
     assert result.bundle.control_plan.metrics.engineers_used == 2
+    # План диспетчеров показывается как есть, без обеда; в наших планах у инженера с визитами обед есть.
+    assert [route.lunch for route in result.bundle.control_plan.routes] == [None, None]
+    assert all(
+        route.lunch is not None
+        for plan in (result.fcfs, result.optimized)
+        for route in plan.routes
+        if route.visits
+    )
     assert "| Оптимизированный (OR-Tools) | 1 |" in result.report
     # Бандл считается на уровне нагрузки по умолчанию: отчёт совпадает с тем, что сервис покажет без выбора уровня.
     assert buffers == [travel_buffer(DEFAULT_WORKLOAD_LEVEL)]

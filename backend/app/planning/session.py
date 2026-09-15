@@ -7,7 +7,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from app.domain.enums import TRANSPORT_RU, EventType, Priority, RequestStatus
-from app.domain.models import Engineer, Event, Office, Plan, Request, Visit
+from app.domain.models import Engineer, Event, Lunch, Office, Plan, Request, Visit
 from app.domain.timeutil import fmt_hhmm
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel
@@ -148,17 +148,22 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
     Visit.pinned остаётся True только у начатой работы: для диспетчера «закреплена» значит «уже
     в работе, отменить нельзя». Визит в пути солвер не трогает, но отменить его можно до начала работы.
     Визит в пути к заявке из released (её только что изменили) не удерживается: солвер решает заново.
+    Обед, начатый до now, остаётся как в прежнем плане (в том числе у инженера, который стал недоступен), и новый
+    обед инженеру уже не нужен. Инженер на обеде свободен не раньше конца обеда.
     """
     routes = {route.engineer_id: route for route in plan.routes}
     open_ids = set(problem.open_request_ids)
     pinned: dict[str, list[Visit]] = {}
+    pinned_lunch: dict[str, Lunch] = {}
     previous_assignment: dict[str, str] = {}
     previous_order: dict[str, list[str]] = {}
     pinned_ids: set[str] = set()
     states: list[EngineerState] = []
     for state in problem.states:
         engineer_id = state.engineer.id
-        visits = routes[engineer_id].visits if engineer_id in routes else []
+        route = routes.get(engineer_id)
+        visits = route.visits if route else []
+        lunch = route.lunch if route and route.lunch and route.lunch.start < now else None
         done = [visit for visit in visits if visit.start < now]
         upcoming = [visit for visit in visits if visit.start >= now]
         if (
@@ -172,6 +177,9 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
         if done:
             start_node = problem.request_node(done[-1].request_id)
             available_from = max(available_from, done[-1].end)
+        if lunch is not None:
+            pinned_lunch[engineer_id] = lunch
+            available_from = max(available_from, lunch.end)
         pinned[engineer_id] = [visit.model_copy(update={"pinned": visit.start < now}) for visit in done]
         pinned_ids.update(visit.request_id for visit in done)
         previous_order[engineer_id] = rest
@@ -182,6 +190,7 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
         states=states,
         open_request_ids=[rid for rid in problem.open_request_ids if rid not in pinned_ids],
         pinned=pinned,
+        pinned_lunch=pinned_lunch,
         previous_assignment=previous_assignment,
         previous_order=previous_order,
         now=now,

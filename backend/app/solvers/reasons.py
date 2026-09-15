@@ -45,9 +45,11 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
         state, sim = min(solo, key=lambda pair: (pair[1].visits[0].start, pair[1].visits[0].end))
         visit = sim.visits[0]
         lead = "Сегодня не успеть" if request.asap else f"Работа не помещается в окно {window} или в смену"
+        # Без обеда инженер успел бы: не помещается именно обед.
+        lunch_note = "и с учётом обеда " if sim.lunch_conflict else ""
         return result(
             ReasonCode.DOES_NOT_FIT,
-            f"{lead}: даже без других заявок "
+            f"{lead}: даже без других заявок {lunch_note}"
             f"{state.engineer.name} начнёт не раньше {fmt_hhmm(visit.start)} и закончит в "
             f"{fmt_hhmm(visit.end)} (смена до {fmt_hhmm(state.available_until)}).",
         )

@@ -6,7 +6,16 @@ import math
 from dataclasses import dataclass, field
 
 from app.domain.enums import ReasonCode, RequestStatus
-from app.domain.models import Engineer, Request, Unassigned, Visit
+from app.domain.models import (
+    LUNCH_EARLIEST_MIN,
+    LUNCH_LATEST_MIN,
+    LUNCH_WORKDAY_MIN,
+    Engineer,
+    Lunch,
+    Request,
+    Unassigned,
+    Visit,
+)
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_matrix
 from app.geo.osrm import OsrmClient
@@ -66,6 +75,8 @@ class Problem:
     previous_order: dict[str, list[str]] = field(default_factory=dict)
     now: int = 0
     buffer: TravelBuffer = NO_BUFFER  # запас на дорогу по нагрузке дня, входит в travel_min
+    # Обед, начатый до события: остаётся как в прежнем плане, новый обед инженеру уже не нужен.
+    pinned_lunch: dict[str, Lunch] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         offset = len(self.engineers)
@@ -88,6 +99,23 @@ class Problem:
 
     def state(self, engineer_id: str) -> EngineerState:
         return self._states[engineer_id]
+
+    def lunch_window(self, state: EngineerState) -> tuple[int, int] | None:
+        """Самое раннее и самое позднее начало обеда инженера или None, если обед по плану ему не нужен.
+
+        Обед не нужен, если рабочий день (до конца смены или до недоступности) короче 6 часов, если обед уже
+        начат до события (pinned_lunch) и если окно обеда прошло к моменту, с которого инженер свободен.
+        """
+        engineer = state.engineer
+        if (
+            engineer.id in self.pinned_lunch
+            or state.available_until - engineer.shift_start < LUNCH_WORKDAY_MIN
+        ):
+            return None
+        latest = engineer.shift_start + LUNCH_LATEST_MIN
+        if state.available_from > latest:
+            return None
+        return engineer.shift_start + LUNCH_EARLIEST_MIN, latest
 
     def travel_km(self, from_node: int, to_node: int, engineer: Engineer) -> float:
         return self.travel.km(from_node, to_node, engineer.transport)
