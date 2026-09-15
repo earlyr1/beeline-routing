@@ -42,3 +42,9 @@
 .map-area--picking .fallback-map__canvas .leaflet-interactive {
   cursor: crosshair;
 }
+
+/* Контейнер Яндекс Карт: занимает всю область карты, размер отслеживается ResizeObserver. */
+.ymap-host {
+  position: absolute;
+  inset: 0;
+}

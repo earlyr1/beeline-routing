@@ -11,13 +11,12 @@ import * as api from '../../api/client';
 import { useAppStore } from '../../store/useAppStore';
 import { makePlanningState, makeRouteGeometry } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
-import { MapContent } from './MapContent';
+import { MapContent, SETTLE_REFRESH_MS } from './MapContent';
 import { clearRouteGeometryCache } from './useRouteGeometries';
 import type { LngLat, LineStyle, MapLocation, YMapsComponents } from './yandexLoader';
 
 // Фейковые компоненты вместо Яндекс Карт: те же пропсы, обычный DOM.
-const fake: YMapsComponents = {
-  YMap: ({ location, children }: { location: MapLocation; children?: ReactNode }) => (
+const FakeYMap = ({ location, children }: { location: MapLocation; children?: ReactNode }) => (
     <div
       data-testid="map"
       data-center={'center' in location ? location.center.join(',') : ''}
@@ -25,7 +24,10 @@ const fake: YMapsComponents = {
     >
       {children}
     </div>
-  ),
+  );
+
+const fake: YMapsComponents = {
+  YMap: FakeYMap,
   YMapDefaultSchemeLayer: () => null,
   YMapDefaultFeaturesLayer: () => null,
   YMapMarker: ({ coordinates, children }: { coordinates: LngLat; children?: ReactNode }) => (
@@ -109,5 +111,29 @@ describe('MapContent', () => {
     expect(map.getAttribute('data-bounds')).not.toBe('');
     expect(map).toHaveAttribute('data-center', '');
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalled());
+  });
+  it('re-applies the same camera once the layout has settled so Yandex loads tiles for the full area', () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
+      let renders = 0;
+      const counting: YMapsComponents = {
+        ...fake,
+        YMap: (props: { location: MapLocation; children?: ReactNode }) => {
+          renders += 1;
+          return FakeYMap(props);
+        },
+      };
+      render(<MapContent components={counting} />);
+      const bounds = screen.getByTestId('map').getAttribute('data-bounds');
+      const before = renders;
+      act(() => {
+        vi.advanceTimersByTime(SETTLE_REFRESH_MS);
+      });
+      expect(renders).toBeGreaterThan(before);
+      expect(screen.getByTestId('map')).toHaveAttribute('data-bounds', bounds as string);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
