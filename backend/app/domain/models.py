@@ -129,3 +129,31 @@ class Bundle(BaseModel):
     engineers: list[Engineer]
     events: list[Event] = Field(default_factory=list)
     control_plan: Plan | None = None
+
+    @model_validator(mode="after")
+    def _unique_ids(self) -> Bundle:
+        for label, ids in (
+            ("заявок", [request.id for request in self.requests]),
+            ("инженеров", [engineer.id for engineer in self.engineers]),
+        ):
+            repeated = _repeated(ids)
+            if repeated:
+                shown = ", ".join(repeated[:MAX_REPEATED_SHOWN])
+                if len(repeated) > MAX_REPEATED_SHOWN:
+                    shown += f" и ещё {len(repeated) - MAX_REPEATED_SHOWN}"
+                raise ValueError(f"повторяются номера {label}: {shown}")
+        return self
+
+
+MAX_REPEATED_SHOWN = 10
+
+
+def _repeated(ids: list[str]) -> list[str]:
+    """Номера, встретившиеся больше одного раза, в порядке первого повтора."""
+    seen: set[str] = set()
+    repeated: dict[str, None] = {}
+    for item in ids:
+        if item in seen:
+            repeated[item] = None
+        seen.add(item)
+    return list(repeated)

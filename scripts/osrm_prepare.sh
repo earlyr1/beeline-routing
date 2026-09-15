@@ -40,5 +40,9 @@ osrm-partition "$GRAPH"
 step "5/5 osrm-customize"
 osrm-customize "$GRAPH"
 
+# osrm-routed читает только moscow.osrm.*, исходные PBF (около 1 ГБ) больше не нужны.
+# Для другого bbox источник скачается заново.
+rm -f "$CLIPPED" "$SOURCE"
 touch "$DONE"
 step "Готово: $GRAPH"
+step "Граф занимает на диске: $(du -ch "$GRAPH".* 2>/dev/null | tail -n 1 | cut -f 1)"

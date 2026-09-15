@@ -260,3 +260,31 @@ def test_demo_events_follow_the_optimized_plan(cfg):
     events = build_demo_events(cfg, "east", requests, control, synthetic, {"Бригада А": "E01"}, plan)
     assert events[0].request_id == "2"
     assert events[1].engineer_id == "E02"
+
+
+def test_demo_cancel_prefers_window_starting_after_event_time(cfg):
+    """Заявку с окном 12:00–14:00 при другом лимите поиска начнут в 12:00, и API отклонит отмену в 13:00."""
+    synthetic = RawFile(
+        rows=[row(0, "1", ws=720, we=840), row(1, "2", ws=900, we=1020)], office_address="x", is_control=False
+    )
+    control = RawFile(
+        rows=[
+            row(0, "305", status="Отменена", crew="Бригада А", ws=720, we=840),
+            row(1, "306", status="Отменена", crew="Бригада А", ws=900, we=1020),
+        ],
+        office_address=None,
+        is_control=True,
+    )
+    requests = build_requests(cfg, synthetic, control, _fake_geo)
+    visits = [
+        Visit(request_id="1", arrival=786, start=786, end=816, leg_km=1.0, leg_min=5),
+        Visit(request_id="2", arrival=960, start=960, end=990, leg_km=1.0, leg_min=5),
+    ]
+    plan = Plan(
+        solver="ortools",
+        routes=[Route(engineer_id="E01", visits=visits)],
+        unassigned=[],
+        metrics=Metrics(engineers_used=1, km_per_engineer={}, total_km=2.0, assigned=2, unassigned=0),
+    )
+    events = build_demo_events(cfg, "east", requests, control, synthetic, {"Бригада А": "E01"}, plan)
+    assert events[0].request_id == "2"

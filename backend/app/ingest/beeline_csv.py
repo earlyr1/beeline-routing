@@ -24,6 +24,7 @@ class RawRequestRow:
     address: str
     status_bk: str = ""
     crew: str = ""
+    line_no: int = 0  # номер строки в файле, для отчёта о пропущенных строках
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ def parse_beeline_csv(data: bytes) -> RawFile:
                 address=_cell(record, "Адрес"),
                 status_bk=_cell(record, "Статус BK"),
                 crew=_cell(record, "Бригада"),
+                line_no=line_no,
             )
         )
     return RawFile(rows=rows, office_address=office, is_control="Бригада" in header, skipped=skipped)

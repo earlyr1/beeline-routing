@@ -111,3 +111,22 @@ def test_save_and_load_bundle(tmp_path):
     path = tmp_path / "bundles" / "east" / "bundle.json"
     save_bundle(bundle, path)
     assert load_bundle(path) == bundle
+
+
+def test_bundle_rejects_repeated_request_and_engineer_ids():
+    office = Office(region="east", title="Восток", address="Москва", lat=55.7, lon=37.6)
+    engineer = Engineer(
+        id="E1",
+        name="Иванов",
+        start_lat=55.7,
+        start_lon=37.6,
+        shift_start="09:00",
+        shift_end="18:00",
+        skills=[Skill.LOCAL],
+        transport=Transport.CAR,
+    )
+    requests = [_request(), _request(id="R2"), _request(), _request(id="R2"), _request(id="R3")]
+    with pytest.raises(ValidationError, match="повторяются номера заявок: R1, R2"):
+        Bundle(region="east", office=office, requests=requests, engineers=[engineer])
+    with pytest.raises(ValidationError, match="повторяются номера инженеров: E1"):
+        Bundle(region="east", office=office, requests=[_request()], engineers=[engineer, engineer])

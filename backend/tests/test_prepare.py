@@ -5,7 +5,7 @@ from app.domain.models import Metrics
 from app.geo.matrix import TrafficProfile
 from app.ingest.geocode import GeoHit
 from app.synth.config import SynthConfig
-from app.synth.prepare import prepare_region, self_check
+from app.synth.prepare import build_parser, prepare_region, self_check
 from tests.test_synth import CONFIG
 
 SYNTHETIC = (
@@ -70,3 +70,8 @@ def test_self_check_requires_strict_improvement():
     assert self_check(worse, better)[0]
     assert not self_check(better, better)[0]
     assert not self_check(better, worse)[0]
+
+
+def test_cli_time_limit_defaults_to_five_seconds():
+    assert build_parser().parse_args([]).time_limit == 5
+    assert build_parser().parse_args(["--time-limit", "10"]).time_limit == 10

@@ -16,13 +16,53 @@ import uuid
 from pathlib import Path
 
 
+class ApiError(Exception):
+    def __init__(self, method: str, url: str, code: int, body: str) -> None:
+        super().__init__(f"{method} {url} -> {code}: {body}")
+        self.code = code
+        self.detail = _detail(body)
+
+
+def _detail(body: str) -> str:
+    try:
+        detail = json.loads(body).get("detail")
+    except (ValueError, AttributeError):
+        return body
+    return detail if isinstance(detail, str) else body
+
+
 def call(method: str, url: str, body: bytes | None = None, headers: dict[str, str] | None = None) -> dict:
     request = urllib.request.Request(url, data=body, method=method, headers=headers or {})
     try:
         with urllib.request.urlopen(request, timeout=180) as response:
             return json.load(response)
     except urllib.error.HTTPError as error:
-        raise SystemExit(f"{method} {url} -> {error.code}: {error.read().decode('utf-8')}") from error
+        raise ApiError(method, url, error.code, error.read().decode("utf-8")) from error
+
+
+def send_events(base: str, dataset_id: str, events: list[dict], state: dict) -> dict:
+    """Отправляет события по очереди. Отклонённое событие (422) печатается, проверка идёт дальше."""
+    for event in events:
+        started = time.monotonic()
+        try:
+            state = call(
+                "POST",
+                f"{base}/datasets/{dataset_id}/events",
+                json.dumps(event).encode("utf-8"),
+                {"Content-Type": "application/json"},
+            )
+        except ApiError as error:
+            if error.code != 422:
+                raise
+            print(f"событие {event['type']} в {event['time']} отклонено ({error.code}): {error.detail}")
+            continue
+        diff = state["last_diff"]
+        print(
+            f"событие {event['type']} в {event['time']} за {time.monotonic() - started:.1f} с: "
+            f"перенесено {len(diff['moved'])}, добавлено {len(diff['added'])}, снято {len(diff['removed'])}, "
+            f"сдвигов времени {len(diff['time_shifts'])}"
+        )
+    return state
 
 
 def upload(base: str, path: Path) -> str:
@@ -71,20 +111,7 @@ def main(argv: list[str]) -> int:
     metrics_line("Диспетчеры", state["control"])
 
     events = json.loads(path.read_text(encoding="utf-8")).get("events", []) if path.suffix == ".json" else []
-    for event in events:
-        started = time.monotonic()
-        state = call(
-            "POST",
-            f"{base}/datasets/{dataset_id}/events",
-            json.dumps(event).encode("utf-8"),
-            {"Content-Type": "application/json"},
-        )
-        diff = state["last_diff"]
-        print(
-            f"событие {event['type']} в {event['time']} за {time.monotonic() - started:.1f} с: "
-            f"перенесено {len(diff['moved'])}, добавлено {len(diff['added'])}, снято {len(diff['removed'])}, "
-            f"сдвигов времени {len(diff['time_shifts'])}"
-        )
+    state = send_events(base, dataset_id, events, state)
     if events:
         metrics_line("OR-Tools после событий", state["plan"])
 
@@ -103,4 +130,7 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except ApiError as error:
+        raise SystemExit(str(error)) from error
