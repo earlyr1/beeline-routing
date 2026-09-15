@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceRequest } from '../api/types';
-import { makeDelayEvent, makeDelayForecast, makePlanningState, makeRequestUpdateEvent } from '../test/fixtures';
+import { makeAsapRequest, makeDelayEvent, makeDelayForecast, makePlanningState, makeRequestUpdateEvent } from '../test/fixtures';
 import {
   buildUrgentEvent,
   busiestEngineerId,
@@ -15,6 +15,7 @@ import {
   effectiveEventTime,
   forecastLines,
   isWorkStarted,
+  latestShiftEnd,
   newUrgentId,
   requestActionState,
   requestChanges,
@@ -24,6 +25,7 @@ import {
   timeError,
   transportChangeEvent,
   unavailableEvent,
+  updatedRequest,
   validateDelay,
   validateRequestEdit,
   validateUrgentForm,
@@ -42,6 +44,7 @@ const form: UrgentForm = {
   skill: 'emergency',
   transport: 'car',
   time: '13:00',
+  asap: false,
 };
 
 describe('events', () => {
@@ -61,7 +64,7 @@ describe('events', () => {
   });
 
   it('builds an urgent event with a full request from a map point', () => {
-    const event = buildUrgentEvent({ ...form, address: '', point: { lat: 55.71, lon: 37.8 }, transport: '' }, 'URG-TEST');
+    const event = buildUrgentEvent({ ...form, address: '', point: { lat: 55.71, lon: 37.8 }, transport: '' }, 'URG-TEST', makePlanningState().engineers);
     expect(event).toMatchObject({ type: 'urgent', time: '13:00', request_id: null, engineer_id: null });
     expect(event.request).toMatchObject({
       id: 'URG-TEST',
@@ -73,8 +76,36 @@ describe('events', () => {
       geocode_precision: 'house',
       window_start: '13:00',
       window_end: '15:00',
+      asap: false,
     });
     expect(event.request?.address).toBe('Точка на карте 55.71000, 37.80000');
+  });
+
+  it('sends an urgent request as soon as possible from the event time to the latest shift end', () => {
+    const { engineers } = makePlanningState();
+    const asap: UrgentForm = { ...form, asap: true, time: '13:20', windowStart: '15:00', windowEnd: '16:00' };
+    expect(buildUrgentEvent(asap, 'URG-ASAP', engineers).request).toMatchObject({ asap: true, window_start: '13:20', window_end: '22:00' });
+    expect(buildUrgentEvent(asap, 'URG-ASAP', []).request).toMatchObject({ asap: true, window_start: '13:20', window_end: '13:20' });
+    expect(buildUrgentEvent(form, 'URG-WINDOW', engineers).request).toMatchObject({ asap: false, window_start: '13:00', window_end: '15:00' });
+  });
+
+  it('skips the window checks of an urgent request as soon as possible', () => {
+    expect(validateUrgentForm({ ...form, asap: true, windowStart: '', windowEnd: '' }, '13:00')).toEqual([]);
+    expect(validateUrgentForm({ ...form, asap: true, address: ' ', windowStart: '14:00', windowEnd: '12:00', time: '12:00' }, '13:00')).toEqual([
+      'Укажите адрес или точку на карте',
+      'Время события не может быть раньше 13:00',
+    ]);
+  });
+
+  it('finds the latest shift end among available engineers', () => {
+    const { engineers } = makePlanningState();
+    const withShiftEnd = (id: string, shiftEnd: string) =>
+      engineers.map((engineer) => (engineer.id === id ? { ...engineer, shift_end: shiftEnd } : engineer));
+    expect(latestShiftEnd(engineers)).toBe('22:00');
+    expect(latestShiftEnd(withShiftEnd('E02', '23:30'))).toBe('23:30');
+    expect(latestShiftEnd(withShiftEnd('E03', '23:59'))).toBe('22:00');
+    expect(latestShiftEnd(engineers.map((engineer) => ({ ...engineer, available: false })))).toBeNull();
+    expect(latestShiftEnd([])).toBeNull();
   });
 
   it('builds cancel, restore and unavailability events', () => {
@@ -116,6 +147,9 @@ describe('events', () => {
     const engineers = byId(makePlanningState().engineers);
     expect(describeEvent(unavailableEvent('E03', '13:00'), engineers)).toBe('Инженер недоступен: Бригада Комарь с 13:00');
     expect(describeEvent(cancelEvent('10135', '09:30'), engineers)).toBe('Отмена заявки 10135 в 09:30');
+    const urgent = makePlanningState().events[2].event;
+    expect(describeEvent(urgent, engineers)).toBe('Срочная заявка URG-001 в 13:00');
+    expect(describeEvent({ ...urgent, request: makeAsapRequest() }, engineers)).toBe('Срочная заявка URG-002 как можно скорее, 13:00');
   });
 
   it('builds a transport change event with the new transport only', () => {
@@ -173,8 +207,10 @@ describe('request update', () => {
       skill: 'local',
       priority: 'normal',
       transport: 'car',
+      asap: false,
     });
     expect(requestEditForm(requestOf('50104')).transport).toBe('');
+    expect(requestEditForm(makeAsapRequest()).asap).toBe(true);
   });
 
   it('builds a full request with the same id, status and source fields', () => {
@@ -265,6 +301,41 @@ describe('request update', () => {
     expect(requestChanges(original, { ...original, lat: null, lon: null })).toEqual([]);
   });
 
+  it('names turning «как можно скорее» on and off instead of the window', () => {
+    const asap = { ...original, asap: true };
+    expect(requestChanges(original, asap)).toEqual(['как можно скорее']);
+    expect(requestChanges(original, { ...asap, window_start: '13:30', window_end: '22:00', duration_min: 60 })).toEqual([
+      'как можно скорее',
+      'длительность 45 → 60 мин',
+    ]);
+    const stored = makeAsapRequest();
+    expect(requestChanges(stored, { ...stored, asap: false, window_start: '15:00', window_end: '17:00' })).toEqual([
+      'окно вместо «как можно скорее»',
+    ]);
+    expect(requestChanges(stored, { ...stored, window_start: '16:00' })).toEqual([]);
+  });
+
+  it('sends «как можно скорее» with the stored window and the typed window once it is turned off', () => {
+    expect(updatedRequest(original, { ...form, asap: true, windowStart: '', windowEnd: '12:00' })).toEqual({ ...original, asap: true });
+    const stored = makeAsapRequest();
+    expect(updatedRequest(stored, { ...requestEditForm(stored), asap: false, windowStart: '15:00', windowEnd: '17:00' })).toEqual({
+      ...stored,
+      asap: false,
+      window_start: '15:00',
+      window_end: '17:00',
+    });
+    expect(requestUpdateEvent(original, { ...form, asap: true }, '13:30').request?.asap).toBe(true);
+  });
+
+  it('skips the window checks of a request edited as soon as possible', () => {
+    expect(validateRequestEdit(original, { ...form, asap: true, windowStart: '', windowEnd: '' }, '13:30', '13:00')).toEqual([]);
+    const stored = makeAsapRequest();
+    expect(validateRequestEdit(stored, { ...requestEditForm(stored), windowEnd: '12:00' }, '13:30', '13:00')).toEqual(['Ничего не изменилось']);
+    expect(validateRequestEdit(stored, { ...requestEditForm(stored), asap: false, windowEnd: '12:00' }, '13:30', '13:00')).toEqual([
+      'Конец окна должен быть позже начала',
+    ]);
+  });
+
   it('validates the edit like the urgent form and refuses an unchanged request', () => {
     expect(validateRequestEdit(original, form, '13:30', '13:00')).toEqual(['Ничего не изменилось']);
     expect(validateRequestEdit(original, { ...form, durationMin: 60 }, '13:30', '13:00')).toEqual([]);
@@ -323,6 +394,9 @@ describe('request update', () => {
       'Изменена заявка 50104 с 13:30: окно 14:00–16:00 → 15:00–17:00, длительность 45 → 60 мин',
     );
     expect(describeEvent(makeRequestUpdateEvent({ previous_request: null }), engineers)).toBe('Изменена заявка 50104 с 13:30');
+    const previous = makeRequestUpdateEvent().previous_request!;
+    const asap = makeRequestUpdateEvent({ request: { ...previous, asap: true, window_start: '13:30', window_end: '22:00' } });
+    expect(describeEvent(asap, engineers)).toBe('Изменена заявка 50104 с 13:30: как можно скорее');
     expect(EVENT_LABELS.request_updated).toBe('Изменение заявки');
   });
 });

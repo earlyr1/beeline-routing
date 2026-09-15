@@ -48,7 +48,7 @@ export function TimelineTrack({ row, color, nowLeft, selectedRequestId, onSelect
               .filter(Boolean)
               .join(' ')}
             style={{ left: `${bar.left}%`, width: `${bar.width}%`, background: color }}
-            title={`${bar.requestId}: ${bar.label}${bar.clipped ? ' (выходит за шкалу)' : ''}`}
+            title={`${bar.requestId}: ${bar.label}${bar.clipped ? ' (выходит за шкалу)' : ''}${bar.window ? `, ${bar.window}` : ''}`}
             aria-label={`Заявка ${bar.requestId} ${bar.label}`}
             onClick={() => onSelect(bar.requestId)}
           />

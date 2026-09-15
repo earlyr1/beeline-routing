@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlanningState, ServiceRequest, Transport } from '../../api/types';
 import { toMinutes } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
-import { makePlanningState } from '../../test/fixtures';
+import { makeAsapRequest, makeAsapState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { EngineerDelayDialog } from './EngineerDelayDialog';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
@@ -14,6 +14,11 @@ import { UrgentRequestDialog } from './UrgentRequestDialog';
 
 const valueOf = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
 const optionsOf = (label: string) => within(screen.getByLabelText(label)).getAllByRole('option').map((option) => option.textContent);
+const ASAP_HINT =
+  'Начало с времени события до конца смен. Ожидание до 4 часов без штрафа, дольше небольшой штраф. Если сегодня никто не успевает, заявка останется неназначенной.';
+/** Первый элемент стоит в документе раньше второго. */
+const isBefore = (first: HTMLElement, second: HTMLElement) =>
+  Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING);
 
 function withTransport(state: PlanningState, engineerId: string, transport: Transport): PlanningState {
   return {
@@ -64,6 +69,7 @@ describe('UrgentRequestDialog', () => {
       skill: 'emergency',
       transport_required: 'car',
       priority: 'urgent',
+      asap: false,
     });
   });
 
@@ -174,6 +180,78 @@ describe('UrgentRequestDialog', () => {
       address: 'Точка на карте 55.71234, 37.80123',
       lat: 55.71234,
       lon: 37.80123,
+    });
+  });
+});
+
+describe('UrgentRequestDialog as soon as possible', () => {
+  const submit = () => screen.getByRole('button', { name: 'Добавить и перепланировать' });
+
+  it('hides the window behind «Как можно скорее», keeps the typed window and sends the time from the event to the latest shift end', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    const onClose = vi.fn();
+    const state = makePlanningState();
+    // Белузин работает до 23:00, дольше всех доступных; смена недоступного Комаря не считается.
+    const engineers = state.engineers.map((engineer) =>
+      engineer.id === 'E02' ? { ...engineer, shift_end: '23:00' } : engineer.id === 'E03' ? { ...engineer, shift_end: '23:30' } : engineer,
+    );
+    resetStore({ datasetId: 'd_test', state: { ...state, engineers }, eventTime: '13:00', applyEvent });
+    render(<UrgentRequestDialog onClose={onClose} />);
+    const asap = screen.getByLabelText('Как можно скорее');
+    expect(asap).not.toBeChecked();
+    expect(isBefore(asap, screen.getByLabelText('Окно с'))).toBe(true);
+    expect(screen.queryByText(ASAP_HINT)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '12:00' } });
+    fireEvent.click(asap);
+    expect(asap).toBeChecked();
+    expect(screen.queryByLabelText('Окно с')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Окно до')).not.toBeInTheDocument();
+    expect(screen.getByText(ASAP_HINT)).toHaveClass('muted');
+    expect(screen.getByLabelText('Длительность, мин')).toBeInTheDocument();
+
+    fireEvent.click(asap);
+    expect(asap).not.toBeChecked();
+    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:00', '12:00']);
+    expect(screen.queryByText(ASAP_HINT)).not.toBeInTheDocument();
+
+    fireEvent.click(asap);
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
+    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '13:15' } });
+    fireEvent.click(submit());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    const event = applyEvent.mock.calls[0][0];
+    expect(event).toMatchObject({ type: 'urgent', time: '13:15', request_id: null });
+    expect(event.request).toMatchObject({ asap: true, window_start: '13:15', window_end: '23:00', priority: 'urgent', duration_min: 60 });
+  });
+
+  it('keeps the map point and the address found for it with «Как можно скорее»', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState(),
+      eventTime: '13:00',
+      applyEvent,
+      pickFor: 'urgent',
+      pickedPoint: { lat: 55.71234, lon: 37.80123 },
+      urgentAddressLookup: 'loading',
+    });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    fireEvent.click(screen.getByLabelText('Как можно скорее'));
+    expect(screen.getByText('Ищем адрес…')).toBeInTheDocument();
+    act(() => useAppStore.setState({ urgentAddressLookup: 'done', urgentSuggestedAddress: 'Москва, Перовская улица, 42к1' }));
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к1');
+    expect(screen.getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
+    fireEvent.click(submit());
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({
+      address: 'Москва, Перовская улица, 42к1',
+      lat: 55.71234,
+      lon: 37.80123,
+      asap: true,
+      window_start: '13:00',
+      window_end: '22:00',
     });
   });
 });
@@ -679,6 +757,58 @@ describe('RequestEditDialog', () => {
     expect(useAppStore.getState().editingRequestId).toBe('46393');
     fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
     expect(useAppStore.getState().editingRequestId).toBeNull();
+  });
+
+  it('turns the request into «как можно скорее», hides the window and previews the change', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    const asap = screen.getByLabelText('Как можно скорее');
+    expect(asap).not.toBeChecked();
+    expect(isBefore(asap, screen.getByLabelText('Окно с'))).toBe(true);
+    expect(screen.queryByText(ASAP_HINT)).not.toBeInTheDocument();
+
+    fireEvent.click(asap);
+    expect(screen.queryByLabelText('Окно с')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Окно до')).not.toBeInTheDocument();
+    expect(screen.getByText(ASAP_HINT)).toHaveClass('muted');
+    expect(screen.getByText('Изменится: как можно скорее')).toBeInTheDocument();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(useAppStore.getState().editingRequestId).toBeNull());
+    expect(applyEvent).toHaveBeenCalledWith({
+      type: 'request_updated',
+      time: '13:30',
+      request_id: '46393',
+      engineer_id: null,
+      request: { ...original, asap: true },
+    });
+  });
+
+  it('prefills «как можно скорее» from the request and turns it back into a window', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    resetStore({ datasetId: 'd_test', state: makeAsapState(), eventTime: '13:30', editingRequestId: 'URG-002', applyEvent });
+    render(<RequestEditDialog />);
+    const asap = screen.getByLabelText('Как можно скорее');
+    expect(asap).toBeChecked();
+    expect(screen.queryByLabelText('Окно с')).not.toBeInTheDocument();
+    expect(screen.getByText(ASAP_HINT)).toBeInTheDocument();
+    expect(screen.queryByText(/Изменится/)).not.toBeInTheDocument();
+
+    fireEvent.click(asap);
+    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:00', '22:00']);
+    expect(screen.queryByText(ASAP_HINT)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Окно с'), { target: { value: '15:00' } });
+    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '17:00' } });
+    expect(screen.getByText('Изменится: окно вместо «как можно скорее»')).toBeInTheDocument();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0]).toEqual({
+      type: 'request_updated',
+      time: '13:30',
+      request_id: 'URG-002',
+      engineer_id: null,
+      request: { ...makeAsapRequest(), asap: false, window_start: '15:00', window_end: '17:00' },
+    });
   });
 
   it('renders nothing for a request that is not in the plan', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makePlanningState } from '../test/fixtures';
+import { makeAsapState, makePlanningState } from '../test/fixtures';
 import { hourTicks, percent, timelineRow, timelineRows, timeScale } from './timeline';
 
 describe('timeline', () => {
@@ -59,6 +59,18 @@ describe('timeline', () => {
     const bar = timelineRows(state, plan, scale)[0].bars[0];
     expect(bar).toMatchObject({ clipped: true, label: '25:53–49:13' });
     expect(bar.left + bar.width).toBeLessThanOrEqual(100);
+  });
+
+  it('keeps the request window for the bar title and «как можно скорее» with the start of waiting', () => {
+    const asapState = makeAsapState();
+    const scale = timeScale(asapState, asapState.plan);
+    const rows = timelineRows(asapState, asapState.plan, scale);
+    expect(rows[0].bars[2].window).toBe('окно 14:00–16:00');
+    expect(rows[1].bars.map((bar) => [bar.requestId, bar.window])).toEqual([
+      ['84627', 'окно 12:00–14:00'],
+      ['URG-001', 'окно 13:00–15:00'],
+      ['URG-002', 'как можно скорее с 13:00'],
+    ]);
   });
 
   it('produces hour ticks', () => {

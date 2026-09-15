@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeDelayEvent, makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
+import { makeAsapState, makeDelayEvent, makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
 import { makeProposal, makeUrgentProposal } from '../test/proposalFixtures';
 import { formatKm } from './format';
 import { diffSummary, plural, proposalDetails, upsertProposal } from './proposals';
@@ -83,6 +83,25 @@ describe('proposals view helpers', () => {
       'ул.Таганская, д. 3 · окно 13:00–15:00, 60 мин',
       'Аварийные работы',
       'Нужен транспорт: Автомобиль',
+    ]);
+  });
+
+  it('describes an urgent request as soon as possible without a window', () => {
+    const proposal = makeUrgentProposal();
+    const request = { ...proposal.event.request!, asap: true, window_start: '13:30', window_end: '13:30' };
+    expect(proposalDetails({ ...proposal, event: { ...proposal.event, request } }, state)).toEqual([
+      'ул.Таганская, д. 3 · 60 мин',
+      'Окно: как можно скорее',
+      'Аварийные работы',
+      'Нужен транспорт: Автомобиль',
+    ]);
+  });
+
+  it('names «как можно скорее» instead of the window of a request to cancel', () => {
+    const proposal = makeProposal({ event: { type: 'cancel', time: '13:30', request: null, request_id: 'URG-002', engineer_id: null } });
+    expect(proposalDetails(proposal, makeAsapState())).toEqual([
+      'ул.Перовская, д. 42 к 1 · как можно скорее с 13:00',
+      'Сейчас в маршруте: Бригада Белузин, начало 14:25',
     ]);
   });
 

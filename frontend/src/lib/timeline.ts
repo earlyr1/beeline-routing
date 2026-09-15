@@ -1,5 +1,5 @@
 import type { Engineer, Plan, PlanningState, ServiceRequest } from '../api/types';
-import { toMinutes } from './format';
+import { requestWindowPhrase, toMinutes } from './format';
 
 /** Ось по умолчанию 08:00–23:00, расширяется под данные, но не дальше 00:00–24:00. */
 export const AXIS_DEFAULT_FROM = 8 * 60;
@@ -24,6 +24,8 @@ export interface TimelineBar {
   clipped: boolean;
   /** Сырые значения HH:MM для подсказки */
   label: string;
+  /** Окно заявки для подсказки: «окно 14:00–16:00» или «как можно скорее с 13:00»; null, если заявки нет в состоянии. */
+  window: string | null;
 }
 
 export interface TimelineRow {
@@ -82,6 +84,7 @@ function buildRow(engineer: Engineer, plan: Plan, scale: TimeScale, requests: Ma
       late: visit.late_min > 0,
       clipped: start < scale.from || end > scale.to,
       label: `${visit.start}–${visit.end}`,
+      window: request ? requestWindowPhrase(request) : null,
     };
   });
   const unavailableFrom = engineer.available ? null : (engineer.unavailable_from ?? engineer.shift_start);

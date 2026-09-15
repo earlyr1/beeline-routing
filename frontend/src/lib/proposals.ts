@@ -1,6 +1,6 @@
 import type { PlanDiff, PlanningState, Proposal, ProposalStatus } from '../api/types';
 import { carDowngradeHint, carRequiredVisitsFrom, requestChanges, visitsFrom } from './events';
-import { formatKm, formatWindow, plural, shortAddress, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from './format';
+import { formatKm, plural, requestWindowPhrase, shortAddress, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from './format';
 import { byId } from './planView';
 
 export { plural } from './format';
@@ -20,10 +20,11 @@ export function proposalDetails(proposal: Proposal, state: PlanningState): strin
 
   if (event.type === 'urgent' && event.request) {
     const request = event.request;
-    const details = [
-      `${shortAddress(request.address)} · окно ${formatWindow(request.window_start, request.window_end)}, ${request.duration_min} мин`,
-      SKILL_LABELS[request.skill],
-    ];
+    // Окно заявки «как можно скорее» сервер задаст при применении, в предложении его ещё нет.
+    const details = request.asap
+      ? [`${shortAddress(request.address)} · ${request.duration_min} мин`, 'Окно: как можно скорее']
+      : [`${shortAddress(request.address)} · ${requestWindowPhrase(request)}, ${request.duration_min} мин`];
+    details.push(SKILL_LABELS[request.skill]);
     if (request.transport_required) details.push(`Нужен транспорт: ${TRANSPORT_LABELS[request.transport_required]}`);
     return details;
   }
@@ -66,7 +67,7 @@ export function proposalDetails(proposal: Proposal, state: PlanningState): strin
 
   const request = requests.get(event.request_id ?? '');
   if (!request) return [];
-  const details = [`${shortAddress(request.address)} · окно ${formatWindow(request.window_start, request.window_end)}`];
+  const details = [`${shortAddress(request.address)} · ${requestWindowPhrase(request)}`];
   for (const route of state.plan.routes) {
     const visit = route.visits.find((item) => item.request_id === request.id);
     if (visit) details.push(`Сейчас в маршруте: ${engineers.get(route.engineer_id)?.name ?? route.engineer_id}, начало ${visit.start}`);

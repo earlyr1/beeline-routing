@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useAppStore } from '../store/useAppStore';
-import { makeDelayEvent, makePlanningState, makeTransportChangeEvent } from '../test/fixtures';
+import { makeAsapState, makeDelayEvent, makePlanningState, makeTransportChangeEvent } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { RouteCard } from './RouteCard';
 
@@ -131,6 +131,22 @@ describe('RouteCard', () => {
 
     fireEvent.click(within(personal).getByRole('button', { name: 'Заявка 50104 14:00–14:45' }));
     expect(useAppStore.getState()).toMatchObject({ selectedRequestId: '50104', selectedEngineerId: 'E01' });
+  });
+
+  it('shows «как можно скорее» instead of the window in the visits and in the titles of the timeline bars', () => {
+    resetStore({ datasetId: 'd_test', state: makeAsapState(), selectedEngineerId: 'E02' });
+    render(<RouteCard />);
+    const rows = bodyRows();
+    expect(cells(rows[0]).slice(0, 3)).toEqual(['1', '84627Закреплена', '12:00–14:00']);
+    expect(cells(rows[2]).slice(0, 3)).toEqual(['3', 'URG-002', 'как можно скорее с 13:00']);
+    expect(within(timeline()).getByRole('button', { name: 'Заявка URG-002 14:25–15:25' })).toHaveAttribute(
+      'title',
+      'URG-002: 14:25–15:25, как можно скорее с 13:00',
+    );
+    expect(within(timeline()).getByRole('button', { name: 'Заявка 84627 12:00–12:40' })).toHaveAttribute(
+      'title',
+      '84627: 12:00–12:40, окно 12:00–14:00',
+    );
   });
 
   it('hatches the personal timeline of an unavailable engineer', () => {

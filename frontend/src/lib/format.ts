@@ -112,6 +112,27 @@ export function formatWindow(start: HHMM, end: HHMM): string {
   return `${start}–${end}`;
 }
 
+interface RequestWindow {
+  asap: boolean;
+  window_start: HHMM;
+  window_end: HHMM;
+}
+
+/** Окно заявки: «14:00–16:00», а у заявки «как можно скорее» только начало ожидания, конец окна там конец смен. */
+export function requestWindowText(request: RequestWindow): string {
+  return request.asap ? `как можно скорее с ${request.window_start}` : formatWindow(request.window_start, request.window_end);
+}
+
+/** Окно заявки внутри описания: «окно 14:00–16:00» или «как можно скорее с 13:00». */
+export function requestWindowPhrase(request: RequestWindow): string {
+  return request.asap ? requestWindowText(request) : `окно ${requestWindowText(request)}`;
+}
+
+/** Текст с заглавной буквы, чтобы начать им строку. */
+export function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export function formatDuration(minutes: number): string {
   const total = Math.max(0, Math.round(minutes));
   const hours = Math.floor(total / 60);

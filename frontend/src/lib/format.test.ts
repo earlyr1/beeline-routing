@@ -2,12 +2,15 @@ import { describe, expect, it } from 'vitest';
 import {
   addMinutes,
   brigadeName,
+  capitalize,
   formatDuration,
   formatKm,
   formatSigned,
   fromMinutes,
   isValidTime,
   laterTime,
+  requestWindowPhrase,
+  requestWindowText,
   shortAddress,
   toMinutes,
 } from './format';
@@ -56,6 +59,18 @@ describe('format', () => {
     expect(brigadeName('Бригада Белузин')).toBe('Бригада Белузин');
     expect(brigadeName('бригада Белузин')).toBe('бригада Белузин');
     expect(brigadeName('Белузин')).toBe('Бригада Белузин');
+  });
+
+  it('shows the window of a request or «как можно скорее» with the start of waiting', () => {
+    const windowed = { asap: false, window_start: '14:00', window_end: '16:00' };
+    const asap = { asap: true, window_start: '13:00', window_end: '22:00' };
+    expect(requestWindowText(windowed)).toBe('14:00–16:00');
+    expect(requestWindowText(asap)).toBe('как можно скорее с 13:00');
+    expect(requestWindowPhrase(windowed)).toBe('окно 14:00–16:00');
+    expect(requestWindowPhrase(asap)).toBe('как можно скорее с 13:00');
+    expect(capitalize(requestWindowPhrase(windowed))).toBe('Окно 14:00–16:00');
+    expect(capitalize(requestWindowPhrase(asap))).toBe('Как можно скорее с 13:00');
+    expect(capitalize('')).toBe('');
   });
 
   it('shortens Moscow addresses and drops the flat', () => {
