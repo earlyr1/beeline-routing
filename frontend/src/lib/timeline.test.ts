@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { makePlanningState } from '../test/fixtures';
-import { hourTicks, percent, timelineRows, timeScale } from './timeline';
+import { hourTicks, percent, timelineRow, timelineRows, timeScale } from './timeline';
 
 describe('timeline', () => {
   const state = makePlanningState();
@@ -39,6 +39,13 @@ describe('timeline', () => {
     expect(rows[1].bars[1].urgent).toBe(true);
     expect(rows[0].unavailableLeft).toBeNull();
     expect(rows[2].unavailableLeft).toBeCloseTo(percent(scale, 780));
+  });
+
+  it('builds the personal row of one engineer exactly like the row in the whole timeline', () => {
+    const scale = timeScale(state, state.plan);
+    const rows = timelineRows(state, state.plan, scale);
+    expect(timelineRow(state, state.plan, scale, state.engineers[1])).toEqual(rows[1]);
+    expect(timelineRow(state, state.plan, scale, state.engineers[2])).toEqual(rows[2]);
   });
 
   it('clamps visits past midnight and keeps raw values in the label', () => {

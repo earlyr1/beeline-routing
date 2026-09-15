@@ -609,6 +609,82 @@ h4 {
   flex: none;
 }
 
+/* Имя инженера ссылкой: открывает страницу бригады. */
+.link-button {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.link-button:hover {
+  text-decoration: underline;
+}
+
+/* Ссылка «← Бригада …» над карточкой заявки, открытой со страницы бригады. */
+.explanation__back {
+  display: inline-block;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+
+/* Вкладка «Бригады» */
+.brigade-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.brigade-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.brigade-row:hover {
+  background: #f7f8fa;
+}
+
+.brigade-row--selected {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+}
+
+.brigade-row .dot {
+  margin-top: 5px;
+}
+
+.brigade-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.brigade-row__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brigade-row__meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 .unassigned-item {
   padding: 10px;
   border: 1px solid var(--border);
@@ -655,6 +731,31 @@ h4 {
 
 .route-card__row:hover {
   background: #f7f8fa;
+}
+
+/* На странице бригады четыре кнопки: при узкой панели они переносятся, а не сжимают заголовок. */
+.route-card .explanation__actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* События бригады: время слева, описание справа. */
+.brigade-events {
+  list-style: none;
+  margin: 8px 0;
+  padding: 0;
+}
+
+.brigade-events li {
+  display: flex;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.brigade-events__time {
+  flex: none;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .checks,
@@ -830,6 +931,57 @@ h4 {
   font-size: 12px;
 }
 
+.timeline__label .link-button {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Личный таймлайн на странице бригады: одна дорожка без колонки имён, подписи часов по краям не обрезаются. */
+.timeline--personal {
+  margin: 8px 16px 4px;
+}
+
+.timeline--personal .timeline__row {
+  grid-template-columns: 1fr;
+}
+
+/* Меню карты по клику на пустом месте: над точкой клика, с хвостиком вниз. Одно для Яндекс Карт и OpenStreetMap. */
+.map-menu {
+  position: relative;
+  width: max-content;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 6px 6px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  transform: translate(-50%, calc(-100% - 12px));
+  cursor: default;
+  /* Маркер Leaflet без интерактивности не ловит клики, а кнопки меню должны. */
+  pointer-events: auto;
+}
+
+.map-menu::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  width: 10px;
+  height: 10px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.field-note {
+  margin: 4px 0 0;
+  font-size: 12px;
+}
+
 /* Диалоги и уведомления */
 .dialog {
   position: absolute;
@@ -844,7 +996,7 @@ h4 {
   padding: 16px;
 }
 
-/* Диалог изменения заявки открывается из панели, поэтому привязан к окну, а не к панели событий. */
+/* Плавающие диалоги (изменение заявки, задержка, смена транспорта, недоступность) открываются из панели и привязаны к окну, а не к панели событий. */
 .dialog--floating {
   position: fixed;
   top: 72px;
@@ -854,7 +1006,7 @@ h4 {
   overflow: auto;
 }
 
-/* Диалог панели событий стоит на том же месте: пока он открыт, изменение заявки и задержка открываются левее. */
+/* Диалог срочной заявки стоит на том же месте: пока он открыт, плавающие диалоги открываются левее. */
 .app-shell--toolbar-dialog .dialog--floating {
   right: calc(16px + 460px + 12px);
 }

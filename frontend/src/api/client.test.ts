@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, buildPlan, getRouteGeometry, postEvent, uploadFile } from './client';
+import { ApiError, buildPlan, getReverseGeocode, getRouteGeometry, postEvent, uploadFile } from './client';
 import type { PlanEvent } from './types';
 
 const cancel: PlanEvent = { type: 'cancel', time: '13:00', request: null, request_id: '50104', engineer_id: null };
@@ -38,6 +38,14 @@ describe('api client', () => {
     vi.stubGlobal('fetch', fetchMock);
     await getRouteGeometry('d1', 'E01', 'previous');
     expect(fetchMock.mock.calls[0][0]).toBe('/api/datasets/d1/routes/E01/geometry?plan=previous');
+  });
+
+  it('asks the reverse geocoder for the address of a map point', async () => {
+    const address = { address: 'Москва, Перовская улица, 42к1', precision: 'house' };
+    const fetchMock = vi.fn().mockResolvedValue(reply(200, address));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(getReverseGeocode(55.75123, 37.78)).resolves.toEqual(address);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/geocode/reverse?lat=55.75123&lon=37.78');
   });
 
   it('turns backend detail into ApiError', async () => {

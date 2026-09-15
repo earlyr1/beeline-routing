@@ -111,6 +111,124 @@ describe('UrgentRequestDialog', () => {
     expect(useAppStore.getState()).toMatchObject({ pickMode: true, pickFor: 'urgent' });
     expect(screen.getByRole('button', { name: 'Кликните по карте…' })).toBeDisabled();
   });
+  it('shows the address search for a map point and fills the empty address with the address found', () => {
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState(),
+      eventTime: '13:00',
+      pickFor: 'urgent',
+      pickedPoint: { lat: 55.71234, lon: 37.80123 },
+      urgentAddressLookup: 'loading',
+    });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    expect(screen.getByText('Ищем адрес…')).toHaveClass('muted');
+    expect(screen.getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('');
+
+    act(() => useAppStore.setState({ urgentAddressLookup: 'done', urgentSuggestedAddress: 'Москва, Перовская улица, 42к1' }));
+    expect(screen.queryByText('Ищем адрес…')).not.toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к1');
+
+    // Адрес следующей точки заменяет найденный прежде, пока диспетчер его не правил.
+    act(() => useAppStore.setState({ pickedPoint: { lat: 55.76, lon: 37.62 }, urgentAddressLookup: 'loading', urgentSuggestedAddress: null }));
+    expect(valueOf('Адрес')).toBe('');
+    act(() => useAppStore.setState({ urgentAddressLookup: 'done', urgentSuggestedAddress: 'Москва, Тверская улица, 7' }));
+    expect(valueOf('Адрес')).toBe('Москва, Тверская улица, 7');
+  });
+
+  it('never replaces an address the dispatcher typed with the address found for the point', () => {
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState(),
+      eventTime: '13:00',
+      pickFor: 'urgent',
+      pickedPoint: { lat: 55.71234, lon: 37.80123 },
+      urgentAddressLookup: 'loading',
+    });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Юности, д. 5' } });
+    act(() => useAppStore.setState({ urgentAddressLookup: 'done', urgentSuggestedAddress: 'Москва, Перовская улица, 42к1' }));
+    expect(valueOf('Адрес')).toBe('Город Москва, ул.Юности, д. 5');
+    act(() => useAppStore.setState({ urgentAddressLookup: 'loading', urgentSuggestedAddress: null }));
+    expect(valueOf('Адрес')).toBe('Город Москва, ул.Юности, д. 5');
+  });
+
+  it('keeps the address empty when nothing was found for the point and sends the point instead', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState(),
+      eventTime: '13:00',
+      applyEvent,
+      pickFor: 'urgent',
+      pickedPoint: { lat: 55.71234, lon: 37.80123 },
+      urgentAddressLookup: 'done',
+      urgentSuggestedAddress: null,
+    });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    expect(valueOf('Адрес')).toBe('');
+    expect(screen.queryByText('Ищем адрес…')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить и перепланировать' }));
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({
+      address: 'Точка на карте 55.71234, 37.80123',
+      lat: 55.71234,
+      lon: 37.80123,
+    });
+  });
+});
+
+describe('UrgentRequestDialog address of a point picked again', () => {
+  const menuPoint = { lat: 55.71234, lon: 37.80123 };
+
+  beforeEach(() => {
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState(),
+      eventTime: '13:00',
+      pickFor: 'urgent',
+      pickedPoint: menuPoint,
+      urgentAddressLookup: 'done',
+      urgentSuggestedAddress: 'Москва, Перовская улица, 42к1',
+    });
+  });
+
+  it('drops the address found for the menu point once the dispatcher picks another point', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    // Пока новая точка не выбрана, прежняя точка и её адрес остаются вместе.
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к1');
+    expect(screen.getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
+
+    act(() => useAppStore.getState().finishPick({ lat: 55.76, lon: 37.62 }));
+    expect(screen.getByText('Точка: 55.76000, 37.62000')).toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить и перепланировать' }));
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ address: 'Точка на карте 55.76000, 37.62000', lat: 55.76, lon: 37.62 });
+  });
+
+  it('hides the address search when the dispatcher picks another point before the answer', () => {
+    useAppStore.setState({ urgentAddressLookup: 'loading', urgentSuggestedAddress: null });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    expect(screen.getByText('Ищем адрес…')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    expect(screen.queryByText('Ищем адрес…')).not.toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('');
+  });
+
+  it('keeps an address the dispatcher corrected by hand when another point is picked', () => {
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Москва, Перовская улица, 42к2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Указать точку на карте' }));
+    act(() => useAppStore.getState().finishPick({ lat: 55.76, lon: 37.62 }));
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к2');
+  });
 });
 
 describe('map point ownership', () => {
@@ -167,10 +285,10 @@ describe('EngineerDelayDialog', () => {
   const submitButton = () => screen.getByRole('button', { name: 'Перепланировать' });
 
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', delayDialogOpen: true });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', delayDialogOpen: true, delayEngineerId: 'E01' });
   });
 
-  it('preselects the busiest engineer, sets the minutes from presets and submits the delay', async () => {
+  it('opens for the engineer of the brigade page, sets the minutes from presets and submits the delay', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
     render(<EngineerDelayDialog />);
@@ -207,7 +325,7 @@ describe('EngineerDelayDialog', () => {
     });
   });
 
-  it('preselects the engineer of the route card and keeps it when the time changes', () => {
+  it('preselects the engineer of the brigade page and keeps it when the time changes', () => {
     resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true, delayEngineerId: 'E01' });
     render(<EngineerDelayDialog />);
     expect(valueOf('Инженер')).toBe('E01');
@@ -215,8 +333,8 @@ describe('EngineerDelayDialog', () => {
     expect(valueOf('Инженер')).toBe('E01');
   });
 
-  it('follows the busiest engineer when the time changes until the dispatcher picks one', () => {
-    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true });
+  it('falls back to the busiest engineer for a brigade that is already unavailable and follows the time until the dispatcher picks one', () => {
+    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true, delayEngineerId: 'E03' });
     render(<EngineerDelayDialog />);
     expect(valueOf('Инженер')).toBe('E02');
     expect(screen.getByRole('option', { name: 'Бригада Белузин (визитов после 13:00: 3)' })).toBeInTheDocument();
@@ -260,17 +378,20 @@ describe('EngineerDelayDialog', () => {
 });
 
 describe('EngineerUnavailableDialog', () => {
-  it('offers only available engineers with their remaining visits and submits the event', async () => {
+  beforeEach(() => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', engineerDialog: { kind: 'unavailable', engineerId: 'E02' } });
+  });
+
+  it('opens as a floating dialog for the engineer of the brigade page and submits the event', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
-    const onClose = vi.fn();
-    useAppStore.setState({ applyEvent, eventTime: '14:00' });
-    render(<EngineerUnavailableDialog onClose={onClose} />);
+    useAppStore.setState({ applyEvent });
+    render(<EngineerUnavailableDialog />);
+    expect(screen.getByRole('dialog', { name: 'Инженер недоступен' })).toHaveClass('dialog', 'dialog--floating');
     const options = screen.getAllByRole('option').map((option) => option.textContent);
     expect(options).toEqual(['Бригада Арташкин (визитов после 14:00: 2)', 'Бригада Белузин (визитов после 14:00: 0)']);
-    expect(valueOf('Инженер')).toBe('E01');
-    fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: 'E02' } });
+    expect(valueOf('Инженер')).toBe('E02');
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() => expect(useAppStore.getState().engineerDialog).toBeNull());
     expect(applyEvent).toHaveBeenCalledWith({
       type: 'engineer_unavailable',
       time: '14:00',
@@ -280,35 +401,57 @@ describe('EngineerUnavailableDialog', () => {
     });
   });
 
-  it('preselects the engineer with the most visits after the chosen time', () => {
-    const state = makePlanningState();
-    const [e01, e02, e03] = state.plan.routes;
-    const plan = {
-      ...state.plan,
-      routes: [{ ...e01, visits: e01.visits.slice(0, 2) }, { ...e02, visits: [...e02.visits, ...e01.visits.slice(2)] }, e03],
-    };
-    resetStore({ datasetId: 'd_test', state: { ...state, plan }, eventTime: '13:00' });
-    render(<EngineerUnavailableDialog onClose={() => undefined} />);
-    expect(valueOf('Инженер')).toBe('E02');
-    expect(screen.getByRole('option', { name: 'Бригада Белузин (визитов после 13:00: 3)' })).toBeInTheDocument();
-
+  it('keeps the engineer of the brigade page when the time changes and lets the dispatcher pick another one', () => {
+    resetStore({
+      datasetId: 'd_test',
+      state: withBusyBeluzin(makePlanningState()),
+      eventTime: '13:00',
+      engineerDialog: { kind: 'unavailable', engineerId: 'E01' },
+    });
+    render(<EngineerUnavailableDialog />);
+    expect(valueOf('Инженер')).toBe('E01');
     fireEvent.change(screen.getByLabelText('Недоступен с'), { target: { value: '16:00' } });
     expect(screen.getByRole('option', { name: 'Бригада Белузин (визитов после 16:00: 0)' })).toBeInTheDocument();
     expect(valueOf('Инженер')).toBe('E01');
-
     fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: 'E02' } });
-    fireEvent.change(screen.getByLabelText('Недоступен с'), { target: { value: '13:30' } });
     expect(valueOf('Инженер')).toBe('E02');
+  });
+
+  it('falls back to the engineer with the most visits after the time when the brigade is already unavailable', () => {
+    resetStore({
+      datasetId: 'd_test',
+      state: withBusyBeluzin(makePlanningState()),
+      eventTime: '13:00',
+      engineerDialog: { kind: 'unavailable', engineerId: 'E03' },
+    });
+    render(<EngineerUnavailableDialog />);
+    expect(valueOf('Инженер')).toBe('E02');
+    expect(screen.getByRole('option', { name: 'Бригада Белузин (визитов после 13:00: 3)' })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Недоступен с'), { target: { value: '16:00' } });
+    expect(valueOf('Инженер')).toBe('E01');
+  });
+
+  it('closes on «Отмена» and stays hidden while the other engineer dialog is open', () => {
+    const view = render(<EngineerUnavailableDialog />);
+    fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+    expect(useAppStore.getState().engineerDialog).toBeNull();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    view.unmount();
+    useAppStore.setState({ engineerDialog: { kind: 'transport', engineerId: 'E02' } });
+    expect(render(<EngineerUnavailableDialog />).container).toBeEmptyDOMElement();
   });
 });
 
 describe('TransportChangeDialog', () => {
-  it('preselects the busiest engineer, suggests a bike instead of the car and submits the change', async () => {
+  beforeEach(() => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
+  });
+
+  it('opens as a floating dialog for the engineer of the brigade page, suggests a bike instead of the car and submits', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
-    const onClose = vi.fn();
     useAppStore.setState({ applyEvent, eventTime: '14:00' });
-    render(<TransportChangeDialog onClose={onClose} />);
-    expect(screen.getByRole('dialog', { name: 'Смена транспорта' })).toBeInTheDocument();
+    render(<TransportChangeDialog />);
+    expect(screen.getByRole('dialog', { name: 'Смена транспорта' })).toHaveClass('dialog', 'dialog--floating');
     expect(optionsOf('Инженер')).toEqual([
       'Бригада Арташкин · Автомобиль (визитов после 14:00: 2)',
       'Бригада Белузин · Автомобиль (визитов после 14:00: 0)',
@@ -321,7 +464,7 @@ describe('TransportChangeDialog', () => {
 
     fireEvent.change(screen.getByLabelText('Новый транспорт'), { target: { value: 'foot' } });
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() => expect(useAppStore.getState().engineerDialog).toBeNull());
     expect(applyEvent).toHaveBeenCalledWith({
       type: 'engineer_transport_changed',
       time: '14:00',
@@ -334,14 +477,19 @@ describe('TransportChangeDialog', () => {
 
   it('hides the car hint when no car-only requests are left after the time', () => {
     useAppStore.setState({ eventTime: '16:00' });
-    render(<TransportChangeDialog onClose={() => undefined} />);
+    render(<TransportChangeDialog />);
     expect(valueOf('Новый транспорт')).toBe('bike');
     expect(screen.queryByText(/Заявок с требованием/)).not.toBeInTheDocument();
   });
 
   it('resets the new transport to the default of the chosen engineer until the dispatcher picks one', () => {
-    resetStore({ datasetId: 'd_test', state: withTransport(makePlanningState(), 'E02', 'foot'), eventTime: '13:00' });
-    render(<TransportChangeDialog onClose={() => undefined} />);
+    resetStore({
+      datasetId: 'd_test',
+      state: withTransport(makePlanningState(), 'E02', 'foot'),
+      eventTime: '13:00',
+      engineerDialog: { kind: 'transport', engineerId: 'E01' },
+    });
+    render(<TransportChangeDialog />);
     expect(valueOf('Инженер')).toBe('E01');
     expect(valueOf('Новый транспорт')).toBe('bike');
 
@@ -359,10 +507,21 @@ describe('TransportChangeDialog', () => {
     expect(valueOf('Новый транспорт')).toBe('public');
   });
 
-  it('follows the busiest engineer when the time changes and resets the transport with it', () => {
+  it('keeps the engineer of the brigade page and its transport when the time changes', () => {
     const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'foot');
-    resetStore({ datasetId: 'd_test', state, eventTime: '13:00' });
-    render(<TransportChangeDialog onClose={() => undefined} />);
+    resetStore({ datasetId: 'd_test', state, eventTime: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
+    render(<TransportChangeDialog />);
+    expect(valueOf('Инженер')).toBe('E01');
+    expect(valueOf('Новый транспорт')).toBe('bike');
+    fireEvent.change(screen.getByLabelText('Сменить с'), { target: { value: '16:00' } });
+    expect(valueOf('Инженер')).toBe('E01');
+    expect(valueOf('Новый транспорт')).toBe('bike');
+  });
+
+  it('falls back to the busiest available engineer when the brigade is already unavailable', () => {
+    const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'foot');
+    resetStore({ datasetId: 'd_test', state, eventTime: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E03' } });
+    render(<TransportChangeDialog />);
     expect(valueOf('Инженер')).toBe('E02');
     expect(screen.getByRole('option', { name: 'Бригада Белузин · Пешеход (визитов после 13:00: 3)' })).toBeInTheDocument();
     expect(valueOf('Новый транспорт')).toBe('car');
@@ -375,7 +534,7 @@ describe('TransportChangeDialog', () => {
   it('rejects a time earlier than now', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
-    render(<TransportChangeDialog onClose={() => undefined} />);
+    render(<TransportChangeDialog />);
     expect(valueOf('Сменить с')).toBe('13:00');
     fireEvent.change(screen.getByLabelText('Сменить с'), { target: { value: '12:00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
@@ -383,16 +542,16 @@ describe('TransportChangeDialog', () => {
     expect(applyEvent).not.toHaveBeenCalled();
   });
 
-  it('stays open when the server rejects the change', async () => {
+  it('stays open when the server rejects the change and closes on «Отмена»', async () => {
     const applyEvent = vi.fn().mockResolvedValue(false);
-    const onClose = vi.fn();
     useAppStore.setState({ applyEvent });
-    render(<TransportChangeDialog onClose={onClose} />);
+    render(<TransportChangeDialog />);
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
     await waitFor(() => expect(applyEvent).toHaveBeenCalled());
-    expect(onClose).not.toHaveBeenCalled();
+    expect(useAppStore.getState().engineerDialog).toEqual({ kind: 'transport', engineerId: 'E01' });
     fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
-    expect(onClose).toHaveBeenCalled();
+    expect(useAppStore.getState().engineerDialog).toBeNull();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
 
@@ -530,53 +689,36 @@ describe('RequestEditDialog', () => {
 });
 
 describe('EventToolbar', () => {
-  it('rejects an event time earlier than now and opens dialogs', () => {
+  it('rejects an event time earlier than now and opens the urgent request dialog', () => {
     render(<EventToolbar />);
     fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '12:00' } });
     expect(screen.getByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Инженер недоступен' }));
-    expect(screen.getByRole('dialog', { name: 'Инженер недоступен' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Срочная заявка' }));
+    expect(screen.getByRole('dialog', { name: 'Срочная заявка' })).toBeInTheDocument();
   });
 
-  it('keeps the open dialog in the store and closes it from the dialog', () => {
+  it('keeps only the event time and the urgent request: engineer events open from the brigade page', () => {
     render(<EventToolbar />);
-    fireEvent.click(screen.getByRole('button', { name: 'Смена транспорта' }));
-    expect(useAppStore.getState().toolbarDialog).toBe('transport');
+    expect(screen.getByLabelText('Время события')).toBeInTheDocument();
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Срочная заявка']);
+  });
+
+  it('keeps the open urgent request dialog in the store and closes it from the dialog', () => {
+    render(<EventToolbar />);
     fireEvent.click(screen.getByRole('button', { name: 'Срочная заявка' }));
     expect(useAppStore.getState().toolbarDialog).toBe('urgent');
-    expect(screen.queryByRole('dialog', { name: 'Смена транспорта' })).not.toBeInTheDocument();
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Срочная заявка' })).getByRole('button', { name: 'Отмена' }));
     expect(useAppStore.getState().toolbarDialog).toBeNull();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('opens the transport change dialog from a button between the urgent request and the delay', () => {
-    render(<EventToolbar />);
-    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([
-      'Срочная заявка',
-      'Смена транспорта',
-      'Задержка',
-      'Инженер недоступен',
-    ]);
-    fireEvent.click(screen.getByRole('button', { name: 'Смена транспорта' }));
-    expect(screen.getByRole('dialog', { name: 'Смена транспорта' })).toBeInTheDocument();
-  });
-
-  it('opens the delay dialog without a chosen engineer', () => {
-    useAppStore.setState({ delayEngineerId: 'E02' });
-    render(<EventToolbar />);
-    fireEvent.click(screen.getByRole('button', { name: 'Задержка' }));
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: null });
-  });
-
-  it('disables the transport change and the delay while showing the plan before the event or replanning', () => {
+  it('disables the urgent request while showing the plan before the event or replanning', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', showPrevious: true });
     const view = render(<EventToolbar />);
-    expect(screen.getByRole('button', { name: 'Смена транспорта' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Задержка' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeDisabled();
     view.unmount();
     resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', busy: true });
     render(<EventToolbar />);
-    expect(screen.getByRole('button', { name: 'Задержка' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeDisabled();
   });
 });

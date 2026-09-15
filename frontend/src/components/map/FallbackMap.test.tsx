@@ -1,10 +1,10 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>();
-  return { ...actual, getRouteGeometry: vi.fn() };
+  return { ...actual, getRouteGeometry: vi.fn(), getReverseGeocode: vi.fn() };
 });
 
 import * as L from 'leaflet';
@@ -156,6 +156,43 @@ describe('FallbackMap', () => {
     expect(pickedPoint?.lon).toBeCloseTo((west + east) / 2, 2);
     expect(pickedPoint?.lat).toBeGreaterThan(south);
     expect(pickedPoint?.lat).toBeLessThan(north);
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
+  });
+
+  it('opens the map menu on an empty map click, keeps clicks inside it away from the map and closes it', async () => {
+    vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
+    const { container } = render(<FallbackMap note={NOTE} />);
+    const map = container.querySelector('.leaflet-container') as HTMLElement;
+
+    fireEvent.click(map, { clientX: MAP_WIDTH / 2, clientY: MAP_HEIGHT / 2 });
+    const point = useAppStore.getState().mapMenu;
+    expect(point).not.toBeNull();
+    const menu = await screen.findByRole('group', { name: 'Меню карты' });
+    expect(menu.closest('.leaflet-marker-pane')).not.toBeNull();
+    expect(within(menu).getByRole('button', { name: 'Добавить заявку здесь' })).toBeEnabled();
+
+    fireEvent.click(menu, { clientX: 10, clientY: 10 });
+    expect(useAppStore.getState().mapMenu).toBe(point);
+
+    fireEvent.click(within(menu).getByRole('button', { name: 'Закрыть меню карты' }));
+    expect(useAppStore.getState().mapMenu).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Меню карты' })).not.toBeInTheDocument();
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
+  });
+
+  it('never opens the map menu from a marker and closes it when a marker is selected', async () => {
+    vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
+    const { container } = render(<FallbackMap note={NOTE} />);
+    const map = container.querySelector('.leaflet-container') as HTMLElement;
+
+    fireEvent.click(screen.getByTitle('Старт: Бригада Белузин'));
+    expect(useAppStore.getState()).toMatchObject({ selectedEngineerId: 'E02', mapMenu: null });
+
+    fireEvent.click(map, { clientX: MAP_WIDTH / 2, clientY: MAP_HEIGHT / 2 });
+    expect(await screen.findByRole('group', { name: 'Меню карты' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle(/^50104:/));
+    expect(useAppStore.getState()).toMatchObject({ selectedRequestId: '50104', mapMenu: null });
+    expect(screen.queryByRole('group', { name: 'Меню карты' })).not.toBeInTheDocument();
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
   });
 

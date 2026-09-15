@@ -20,7 +20,7 @@ beforeEach(() => {
 describe('RightPanel', () => {
   it('shows the route card above the tabs when an engineer is selected', () => {
     render(<RightPanel />);
-    const card = screen.getByRole('region', { name: 'Маршрут инженера' });
+    const card = screen.getByRole('region', { name: 'Бригада' });
     const position = card.compareDocumentPosition(screen.getByRole('tablist'));
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
@@ -29,6 +29,6 @@ describe('RightPanel', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', selectedRequestId: '50104' });
     render(<RightPanel />);
     expect(screen.getByRole('region', { name: 'Объяснение по заявке' })).toBeInTheDocument();
-    expect(screen.queryByRole('region', { name: 'Маршрут инженера' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Бригада' })).not.toBeInTheDocument();
   });
 });

@@ -1,11 +1,13 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Skill, Transport } from '../../api/types';
-import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type UrgentForm } from '../../lib/events';
+import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type PickedPoint, type UrgentForm } from '../../lib/events';
 import { isValidTime, laterTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 
 const SKILLS: Skill[] = ['emergency', 'connection', 'local'];
 const TRANSPORTS: Transport[] = ['car', 'foot', 'bike', 'public'];
+
+const samePoint = (a: PickedPoint | null, b: PickedPoint | null) => a?.lat === b?.lat && a?.lon === b?.lon;
 
 export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const state = useAppStore((s) => s.state);
@@ -17,6 +19,8 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const pickedPoint = useAppStore((s) => s.pickedPoint);
   const startPick = useAppStore((s) => s.startPick);
   const clearPick = useAppStore((s) => s.clearPick);
+  const addressLookup = useAppStore((s) => s.urgentAddressLookup);
+  const suggestedAddress = useAppStore((s) => s.urgentSuggestedAddress);
   const now = state?.now ?? '00:00';
   const engineers = state?.engineers ?? [];
   const initialTime = isValidTime(eventTime) ? laterTime(eventTime, now) : now;
@@ -31,6 +35,8 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   }));
   // Пока диспетчер не правил окно руками, окно следует за временем события.
   const [windowTouched, setWindowTouched] = useState(false);
+  // Адрес, который диспетчер ввёл сам, адрес найденной по точке не заменяет.
+  const [addressTyped, setAddressTyped] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   // Точку из стора видит только диалог, начавший выбор; в форме она остаётся, даже когда карту займёт изменение заявки.
   const picking = pickMode && pickFor === 'urgent';
@@ -40,7 +46,33 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   }, [ownPoint]);
   const point = ownPoint ?? form.point;
 
+  // Адрес, который диалог сам подставил по точке из меню карты; null — такого адреса в поле нет.
+  const autoAddress = useRef<string | null>(null);
+  // Точка из меню карты: пока ищем её адрес, прежний найденный адрес к ней не относится; ничего не нашли — поле пустое.
+  useEffect(() => {
+    if (addressTyped || addressLookup === 'idle') return;
+    const address = addressLookup === 'done' ? (suggestedAddress ?? '') : '';
+    autoAddress.current = address || null;
+    setForm((prev) => ({ ...prev, address }));
+  }, [addressLookup, suggestedAddress, addressTyped]);
+
+  // Диспетчер указал на карте другую точку: подставленный адрес прежней точки к ней не относится и стирается.
+  const shownPoint = useRef(point);
+  useEffect(() => {
+    if (samePoint(shownPoint.current, point)) return;
+    shownPoint.current = point;
+    const stale = autoAddress.current;
+    autoAddress.current = null;
+    if (stale === null || addressTyped) return;
+    setForm((prev) => (prev.address === stale ? { ...prev, address: '' } : prev));
+  }, [point, addressTyped]);
+
   const update = <K extends keyof UrgentForm>(key: K, value: UrgentForm[K]) => setForm((prev) => ({ ...prev, [key]: value }));
+
+  const updateAddress = (value: string) => {
+    setAddressTyped(true);
+    update('address', value);
+  };
 
   const updateWindow = (key: 'windowStart' | 'windowEnd', value: string) => {
     setWindowTouched(true);
@@ -75,8 +107,9 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
         <h3>Срочная заявка</h3>
         <label className="field">
           <span>Адрес</span>
-          <input value={form.address} onChange={(event) => update('address', event.target.value)} placeholder="Город Москва, ул.Ташкентская, д. 16к2" />
+          <input value={form.address} onChange={(event) => updateAddress(event.target.value)} placeholder="Город Москва, ул.Ташкентская, д. 16к2" />
         </label>
+        {addressLookup === 'loading' && <p className="muted field-note">Ищем адрес…</p>}
         <div className="field-row">
           <button type="button" className="btn btn-small" onClick={() => startPick('urgent')} disabled={picking}>
             {picking ? 'Кликните по карте…' : 'Указать точку на карте'}

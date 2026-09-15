@@ -21,16 +21,21 @@ export function useMapModel(): MapModel | null {
   );
 }
 
-/** Клик по маркеру. В режиме выбора точки маркеры ничего не выбирают. */
+/** Клик по маркеру закрывает меню карты. В режиме выбора точки маркеры ничего не выбирают. */
 export function activateMarker(target: MarkerTarget): void {
-  const { pickMode, selectedEngineerId, selectRequest, selectEngineer } = useAppStore.getState();
+  const { pickMode, selectedEngineerId, selectRequest, selectEngineer, closeMapMenu } = useAppStore.getState();
+  closeMapMenu();
   if (pickMode) return;
   if (target.kind === 'request') selectRequest(target.requestId);
   if (target.kind === 'engineer') selectEngineer(selectedEngineerId === target.engineerId ? null : target.engineerId);
 }
 
-/** Клик по карте: в режиме выбора точки передаёт координаты форме срочной заявки. */
-export function pickPoint([lon, lat]: LngLat): void {
-  const { pickMode, finishPick } = useAppStore.getState();
+/**
+ * Клик по карте: в режиме выбора точки передаёт координаты диалогу, который начал выбор, иначе открывает меню карты.
+ * Меню открывается только по пустому месту: onEmptyPlace false у клика по маркеру или другому объекту карты.
+ */
+export function pickPoint([lon, lat]: LngLat, onEmptyPlace = true): void {
+  const { pickMode, finishPick, openMapMenu } = useAppStore.getState();
   if (pickMode) finishPick({ lon, lat });
+  else if (onEmptyPlace) openMapMenu({ lat, lon });
 }

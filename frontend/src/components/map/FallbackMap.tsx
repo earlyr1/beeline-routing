@@ -1,9 +1,12 @@
 import * as L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { MapMarker } from '../../lib/mapModel';
 import { toLatLng, toLatLngBounds } from '../../lib/mapView';
+import { useAppStore } from '../../store/useAppStore';
 import './fallbackMap.css';
+import { MAP_MENU_Z_INDEX, MapMenu } from './MapMenu';
 import { MapOverviewButton } from './MapOverviewButton';
 import { useMapLocation } from './useMapLocation';
 import { activateMarker, pickPoint, useMapModel } from './useMapModel';
@@ -30,6 +33,14 @@ function markerElement(marker: MapMarker): HTMLElement {
   return element;
 }
 
+/** Узел для меню карты: React рисует в него меню, Leaflet ставит его в маркер и не считает клики внутри кликами по карте. */
+function mapMenuContainer(): HTMLElement {
+  const element = document.createElement('div');
+  L.DomEvent.disableClickPropagation(element);
+  L.DomEvent.disableScrollPropagation(element);
+  return element;
+}
+
 function applyLocation(map: L.Map, location: MapLocation, animate: boolean): void {
   const options = { animate: animate && location.duration !== undefined, duration: (location.duration ?? 0) / 1000 };
   if ('bounds' in location) map.fitBounds(toLatLngBounds(location.bounds), options);
@@ -43,6 +54,8 @@ export function FallbackMap({ note, detail }: { note: string; detail?: string })
   const placedMap = useRef<L.Map | null>(null);
   const model = useMapModel();
   const { location, showWholePlan } = useMapLocation();
+  const mapMenu = useAppStore((s) => s.mapMenu);
+  const [menuElement] = useState(mapMenuContainer);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -51,6 +64,7 @@ export function FallbackMap({ note, detail }: { note: string; detail?: string })
     L.control.zoom({ zoomInTitle: 'Приблизить', zoomOutTitle: 'Отдалить' }).addTo(map);
     L.control.attribution({ prefix: false }).addTo(map);
     L.tileLayer(OSM_TILE_URL, { attribution: OSM_ATTRIBUTION, maxZoom: 19 }).addTo(map);
+    // Клик по маркеру до карты не доходит: у маркеров Leaflet клики не всплывают.
     map.on('click', (event: L.LeafletMouseEvent) => pickPoint([event.latlng.lng, event.latlng.lat]));
     // Высота карты меняется без resize окна, например когда появляется баннер изменений.
     const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => map.invalidateSize());
@@ -95,6 +109,19 @@ export function FallbackMap({ note, detail }: { note: string; detail?: string })
     }
   }, [scene, model]);
 
+  useEffect(() => {
+    if (!scene || !mapMenu) return;
+    const layer = L.marker(toLatLng([mapMenu.lon, mapMenu.lat]), {
+      icon: L.divIcon({ html: menuElement, className: 'fallback-map__icon', iconSize: undefined }),
+      zIndexOffset: MAP_MENU_Z_INDEX * Z_INDEX_STEP,
+      interactive: false,
+      keyboard: false,
+    }).addTo(scene.map);
+    return () => {
+      layer.remove();
+    };
+  }, [scene, mapMenu, menuElement]);
+
   return (
     <>
       {model && <MapOverviewButton onClick={showWholePlan} />}
@@ -104,6 +131,7 @@ export function FallbackMap({ note, detail }: { note: string; detail?: string })
           {note}
         </div>
       </div>
+      {createPortal(<MapMenu />, menuElement)}
     </>
   );
 }

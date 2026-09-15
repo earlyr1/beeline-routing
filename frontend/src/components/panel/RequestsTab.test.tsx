@@ -39,6 +39,13 @@ describe('RequestsTab', () => {
     expect(useAppStore.getState().selectedRequestId).toBeNull();
   });
 
+  it('opens the brigade page from the engineer of a row without selecting the row', () => {
+    useAppStore.setState({ selectedRequestId: '46393' });
+    render(<RequestsTab />);
+    fireEvent.click(within(rowOf('URG-001')).getByRole('button', { name: 'Бригада Белузин' }));
+    expect(useAppStore.getState()).toMatchObject({ selectedEngineerId: 'E02', selectedRequestId: null });
+  });
+
   it('selects a request on row click', () => {
     render(<RequestsTab />);
     fireEvent.click(rowOf('46393'));

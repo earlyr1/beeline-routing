@@ -1,21 +1,33 @@
 import { useState, type FormEvent } from 'react';
-import { busiestEngineerId, timeError, unavailableEvent, visitsFrom } from '../../lib/events';
-import { isValidTime, laterTime } from '../../lib/format';
+import type { PlanningState } from '../../api/types';
+import { busiestEngineerId, effectiveEventTime, timeError, unavailableEvent, visitsFrom } from '../../lib/events';
+import { isValidTime } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 
-export function EngineerUnavailableDialog({ onClose }: { onClose: () => void }) {
+/** Диалог «Инженер недоступен»: один на экран, открывается со страницы бригады для её инженера. */
+export function EngineerUnavailableDialog() {
   const state = useAppStore((s) => s.state);
+  const dialog = useAppStore((s) => s.engineerDialog);
+  if (!state || dialog?.kind !== 'unavailable') return null;
+  // Ключ по инженеру: кнопка на странице другой бригады заполняет форму заново.
+  return <UnavailableForm key={dialog.engineerId} state={state} chosenEngineerId={dialog.engineerId} />;
+}
+
+function UnavailableForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string }) {
   const eventTime = useAppStore((s) => s.eventTime);
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
-  const now = state?.now ?? '00:00';
-  const engineers = (state?.engineers ?? []).filter((engineer) => engineer.available);
-  const initialTime = isValidTime(eventTime) ? laterTime(eventTime, now) : now;
+  const closeEngineerDialog = useAppStore((s) => s.closeEngineerDialog);
+  const { now } = state;
+  const engineers = state.engineers.filter((engineer) => engineer.available);
+  const initialTime = effectiveEventTime(eventTime, now);
   const [time, setTime] = useState(initialTime);
-  // По умолчанию инженер, у которого больше всего визитов после этого времени: иначе событие ничего не изменит.
-  const busiest = (at: string) => (state ? busiestEngineerId(engineers, state.plan, at) : null) ?? '';
-  const [engineerId, setEngineerId] = useState(() => busiest(initialTime));
-  const [engineerTouched, setEngineerTouched] = useState(false);
+  // Инженер бригады мог уже стать недоступным: тогда предлагаем того, у кого больше всего визитов после этого времени.
+  const busiest = (at: string) => busiestEngineerId(engineers, state.plan, at) ?? '';
+  const chosenAvailable = engineers.some((engineer) => engineer.id === chosenEngineerId);
+  const [engineerId, setEngineerId] = useState(() => (chosenAvailable ? chosenEngineerId : busiest(initialTime)));
+  // Инженера со страницы бригады диспетчер уже выбрал сам, поэтому смена времени его не меняет.
+  const [engineerTouched, setEngineerTouched] = useState(chosenAvailable);
   const [error, setError] = useState<string | null>(null);
   const countTime = isValidTime(time) ? time : now;
 
@@ -29,11 +41,11 @@ export function EngineerUnavailableDialog({ onClose }: { onClose: () => void }) 
     const problem = engineerId ? timeError(time, now) : 'Выберите инженера';
     setError(problem);
     if (problem) return;
-    if (await applyEvent(unavailableEvent(engineerId, time))) onClose();
+    if (await applyEvent(unavailableEvent(engineerId, time))) closeEngineerDialog();
   };
 
   return (
-    <div className="dialog" role="dialog" aria-label="Инженер недоступен">
+    <div className="dialog dialog--floating" role="dialog" aria-label="Инженер недоступен">
       <form noValidate onSubmit={(event) => void submit(event)}>
         <h3>Инженер недоступен</h3>
         <label className="field">
@@ -47,7 +59,7 @@ export function EngineerUnavailableDialog({ onClose }: { onClose: () => void }) 
           >
             {engineers.map((engineer) => (
               <option key={engineer.id} value={engineer.id}>
-                {`${engineer.name} (визитов после ${countTime}: ${state ? visitsFrom(state.plan, engineer.id, countTime) : 0})`}
+                {`${engineer.name} (визитов после ${countTime}: ${visitsFrom(state.plan, engineer.id, countTime)})`}
               </option>
             ))}
           </select>
@@ -63,7 +75,7 @@ export function EngineerUnavailableDialog({ onClose }: { onClose: () => void }) 
           </p>
         )}
         <div className="dialog__actions">
-          <button type="button" className="btn btn-ghost" onClick={onClose}>
+          <button type="button" className="btn btn-ghost" onClick={closeEngineerDialog}>
             Отмена
           </button>
           <button type="submit" className="btn btn-primary" disabled={busy}>
