@@ -1,6 +1,7 @@
 import { useRef, useState, type DragEvent } from 'react';
 import type { GeocodePrecision } from '../api/types';
 import { MATRIX_SOURCE_LABELS, PRECISION_LABELS, STAGE_LABELS } from '../lib/format';
+import { MAX_WORKLOAD_LEVEL, MIN_WORKLOAD_LEVEL, WORKLOAD_LEVELS, travelBufferText, workloadLevel } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
 
 const PRECISIONS: GeocodePrecision[] = ['house', 'street', 'locality', 'none'];
@@ -11,6 +12,8 @@ export function UploadScreen() {
   const error = useAppStore((s) => s.error);
   const upload = useAppStore((s) => s.upload);
   const plan = useAppStore((s) => s.plan);
+  const level = useAppStore((s) => s.workloadLevel);
+  const setWorkloadLevel = useAppStore((s) => s.setWorkloadLevel);
   const inputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
@@ -30,6 +33,9 @@ export function UploadScreen() {
   const processing = status?.status === 'processing';
   const report = status?.report ?? null;
   const progress = status && status.progress.total > 0 ? Math.round((status.progress.done / status.progress.total) * 100) : 0;
+  // Пока файл обрабатывается, уровень можно менять: сервер получит его только вместе с «Спланировать».
+  const planning = busy && status?.status === 'ready';
+  const workload = workloadLevel(level);
 
   return (
     <main className="upload-screen">
@@ -136,6 +142,34 @@ export function UploadScreen() {
             )}
           </div>
         )}
+
+        <section className="workload" aria-labelledby="workload-title">
+          <h2 id="workload-title">Нагрузка инженеров</h2>
+          <div className="workload__scale">
+            <span className="workload__end" aria-hidden="true">
+              {WORKLOAD_LEVELS[MIN_WORKLOAD_LEVEL].emoji}
+            </span>
+            <input
+              type="range"
+              className="workload__range"
+              min={MIN_WORKLOAD_LEVEL}
+              max={MAX_WORKLOAD_LEVEL}
+              step={1}
+              value={workload.level}
+              aria-label="Нагрузка инженеров"
+              aria-valuetext={workload.title}
+              disabled={planning}
+              onChange={(event) => setWorkloadLevel(Number(event.target.value))}
+            />
+            <span className="workload__end" aria-hidden="true">
+              {WORKLOAD_LEVELS[MAX_WORKLOAD_LEVEL].emoji}
+            </span>
+          </div>
+          <p className="workload__summary" aria-live="polite">
+            {`${workload.emoji} ${workload.title}: ${workload.hint}`}
+          </p>
+          <p className="muted workload__buffer">{travelBufferText(workload.level)}</p>
+        </section>
 
         {status?.status === 'ready' && (
           <button type="button" className="btn btn-primary btn-large" onClick={() => void plan()} disabled={busy}>

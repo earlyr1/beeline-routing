@@ -74,8 +74,12 @@ export function uploadFile(file: File): Promise<DatasetStatus> {
 
 export const getDatasetStatus = (datasetId: string) => request<DatasetStatus>(dataset(datasetId));
 
-export const buildPlan = (datasetId: string) =>
-  request<PlanningState>(`${dataset(datasetId)}/plan`, { method: 'POST' });
+/** Построить план дня; без уровня нагрузки сервер оставляет уровень сессии. */
+export const buildPlan = (datasetId: string, workloadLevel?: number) =>
+  request<PlanningState>(
+    `${dataset(datasetId)}/plan`,
+    workloadLevel === undefined ? { method: 'POST' } : postJson({ workload_level: workloadLevel }),
+  );
 
 export const getPlanningState = (datasetId: string) => request<PlanningState>(`${dataset(datasetId)}/state`);
 

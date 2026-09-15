@@ -277,6 +277,81 @@ h4 {
   font-weight: 600;
 }
 
+/* Нагрузка инженеров */
+.workload {
+  margin: 20px 0;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.workload h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.workload__scale {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workload__end {
+  font-size: 26px;
+  line-height: 1;
+}
+
+.workload__range {
+  flex: 1;
+  min-width: 0;
+  height: 10px;
+  margin: 0;
+  border-radius: 5px;
+  background: linear-gradient(90deg, #12b76a 0%, #86cb3c 30%, #fdb022 55%, #f97316 78%, #d92d20 100%);
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+}
+
+.workload__range::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--text);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.workload__range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--text);
+  border-radius: 50%;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.workload__range:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+}
+
+.workload__range:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workload__summary {
+  margin: 12px 0 2px;
+  font-weight: 600;
+}
+
+.workload__buffer {
+  margin: 0;
+  font-size: 13px;
+}
+
 /* Основной экран */
 .app-shell {
   height: 100vh;
@@ -333,6 +408,12 @@ h4 {
 .metric__delta {
   font-size: 11px;
   color: var(--muted);
+}
+
+.metric--compact .metric__value {
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .metric--warn .metric__value {

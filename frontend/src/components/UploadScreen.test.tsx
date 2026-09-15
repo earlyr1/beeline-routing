@@ -45,6 +45,54 @@ describe('UploadScreen', () => {
     expect(screen.queryByRole('button', { name: 'Спланировать' })).not.toBeInTheDocument();
   });
 
+  it('lets the dispatcher set the workload level before the upload and plans the day with it', async () => {
+    vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus());
+    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0 }));
+    render(<UploadScreen />);
+
+    const slider = screen.getByRole('slider', { name: 'Нагрузка инженеров' });
+    expect(screen.getByRole('heading', { name: 'Нагрузка инженеров' })).toBeInTheDocument();
+    expect(slider).toHaveValue('2');
+    expect(slider).toHaveAttribute('min', '0');
+    expect(slider).toHaveAttribute('max', '4');
+    expect(slider).toHaveAttribute('step', '1');
+    expect(screen.getByText('😌')).toBeInTheDocument();
+    expect(screen.getByText('🥵')).toBeInTheDocument();
+    expect(screen.getByText('😐 Обычный день: Баланс между числом инженеров и пробегом')).toBeInTheDocument();
+    expect(screen.getByText('Запас на дорогу: +10%')).toBeInTheDocument();
+
+    fireEvent.change(slider, { target: { value: '4' } });
+    expect(useAppStore.getState().workloadLevel).toBe(4);
+    expect(screen.getByText('🥵 На пределе: Меньше инженеров, каждому больше заявок')).toBeInTheDocument();
+    expect(screen.getByText('Запас на дорогу: без запаса')).toBeInTheDocument();
+
+    fireEvent.change(slider, { target: { value: '0' } });
+    expect(screen.getByText('😌 Спокойный день: Больше инженеров, у каждого свободнее день')).toBeInTheDocument();
+    expect(screen.getByText('Запас на дорогу: +30%')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('file-input'), { target: { files: [new File(['x'], 'east.csv')] } });
+    expect(await screen.findByRole('heading', { name: 'Восток' })).toBeInTheDocument();
+    const planButton = screen.getByRole('button', { name: 'Спланировать' });
+    const sliderAfterUpload = screen.getByRole('slider', { name: 'Нагрузка инженеров' });
+    expect(sliderAfterUpload).toHaveValue('0');
+    expect(sliderAfterUpload.compareDocumentPosition(planButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(planButton);
+    await waitFor(() => expect(api.buildPlan).toHaveBeenCalledWith('d_test', 0));
+  });
+
+  it('blocks the workload slider only while the plan is being built', () => {
+    resetStore({ busy: true, datasetStatus: makeDatasetStatus({ status: 'processing', stage: 'geocoding', report: null }) });
+    const { unmount } = render(<UploadScreen />);
+    expect(screen.getByRole('slider', { name: 'Нагрузка инженеров' })).toBeEnabled();
+    unmount();
+
+    resetStore({ busy: true, datasetStatus: makeDatasetStatus() });
+    render(<UploadScreen />);
+    expect(screen.getByRole('button', { name: 'Считаем план…' })).toBeDisabled();
+    expect(screen.getByRole('slider', { name: 'Нагрузка инженеров' })).toBeDisabled();
+  });
+
   it('shows the backend error', () => {
     resetStore({ error: 'В файле нет колонок: Адрес' });
     render(<UploadScreen />);

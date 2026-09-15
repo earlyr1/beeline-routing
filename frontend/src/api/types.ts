@@ -253,6 +253,8 @@ export interface PlanningState {
   last_diff: PlanDiff | null;
   events: AppliedEvent[];
   matrix_source: MatrixSource;
+  /** Нагрузка инженеров сессии от 0 (спокойный день) до 4 (на пределе): её используют все расчёты дня. */
+  workload_level: number;
 }
 
 export interface RouteLeg {

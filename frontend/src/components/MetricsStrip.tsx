@@ -1,5 +1,6 @@
 import { formatKm, formatSigned } from '../lib/format';
 import { displayedPlan } from '../lib/planView';
+import { workloadLevel } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
 
 interface MetricProps {
@@ -7,11 +8,14 @@ interface MetricProps {
   value: string;
   delta?: string;
   warn?: boolean;
+  /** Мелкое значение для текстовых показателей, которые не должны спорить с числами. */
+  compact?: boolean;
+  title?: string;
 }
 
-function Metric({ label, value, delta, warn }: MetricProps) {
+function Metric({ label, value, delta, warn, compact, title }: MetricProps) {
   return (
-    <div className={`metric${warn ? ' metric--warn' : ''}`}>
+    <div className={`metric${warn ? ' metric--warn' : ''}${compact ? ' metric--compact' : ''}`} title={title}>
       <span className="metric__label">{label}</span>
       <span className="metric__value">{value}</span>
       {delta !== undefined && (
@@ -33,6 +37,7 @@ export function MetricsStrip() {
 
   const current = displayedPlan(state, showPrevious).metrics;
   const base = state.baseline.metrics;
+  const workload = workloadLevel(state.workload_level);
   return (
     <div className="metrics-strip">
       <div className="metrics-strip__title">
@@ -55,6 +60,12 @@ export function MetricsStrip() {
       />
       <Metric label="Назначено" value={String(current.assigned)} />
       <Metric label="Не назначено" value={String(current.unassigned)} warn={current.unassigned > 0} />
+      <Metric
+        label="Нагрузка"
+        value={`${workload.emoji} ${workload.title}`}
+        compact
+        title="Стоимость нового инженера для оптимизатора зависит от нагрузки дня"
+      />
       <div className="metrics-strip__actions">
         <button type="button" className="btn" onClick={() => void plan()} disabled={busy}>
           Пересчитать с нуля
