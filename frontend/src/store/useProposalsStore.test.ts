@@ -10,6 +10,7 @@ vi.mock('../api/client', async (importOriginal) => {
     rejectProposal: vi.fn(),
     approveAllProposals: vi.fn(),
     rejectAllProposals: vi.fn(),
+    moveCursor: vi.fn(),
   };
 });
 
@@ -50,6 +51,19 @@ describe('useProposalsStore', () => {
     expect(useProposalsStore.getState().proposals[0].status).toBe('approved');
     expect(useAppStore.getState().state?.version).toBe(5);
     expect(useProposalsStore.getState().working).toBe(false);
+  });
+
+  it('stops the playback without committing and puts the clock at the cursor of the approved plan', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '14:20', playing: true });
+    useProposalsStore.setState({ datasetId: 'd_test', proposals: [makeProposal()] });
+    vi.mocked(api.approveProposal).mockResolvedValue({
+      proposal: makeProposal({ status: 'approved' }),
+      state: makePlanningState({ version: 5, cursor: '14:30' }),
+    });
+    await useProposalsStore.getState().approve('pr_1');
+    expect(useAppStore.getState()).toMatchObject({ playing: false, clock: '14:30' });
+    expect(useAppStore.getState().state?.version).toBe(5);
+    expect(api.moveCursor).not.toHaveBeenCalled();
   });
 
   it('does not bring back the old plan after the dispatcher switched to another file', async () => {

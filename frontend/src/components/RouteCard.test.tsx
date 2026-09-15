@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { unavailableEvent } from '../lib/events';
+import { percent } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
-import { makeAsapState, makeDelayEvent, makePlanningState, makeTransportChangeEvent } from '../test/fixtures';
+import { makeAsapState, makeDelayEvent, makePlanningState, makeTimelineItem, makeTransportChangeEvent } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { RouteCard } from './RouteCard';
 
@@ -188,21 +190,30 @@ describe('RouteCard', () => {
     expect(within(timeline()).queryAllByRole('button')).toHaveLength(0);
   });
 
-  it('lists the applied events of this brigade newest first', () => {
+  it('lists the timeline events of this brigade newest first: applied, ahead and rejected', () => {
     const state = makePlanningState();
-    const events = [
-      ...state.events,
-      { id: 'ev_4', event: makeTransportChangeEvent(), version: 5 },
-      { id: 'ev_5', event: makeDelayEvent({ time: '14:00', engineer_id: 'E02' }), version: 6 },
-      { id: 'ev_6', event: makeDelayEvent({ time: '14:30' }), version: 7 },
+    const timeline = [
+      makeTimelineItem({ id: 'tl_1', event: makeTransportChangeEvent() }),
+      makeTimelineItem({ id: 'tl_2', event: makeDelayEvent({ time: '14:00', engineer_id: 'E02' }), status: 'pending' }),
+      makeTimelineItem({ id: 'tl_3', event: makeDelayEvent({ time: '14:30' }), status: 'pending' }),
+      makeTimelineItem({ id: 'tl_4', event: unavailableEvent('E01', '16:00'), status: 'rejected', reason: 'Инженер уже недоступен.' }),
     ];
-    resetStore({ datasetId: 'd_test', state: { ...state, events }, selectedEngineerId: 'E01' });
+    resetStore({ datasetId: 'd_test', state: { ...state, timeline }, selectedEngineerId: 'E01' });
     render(<RouteCard />);
     expect(within(card()).getByRole('heading', { name: 'События бригады' })).toBeInTheDocument();
     expect(listItems('События бригады')).toEqual([
-      '14:30 Задержка: Бригада Арташкин на 150 мин с 14:30',
-      '13:30 Смена транспорта: Бригада Арташкин, Автомобиль → Велосипед с 13:30',
+      '16:00 Инженер недоступен: Бригада Арташкин с 16:00 · отклонено: Инженер уже недоступен.',
+      '14:30 Задержка: Бригада Арташкин на 150 мин с 14:30 · впереди',
+      '13:30 Смена транспорта: Бригада Арташкин, Автомобиль → Велосипед с 13:30 · применено',
     ]);
+    expect(within(card()).getByText('· отклонено: Инженер уже недоступен.')).toHaveClass('brigade-events__status', 'brigade-events__status--rejected');
+    expect(within(card()).getByText('· впереди')).toHaveClass('brigade-events__status--pending');
+  });
+
+  it('draws the now line of the personal timeline at the clock of the day', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', clock: '15:00' });
+    render(<RouteCard />);
+    expect(timeline().querySelector('.timeline__now')).toHaveStyle({ left: `${percent({ from: 480, to: 1380 }, 900)}%` });
   });
 
   it('hides the events section of a brigade without events', () => {

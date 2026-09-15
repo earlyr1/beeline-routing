@@ -1,35 +1,35 @@
 import { useState, type FormEvent } from 'react';
-import type { PlanningState } from '../../api/types';
-import { busiestEngineerId, effectiveEventTime, timeError, unavailableEvent, visitsFrom } from '../../lib/events';
+import type { HHMM, PlanningState } from '../../api/types';
+import { beforeShiftsHint, busiestEngineerId, timeError, unavailableEvent, visitsFrom } from '../../lib/events';
 import { isValidTime } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 
-/** Диалог «Инженер недоступен»: один на экран, открывается со страницы бригады для её инженера. */
+/** Диалог «Инженер недоступен»: один на экран, открывается со страницы бригады и из меню часов дня («Инженер заболел»). */
 export function EngineerUnavailableDialog() {
   const state = useAppStore((s) => s.state);
   const dialog = useAppStore((s) => s.engineerDialog);
   if (!state || dialog?.kind !== 'unavailable') return null;
-  // Ключ по инженеру: кнопка на странице другой бригады заполняет форму заново.
-  return <UnavailableForm key={dialog.engineerId} state={state} chosenEngineerId={dialog.engineerId} />;
+  // Ключ по инженеру: кнопка на странице другой бригады или меню часов заполняет форму заново.
+  return <UnavailableForm key={dialog.engineerId ?? ''} state={state} chosenEngineerId={dialog.engineerId} />;
 }
 
-function UnavailableForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string }) {
-  const eventTime = useAppStore((s) => s.eventTime);
+function UnavailableForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string | null }) {
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const closeEngineerDialog = useAppStore((s) => s.closeEngineerDialog);
-  const { now } = state;
   const engineers = state.engineers.filter((engineer) => engineer.available);
-  const initialTime = effectiveEventTime(eventTime, now);
-  const [time, setTime] = useState(initialTime);
-  // Инженер бригады мог уже стать недоступным: тогда предлагаем того, у кого больше всего визитов после этого времени.
+  // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
+  const [initialTime] = useState<HHMM>(() => useAppStore.getState().clock);
+  const [time, setTime] = useState<HHMM>(initialTime);
+  // Диалог открыт с часов или бригада уже недоступна: предлагаем того, у кого больше всего визитов после этого времени.
   const busiest = (at: string) => busiestEngineerId(engineers, state.plan, at) ?? '';
   const chosenAvailable = engineers.some((engineer) => engineer.id === chosenEngineerId);
-  const [engineerId, setEngineerId] = useState(() => (chosenAvailable ? chosenEngineerId : busiest(initialTime)));
+  const [engineerId, setEngineerId] = useState(() => (chosenAvailable && chosenEngineerId ? chosenEngineerId : busiest(initialTime)));
   // Инженера со страницы бригады диспетчер уже выбрал сам, поэтому смена времени его не меняет.
   const [engineerTouched, setEngineerTouched] = useState(chosenAvailable);
   const [error, setError] = useState<string | null>(null);
-  const countTime = isValidTime(time) ? time : now;
+  const countTime = isValidTime(time) ? time : initialTime;
+  const hint = beforeShiftsHint(time, state.engineers);
 
   const changeTime = (value: string) => {
     setTime(value);
@@ -38,7 +38,7 @@ function UnavailableForm({ state, chosenEngineerId }: { state: PlanningState; ch
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const problem = engineerId ? timeError(time, now) : 'Выберите инженера';
+    const problem = engineerId ? timeError(time) : 'Выберите инженера';
     setError(problem);
     if (problem) return;
     if (await applyEvent(unavailableEvent(engineerId, time))) closeEngineerDialog();
@@ -66,8 +66,9 @@ function UnavailableForm({ state, chosenEngineerId }: { state: PlanningState; ch
         </label>
         <label className="field">
           <span>Недоступен с</span>
-          <input type="time" value={time} min={now} onChange={(event) => changeTime(event.target.value)} />
+          <input type="time" value={time} onChange={(event) => changeTime(event.target.value)} />
         </label>
+        {hint && <p className="muted field-note">{hint}</p>}
         <p className="muted">Начатые до этого времени работы останутся за инженером, остальные будут перераспределены.</p>
         {error && (
           <p className="error-text" role="alert">

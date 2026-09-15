@@ -1,5 +1,5 @@
 import type { Engineer, Plan, PlanningState, RouteLunch, ServiceRequest } from '../api/types';
-import { formatWindow, requestWindowPhrase, toMinutes } from './format';
+import { formatWindow, isValidTime, requestWindowPhrase, toMinutes } from './format';
 
 /** Ось по умолчанию 08:00–23:00, расширяется под данные, но не дальше 00:00–24:00. */
 export const AXIS_DEFAULT_FROM = 8 * 60;
@@ -62,6 +62,23 @@ export function timeScale(state: PlanningState, plan: Plan): TimeScale {
   const from = Math.max(0, Math.floor(Math.min(AXIS_DEFAULT_FROM, ...starts) / 60) * 60);
   const to = Math.min(AXIS_MAX, Math.ceil(Math.max(AXIS_DEFAULT_TO, ...ends) / 60) * 60);
   return { from, to: Math.max(to, from + 60) };
+}
+
+/**
+ * Шкала дня для часов, таймлайна и страницы бригады: шкала обоих планов, до и после события,
+ * расширенная до целых часов вокруг событий шкалы дня. Переключатель «До события» её не сдвигает.
+ */
+export function dayScale(state: PlanningState, plan: Plan): TimeScale {
+  const routes = [plan, state.plan, state.previous_plan].flatMap((item) => item?.routes ?? []);
+  const scale = timeScale(state, { ...plan, routes });
+  let { from, to } = scale;
+  for (const item of state.timeline ?? []) {
+    if (!isValidTime(item.event.time)) continue;
+    const minute = toMinutes(item.event.time);
+    from = Math.min(from, Math.floor(minute / 60) * 60);
+    to = Math.max(to, Math.ceil(minute / 60) * 60);
+  }
+  return { from: Math.max(0, from), to: Math.min(AXIS_MAX, Math.max(to, from + 60)) };
 }
 
 export function percent(scale: TimeScale, minutes: number): number {

@@ -1,11 +1,11 @@
 import { useState, type FormEvent } from 'react';
-import type { PlanningState, Transport } from '../../api/types';
+import type { HHMM, PlanningState, Transport } from '../../api/types';
 import {
+  beforeShiftsHint,
   busiestEngineerId,
   carDowngradeHint,
   carRequiredVisitsFrom,
   defaultNewTransport,
-  effectiveEventTime,
   timeError,
   transportChangeEvent,
   visitsFrom,
@@ -15,34 +15,34 @@ import { useAppStore } from '../../store/useAppStore';
 
 const TRANSPORTS = Object.keys(TRANSPORT_LABELS) as Transport[];
 
-/** Диалог «Смена транспорта»: один на экран, открывается со страницы бригады для её инженера. */
+/** Диалог «Смена транспорта»: один на экран, открывается со страницы бригады и из меню часов дня («Поломка транспорта»). */
 export function TransportChangeDialog() {
   const state = useAppStore((s) => s.state);
   const dialog = useAppStore((s) => s.engineerDialog);
   if (!state || dialog?.kind !== 'transport') return null;
-  // Ключ по инженеру: кнопка на странице другой бригады заполняет форму заново.
-  return <TransportForm key={dialog.engineerId} state={state} chosenEngineerId={dialog.engineerId} />;
+  // Ключ по инженеру: кнопка на странице другой бригады или меню часов заполняет форму заново.
+  return <TransportForm key={dialog.engineerId ?? ''} state={state} chosenEngineerId={dialog.engineerId} />;
 }
 
-function TransportForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string }) {
-  const eventTime = useAppStore((s) => s.eventTime);
+function TransportForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string | null }) {
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const closeEngineerDialog = useAppStore((s) => s.closeEngineerDialog);
-  const { now } = state;
   const engineers = state.engineers.filter((engineer) => engineer.available);
-  const initialTime = effectiveEventTime(eventTime, now);
-  const [time, setTime] = useState(initialTime);
-  // Инженер бригады мог стать недоступным: тогда предлагаем того, у кого больше всего визитов после этого времени.
+  // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
+  const [initialTime] = useState<HHMM>(() => useAppStore.getState().clock);
+  const [time, setTime] = useState<HHMM>(initialTime);
+  // Диалог открыт с часов или бригада стала недоступной: предлагаем того, у кого больше всего визитов после этого времени.
   const busiest = (at: string) => busiestEngineerId(engineers, state.plan, at) ?? '';
   const chosenAvailable = engineers.some((engineer) => engineer.id === chosenEngineerId);
-  const [engineerId, setEngineerId] = useState(() => (chosenAvailable ? chosenEngineerId : busiest(initialTime)));
+  const [engineerId, setEngineerId] = useState(() => (chosenAvailable && chosenEngineerId ? chosenEngineerId : busiest(initialTime)));
   // Инженера со страницы бригады диспетчер уже выбрал сам, поэтому смена времени его не меняет.
   const [engineerTouched, setEngineerTouched] = useState(chosenAvailable);
   // Пока диспетчер сам не выбрал транспорт, предлагаем вариант по умолчанию для текущего инженера.
   const [pickedTransport, setPickedTransport] = useState<Transport | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const countTime = isValidTime(time) ? time : now;
+  const countTime = isValidTime(time) ? time : initialTime;
+  const shiftsHint = beforeShiftsHint(time, state.engineers);
 
   const current = engineers.find((engineer) => engineer.id === engineerId)?.transport ?? null;
   const options = TRANSPORTS.filter((transport) => transport !== current);
@@ -64,7 +64,7 @@ function TransportForm({ state, chosenEngineerId }: { state: PlanningState; chos
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const problem = engineerId ? timeError(time, now) : 'Выберите инженера';
+    const problem = engineerId ? timeError(time) : 'Выберите инженера';
     setError(problem);
     if (problem) return;
     if (await applyEvent(transportChangeEvent(engineerId, transport, time))) closeEngineerDialog();
@@ -106,8 +106,9 @@ function TransportForm({ state, chosenEngineerId }: { state: PlanningState; chos
         </label>
         <label className="field">
           <span>Сменить с</span>
-          <input type="time" value={time} min={now} onChange={(event) => changeTime(event.target.value)} />
+          <input type="time" value={time} onChange={(event) => changeTime(event.target.value)} />
         </label>
+        {shiftsHint && <p className="muted field-note">{shiftsHint}</p>}
         <p className="muted">
           Начатые до этого времени визиты и текущий переезд останутся как запланированы, дальше маршрут считается на новом
           транспорте.

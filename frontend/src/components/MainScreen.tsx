@@ -9,6 +9,7 @@ import { TransportChangeDialog } from './events/TransportChangeDialog';
 import { MapView } from './map/MapView';
 import { MetricsStrip } from './MetricsStrip';
 import { RightPanel } from './panel/RightPanel';
+import { TimeBar } from './TimeBar';
 
 export function MainScreen() {
   const pickMode = useAppStore((s) => s.pickMode);
@@ -31,6 +32,7 @@ export function MainScreen() {
         <MetricsStrip />
         <EventToolbar />
       </header>
+      <TimeBar />
       <DiffBanner />
       <div className="workspace">
         <section className={`map-area${pickMode ? ' map-area--picking' : ''}`} aria-label="Карта">

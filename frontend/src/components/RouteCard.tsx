@@ -2,7 +2,8 @@ import { engineerColor } from '../lib/colors';
 import { describeEvent } from '../lib/events';
 import { formatDuration, formatKm, formatWindow, requestWindowText, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from '../lib/format';
 import { byId, displayedPlan, engineerIdsOf, routeRows, routeSummary, type RouteStop } from '../lib/planView';
-import { percent, timelineRow, timeScale } from '../lib/timeline';
+import { timelineStatusText } from '../lib/timeBar';
+import { dayScale, percent, timelineRow } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
 import { TimelineTicks, TimelineTrack } from './panel/TimelineTrack';
 
@@ -25,6 +26,7 @@ export function RouteCard() {
   const busy = useAppStore((s) => s.busy);
   const startDelay = useAppStore((s) => s.startDelay);
   const openEngineerDialog = useAppStore((s) => s.openEngineerDialog);
+  const clock = useAppStore((s) => s.clock);
   if (!state || !selectedEngineerId || selectedRequestId) return null;
   const plan = displayedPlan(state, showPrevious);
   const summary = routeSummary(state, plan, selectedEngineerId);
@@ -44,10 +46,11 @@ export function RouteCard() {
   const locked = busy || showPrevious;
   // Недоступному инженеру сервер не принимает ни задержку, ни смену транспорта, ни повторную недоступность.
   const unavailable = !engineer.available;
-  const scale = timeScale(state, plan);
+  // Та же шкала дня, что у часов: линия текущего времени стоит там же, где ползунок.
+  const scale = dayScale(state, plan);
   const row = timelineRow(state, plan, scale, engineer);
-  // Новые события в конце списка, а показываем с последнего.
-  const events = state.events.filter((item) => item.event.engineer_id === engineer.id).reverse();
+  // События шкалы дня в порядке применения, а показываем с последнего: применённые, впереди и отклонённые.
+  const events = (state.timeline ?? []).filter((item) => item.event.engineer_id === engineer.id).reverse();
   const engineers = byId(state.engineers);
 
   return (
@@ -101,7 +104,7 @@ export function RouteCard() {
           <TimelineTrack
             row={row}
             color={engineerColor(engineer.id, engineerIdsOf(state))}
-            nowLeft={percent(scale, toMinutes(state.now))}
+            nowLeft={percent(scale, toMinutes(clock))}
             selectedRequestId={null}
             onSelect={selectRequest}
           />
@@ -168,7 +171,10 @@ export function RouteCard() {
             {events.map((item) => (
               <li key={item.id}>
                 <span className="brigade-events__time">{item.event.time}</span>{' '}
-                <span>{describeEvent(item.event, engineers)}</span>
+                <span>
+                  {describeEvent(item.event, engineers)}{' '}
+                  <span className={`brigade-events__status brigade-events__status--${item.status}`}>{`· ${timelineStatusText(item)}`}</span>
+                </span>
               </li>
             ))}
           </ul>

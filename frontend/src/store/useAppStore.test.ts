@@ -10,16 +10,28 @@ vi.mock('../api/client', async (importOriginal) => {
     buildPlan: vi.fn(),
     getPlanningState: vi.fn(),
     postEvent: vi.fn(),
+    addTimelineEvent: vi.fn(),
+    deleteTimelineEvent: vi.fn(),
+    moveCursor: vi.fn(),
     getReverseGeocode: vi.fn(),
   };
 });
 
 import * as api from '../api/client';
-import type { DatasetStatus, PlanningState, ReverseGeocode } from '../api/types';
+import type { DatasetStatus, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
 import { cancelEvent } from '../lib/events';
-import { makeDatasetStatus, makePlanningState } from '../test/fixtures';
+import { makeDatasetStatus, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
-import { POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
+import { PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
+
+/** План на время дня cursor. */
+const at = (cursor: string, patch: Partial<PlanningState> = {}) => makePlanningState({ cursor, ...patch });
+
+/** Шкала дня, где событие tl_4 сервер отклонил, пока считал планы впереди. */
+const withRejectedDelay = (timeline: TimelineItem[]) =>
+  timeline.map((item) => (item.id === 'tl_4' ? { ...item, status: 'rejected' as const, reason: 'Инженер уже недоступен.' } : item));
+
+const REJECTED_DELAY = 'Событие Задержка: Бригада Арташкин на 150 мин с 15:00 отклонено: Инженер уже недоступен.';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -119,21 +131,18 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ error: 'В файле нет колонок: Адрес', busy: false });
   });
 
-  it('defaults event time to the middle of the day but never earlier than now', () => {
-    resetStore({ datasetId: 'd_test' });
-    expect(useAppStore.getState().eventTime).toBe('13:00');
-    useAppStore.getState().setPlanningState(makePlanningState({ now: '00:00' }));
-    expect(useAppStore.getState().eventTime).toBe('13:00');
-    useAppStore.getState().setPlanningState(makePlanningState({ now: '15:20' }));
-    expect(useAppStore.getState().eventTime).toBe('15:20');
+  it('has no event time of its own: the clock starts at the beginning of the day', () => {
+    expect(useAppStore.getState()).toMatchObject({ clock: '00:00', dragging: false, playing: false, committing: false });
+    expect(useAppStore.getState()).not.toHaveProperty('eventTime');
+    expect(useAppStore.getState()).not.toHaveProperty('setEventTime');
   });
 
-  it('builds a plan and keeps event time not earlier than now', async () => {
-    resetStore({ datasetId: 'd_test', eventTime: '10:00' });
-    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState());
+  it('builds a plan and puts the clock at the cursor of the new day', async () => {
+    resetStore({ datasetId: 'd_test', clock: '14:00' });
+    vi.mocked(api.buildPlan).mockResolvedValue(at('00:00'));
     await useAppStore.getState().plan();
     expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 1, lunch: true });
-    expect(useAppStore.getState()).toMatchObject({ eventTime: '13:00', showPrevious: false, busy: false });
+    expect(useAppStore.getState()).toMatchObject({ clock: '00:00', showPrevious: false, busy: false });
     expect(useAppStore.getState().state?.version).toBe(4);
   });
 
@@ -172,17 +181,20 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ state: null, workloadLevel: 2, lunchEnabled: false });
   });
 
-  it('applies an event and keeps the previous state on error', async () => {
+  it('adds an event to the timeline and keeps the previous state on error', async () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), showPrevious: true });
-    vi.mocked(api.postEvent).mockRejectedValueOnce(new api.ApiError(422, 'Время события раньше текущего'));
+    vi.mocked(api.addTimelineEvent).mockRejectedValueOnce(new api.ApiError(422, 'Заявка 50104 уже в работе с 12:00.'));
     expect(await useAppStore.getState().applyEvent(cancelEvent('50104', '12:00'))).toBe(false);
-    expect(useAppStore.getState().error).toBe('Время события раньше текущего');
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '12:00'));
+    expect(useAppStore.getState().error).toBe('Заявка 50104 уже в работе с 12:00.');
     expect(useAppStore.getState().state?.version).toBe(4);
 
-    vi.mocked(api.postEvent).mockResolvedValueOnce(makePlanningState({ version: 5 }));
+    vi.mocked(api.addTimelineEvent).mockResolvedValueOnce(makePlanningState({ version: 5 }));
     expect(await useAppStore.getState().applyEvent(cancelEvent('50104', '13:00'))).toBe(true);
     expect(useAppStore.getState()).toMatchObject({ showPrevious: false, error: null, busy: false });
     expect(useAppStore.getState().state?.version).toBe(5);
+    expect(api.postEvent).not.toHaveBeenCalled();
+    expect(api.moveCursor).not.toHaveBeenCalled();
   });
 
   it('ignores a plan response that arrives after «Другой файл»', async () => {
@@ -203,7 +215,7 @@ describe('useAppStore', () => {
   it('ignores an event response that arrives after a new upload started', async () => {
     resetStore({ datasetId: 'd_old', state: makePlanningState({ dataset_id: 'd_old' }) });
     const response = deferred<PlanningState>();
-    vi.mocked(api.postEvent).mockReturnValue(response.promise);
+    vi.mocked(api.addTimelineEvent).mockReturnValue(response.promise);
     const pending = useAppStore.getState().applyEvent(cancelEvent('50104', '13:00'));
 
     const uploaded = deferred<DatasetStatus>();
@@ -482,6 +494,15 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ pickFor: 'urgent', pickedPoint: point });
   });
 
+  it('opens the engineer dialogs without an engineer from the time bar', () => {
+    useAppStore.getState().startDelay(null);
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: null });
+    useAppStore.getState().openEngineerDialog('transport', null);
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, engineerDialog: { kind: 'transport', engineerId: null } });
+    useAppStore.getState().openEngineerDialog('unavailable', null);
+    expect(useAppStore.getState().engineerDialog).toEqual({ kind: 'unavailable', engineerId: null });
+  });
+
   it('falls back to an offline config and keeps config on reset', async () => {
     vi.mocked(api.getConfig).mockRejectedValue(new api.ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.'));
     await useAppStore.getState().loadConfig();
@@ -490,6 +511,327 @@ describe('useAppStore', () => {
     useAppStore.getState().reset();
     expect(useAppStore.getState().state).toBeNull();
     expect(useAppStore.getState().config).not.toBeNull();
+  });
+});
+
+describe('clock of the day', () => {
+  it('takes the clock from the cursor of every received state unless the dispatcher drags or plays', () => {
+    useAppStore.getState().setPlanningState(at('15:20'));
+    expect(useAppStore.getState().clock).toBe('15:20');
+    useAppStore.setState({ dragging: true });
+    useAppStore.getState().setPlanningState(at('16:00'));
+    expect(useAppStore.getState().clock).toBe('15:20');
+    useAppStore.setState({ dragging: false, playing: true });
+    useAppStore.getState().setPlanningState(at('16:30'));
+    expect(useAppStore.getState().clock).toBe('15:20');
+    useAppStore.setState({ playing: false });
+    useAppStore.getState().setPlanningState(at('16:30'));
+    expect(useAppStore.getState().clock).toBe('16:30');
+  });
+
+  it('moves the clock locally and asks the server for the plan only on commit', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00') });
+    useAppStore.getState().setClock('14:10');
+    expect(useAppStore.getState().clock).toBe('14:10');
+    expect(api.moveCursor).not.toHaveBeenCalled();
+
+    vi.mocked(api.moveCursor).mockResolvedValue(at('14:10', { version: 5 }));
+    await useAppStore.getState().commitClock();
+    expect(api.moveCursor).toHaveBeenCalledWith('d_test', '14:10');
+    expect(useAppStore.getState()).toMatchObject({ clock: '14:10', committing: false });
+    expect(useAppStore.getState().state?.version).toBe(5);
+
+    await useAppStore.getState().commitClock();
+    expect(api.moveCursor).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends one follow-up commit with the latest clock while a commit is in flight', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00'), clock: '14:10' });
+    const first = deferred<PlanningState>();
+    vi.mocked(api.moveCursor).mockReturnValueOnce(first.promise).mockResolvedValueOnce(at('14:40', { version: 6 }));
+    const done = useAppStore.getState().commitClock();
+    expect(useAppStore.getState().committing).toBe(true);
+    await vi.waitFor(() => expect(api.moveCursor).toHaveBeenCalledTimes(1));
+    for (const time of ['14:20', '14:30', '14:40']) {
+      useAppStore.getState().setClock(time);
+      void useAppStore.getState().commitClock();
+    }
+    expect(api.moveCursor).toHaveBeenCalledTimes(1);
+    first.resolve(at('14:10', { version: 5 }));
+    await done;
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([
+      ['d_test', '14:10'],
+      ['d_test', '14:40'],
+    ]);
+    expect(useAppStore.getState()).toMatchObject({ clock: '14:40', committing: false });
+    expect(useAppStore.getState().state?.version).toBe(6);
+  });
+
+  it('keeps the clock the dispatcher moved while a commit was on its way', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00'), clock: '14:10' });
+    const response = deferred<PlanningState>();
+    vi.mocked(api.moveCursor).mockReturnValueOnce(response.promise);
+    const done = useAppStore.getState().commitClock();
+    await vi.waitFor(() => expect(api.moveCursor).toHaveBeenCalledTimes(1));
+    useAppStore.getState().setClock('14:25');
+    response.resolve(at('14:10', { version: 5 }));
+    await done;
+    expect(useAppStore.getState().clock).toBe('14:25');
+    expect(api.moveCursor).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits the clock before an event and sends the event only after the commit in flight', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00'), clock: '14:10' });
+    const commit = deferred<PlanningState>();
+    vi.mocked(api.moveCursor).mockReturnValueOnce(commit.promise);
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(at('14:10', { version: 6 }));
+    const adding = useAppStore.getState().applyEvent(cancelEvent('50104', '14:10'));
+    expect(useAppStore.getState().busy).toBe(true);
+    await vi.waitFor(() => expect(api.moveCursor).toHaveBeenCalledWith('d_test', '14:10'));
+    expect(api.addTimelineEvent).not.toHaveBeenCalled();
+
+    commit.resolve(at('14:10', { version: 5 }));
+    expect(await adding).toBe(true);
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '14:10'));
+    expect(useAppStore.getState().state?.version).toBe(6);
+    expect(useAppStore.getState()).toMatchObject({ busy: false, committing: false, clock: '14:10' });
+  });
+
+  it('rebuilds the day without committing the clock and stops the playback', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00'), clock: '14:10', playing: true });
+    vi.mocked(api.buildPlan).mockResolvedValue(at('00:00', { version: 7 }));
+    const planning = useAppStore.getState().plan();
+    expect(useAppStore.getState().playing).toBe(false);
+    await planning;
+    expect(api.moveCursor).not.toHaveBeenCalled();
+    expect(useAppStore.getState()).toMatchObject({ clock: '00:00', busy: false });
+  });
+
+  it('deletes a timeline event and shows the plan the server returns', async () => {
+    const timeline = makeTimeline();
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline }) });
+    vi.mocked(api.deleteTimelineEvent)
+      .mockRejectedValueOnce(new api.ApiError(404, 'Событие tl_9 не найдено.'))
+      .mockResolvedValueOnce(at('13:00', { version: 5, timeline: timeline.slice(1) }));
+    expect(await useAppStore.getState().deleteTimelineEvent('tl_9')).toBe(false);
+    expect(useAppStore.getState()).toMatchObject({ error: 'Событие tl_9 не найдено.', busy: false });
+
+    expect(await useAppStore.getState().deleteTimelineEvent('tl_1')).toBe(true);
+    expect(api.deleteTimelineEvent).toHaveBeenLastCalledWith('d_test', 'tl_1');
+    expect(useAppStore.getState().state?.timeline.map((item) => item.id)).toEqual(['tl_2', 'tl_3', 'tl_4', 'tl_5']);
+    expect(useAppStore.getState()).toMatchObject({ error: null, busy: false });
+  });
+
+  it('tells the dispatcher about an event the server rejected since the previous plan', () => {
+    const timeline = makeTimeline();
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline }) });
+    useAppStore.getState().setPlanningState(at('13:00', { version: 5, timeline: withRejectedDelay(timeline) }));
+    expect(useAppStore.getState().error).toBe(REJECTED_DELAY);
+
+    useAppStore.getState().clearError();
+    useAppStore.getState().setPlanningState(at('13:00', { version: 6, timeline: withRejectedDelay(timeline) }));
+    expect(useAppStore.getState().error).toBeNull();
+  });
+
+  it('remembers how many events a move applied and whether the clock went back across events', () => {
+    const pending = makeTimeline().map((item) => (item.status === 'applied' ? { ...item, status: 'pending' as const } : item));
+    const applied = (ids: string[]) => pending.map((item) => (ids.includes(item.id) ? { ...item, status: 'applied' as const } : item));
+    useAppStore.getState().setPlanningState(at('08:00', { timeline: pending }));
+    expect(useAppStore.getState().timelineMove).toEqual({ applied: 0, back: false });
+    useAppStore.getState().setPlanningState(at('15:30', { timeline: applied(['tl_1', 'tl_2', 'tl_3', 'tl_4']) }));
+    expect(useAppStore.getState().timelineMove).toEqual({ applied: 4, back: false });
+    useAppStore.getState().setPlanningState(at('13:30', { timeline: applied(['tl_1', 'tl_2', 'tl_3']) }));
+    expect(useAppStore.getState().timelineMove).toEqual({ applied: 0, back: true });
+    useAppStore.getState().setPlanningState(at('15:30', { dataset_id: 'd_other', timeline: applied(['tl_1', 'tl_2', 'tl_3', 'tl_4']) }));
+    expect(useAppStore.getState().timelineMove).toEqual({ applied: 0, back: false });
+  });
+});
+
+describe('playback of the day', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it('plays ten minutes of the day per second from the clock without asking the server', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00'), showPrevious: true });
+    useAppStore.getState().play();
+    expect(useAppStore.getState()).toMatchObject({ playing: true, showPrevious: false });
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS);
+    expect(useAppStore.getState().clock).toBe('13:01');
+    await vi.advanceTimersByTimeAsync(900);
+    expect(useAppStore.getState().clock).toBe('13:10');
+    expect(api.moveCursor).not.toHaveBeenCalled();
+
+    vi.mocked(api.moveCursor).mockResolvedValue(at('13:10', { version: 5 }));
+    useAppStore.getState().pause();
+    expect(useAppStore.getState().playing).toBe(false);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(useAppStore.getState().clock).toBe('13:10');
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '13:10']]);
+    expect(useAppStore.getState().state?.version).toBe(5);
+  });
+
+  it('stops at an event ahead, commits the plan at its minute and plays on once the plan arrives', async () => {
+    const timeline = [
+      makeTimelineItem({ id: 'tl_1', event: cancelEvent('50104', '13:02'), status: 'rejected', reason: 'Заявка уже отменена.' }),
+      makeTimelineItem({ id: 'tl_2', event: cancelEvent('46393', '13:04'), status: 'pending' }),
+    ];
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline }) });
+    const commit = deferred<PlanningState>();
+    vi.mocked(api.moveCursor).mockReturnValueOnce(commit.promise);
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 4);
+    expect(useAppStore.getState().clock).toBe('13:04');
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '13:04']]);
+
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 5);
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:04', playing: true, committing: true });
+
+    const applied = timeline.map((item) => (item.id === 'tl_2' ? { ...item, status: 'applied' as const } : item));
+    commit.resolve(at('13:04', { version: 5, timeline: applied }));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 2);
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:06', playing: true, committing: false });
+    expect(useAppStore.getState().state?.version).toBe(5);
+    expect(api.moveCursor).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops at the end of the day scale and commits the last minute', async () => {
+    resetStore({ datasetId: 'd_test', state: at('22:55') });
+    vi.mocked(api.moveCursor).mockResolvedValue(at('23:00', { version: 5 }));
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 20);
+    expect(useAppStore.getState()).toMatchObject({ clock: '23:00', playing: false, committing: false });
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '23:00']]);
+  });
+
+  it('commits a clock the server has not seen before playing', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00'), clock: '14:00' });
+    vi.mocked(api.moveCursor).mockResolvedValue(at('14:00', { version: 5 }));
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.moveCursor).toHaveBeenCalledWith('d_test', '14:00');
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS);
+    expect(useAppStore.getState().clock).toBe('14:01');
+  });
+
+  it('starts from the beginning of the day scale where the slider stands when the clock is earlier', async () => {
+    resetStore({ datasetId: 'd_test', state: at('00:00') });
+    vi.mocked(api.moveCursor).mockResolvedValue(at('08:00', { version: 5 }));
+    useAppStore.getState().play();
+    expect(useAppStore.getState().clock).toBe('08:00');
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS);
+    expect(api.moveCursor).toHaveBeenCalledWith('d_test', '08:00');
+    expect(useAppStore.getState().clock).toBe('08:01');
+  });
+
+  it('stops the playback and shows the error when a commit fails', async () => {
+    const timeline = [makeTimelineItem({ id: 'tl_2', event: cancelEvent('46393', '13:02'), status: 'pending' })];
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline }) });
+    vi.mocked(api.moveCursor).mockRejectedValue(new api.ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.'));
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 5);
+    expect(useAppStore.getState()).toMatchObject({
+      playing: false,
+      committing: false,
+      clock: '13:02',
+      error: 'Сервер недоступен. Проверьте, что backend запущен.',
+    });
+  });
+
+  it('stops without committing when the day is rebuilt and forgets the playback on «Другой файл»', async () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00') });
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 2);
+    useAppStore.getState().stopPlayback();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 5);
+    expect(useAppStore.getState()).toMatchObject({ playing: false, clock: '13:02' });
+    expect(api.moveCursor).not.toHaveBeenCalled();
+
+    useAppStore.getState().play();
+    useAppStore.getState().reset();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 5);
+    expect(useAppStore.getState()).toMatchObject({ playing: false, clock: '00:00', state: null });
+  });
+});
+
+describe('dragging the clock', () => {
+  it('pauses the playback, shows the plan after the event and commits only on release', async () => {
+    vi.useFakeTimers();
+    resetStore({ datasetId: 'd_test', state: at('13:00') });
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 3);
+    useAppStore.setState({ showPrevious: true });
+
+    useAppStore.getState().startDrag();
+    expect(useAppStore.getState()).toMatchObject({ dragging: true, playing: false, showPrevious: false, clock: '13:03' });
+    for (const time of ['14:00', '15:00', '15:30']) useAppStore.getState().setClock(time);
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 3);
+    expect(useAppStore.getState().clock).toBe('15:30');
+    expect(api.moveCursor).not.toHaveBeenCalled();
+
+    vi.mocked(api.moveCursor).mockResolvedValue(at('15:30', { version: 5 }));
+    useAppStore.getState().endDrag();
+    expect(useAppStore.getState().dragging).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '15:30']]);
+
+    // Отпущенный указатель приходит и как pointerup, и как lostpointercapture: второй раз ничего не отправляется.
+    useAppStore.getState().endDrag();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.moveCursor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('events being prepared on the server', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  it('polls until every event is prepared and merges only the timeline, keeping the view', async () => {
+    const timeline = makeTimeline();
+    const preparing = at('13:00', { timeline, timeline_ready: false });
+    resetStore({ datasetId: 'd_test' });
+    useAppStore.getState().setPlanningState(preparing);
+    useAppStore.setState({ showPrevious: true, selectedRequestId: '50104' });
+    vi.mocked(api.getPlanningState)
+      .mockResolvedValueOnce(preparing)
+      .mockResolvedValueOnce(at('13:00', { timeline: withRejectedDelay(timeline), timeline_ready: true, now: '09:00' }));
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(api.getPlanningState).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().state?.timeline_ready).toBe(false);
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(api.getPlanningState).toHaveBeenCalledTimes(2);
+    expect(api.getPlanningState).toHaveBeenCalledWith('d_test');
+    expect(useAppStore.getState().state).toMatchObject({ timeline_ready: true, timeline: withRejectedDelay(timeline), now: '13:00' });
+    expect(useAppStore.getState()).toMatchObject({ showPrevious: true, selectedRequestId: '50104', error: REJECTED_DELAY });
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    expect(api.getPlanningState).toHaveBeenCalledTimes(2);
+  });
+
+  it('waits with the poll while the dispatcher drags the clock', async () => {
+    resetStore({ datasetId: 'd_test' });
+    useAppStore.getState().setPlanningState(at('13:00', { timeline_ready: false }));
+    useAppStore.setState({ dragging: true });
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS * 3);
+    expect(api.getPlanningState).not.toHaveBeenCalled();
+
+    vi.mocked(api.getPlanningState).mockResolvedValue(at('13:00', { timeline_ready: true }));
+    useAppStore.setState({ dragging: false });
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(api.getPlanningState).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().state?.timeline_ready).toBe(true);
+  });
+
+  it('does not merge the timeline of another plan', async () => {
+    resetStore({ datasetId: 'd_test' });
+    useAppStore.getState().setPlanningState(at('13:00', { timeline_ready: false }));
+    vi.mocked(api.getPlanningState).mockResolvedValue(at('14:00', { version: 9, timeline: makeTimeline(), timeline_ready: true }));
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    expect(api.getPlanningState).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().state).toMatchObject({ version: 4, cursor: '13:00', timeline: [], timeline_ready: false });
   });
 });
 

@@ -8,7 +8,7 @@ import { RequestsTab } from './RequestsTab';
 const rowOf = (requestId: string) => screen.getByText(requestId).closest('li') as HTMLElement;
 
 beforeEach(() => {
-  resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:30' });
+  resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:30' });
 });
 
 describe('RequestsTab', () => {
@@ -90,7 +90,7 @@ describe('RequestsTab', () => {
   });
 
   it('shows «как можно скорее» with the start of waiting instead of the window and a badge next to «Срочная»', () => {
-    resetStore({ datasetId: 'd_test', state: makeAsapState(), eventTime: '13:30' });
+    resetStore({ datasetId: 'd_test', state: makeAsapState(), clock: '13:30' });
     render(<RequestsTab />);
     const asap = rowOf('URG-002');
     expect(within(asap).getByText('Как можно скорее с 13:00')).toBeInTheDocument();

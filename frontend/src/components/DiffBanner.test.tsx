@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useAppStore } from '../store/useAppStore';
 import { makeDelayedState, makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
@@ -76,11 +76,52 @@ describe('DiffBanner', () => {
     expect(screen.queryByText(/Изменён порядок/)).not.toBeInTheDocument();
   });
 
-  it('switches between the plan before and after the event', () => {
+  it('says that a move applied several events and shows the changes of the last one', () => {
+    resetStore({ state: makePlanningState(), timelineMove: { applied: 3, back: false } });
+    const view = render(<DiffBanner />);
+    expect(screen.getByText('Срочная заявка URG-001 в 13:00')).toBeInTheDocument();
+    expect(screen.getByText('Применено событий: 3, изменения показаны для последнего')).toBeInTheDocument();
+    view.unmount();
+
+    resetStore({ state: makePlanningState(), timelineMove: { applied: 1, back: false } });
     render(<DiffBanner />);
-    fireEvent.click(screen.getByRole('button', { name: 'До события' }));
+    expect(screen.queryByText(/Применено событий/)).not.toBeInTheDocument();
+  });
+
+  it('titles a move back across events with the time of the plan', () => {
+    resetStore({ state: makePlanningState({ cursor: '13:40' }), timelineMove: { applied: 0, back: true } });
+    render(<DiffBanner />);
+    expect(screen.getByText('План на 13:40')).toBeInTheDocument();
+    expect(screen.getByText('Изменения показаны для события: Срочная заявка URG-001 в 13:00')).toBeInTheDocument();
+  });
+
+  it('stays hidden while the clock plays or is dragged', () => {
+    for (const patch of [{ playing: true }, { dragging: true }]) {
+      resetStore({ state: makePlanningState(), ...patch });
+      const view = render(<DiffBanner />);
+      expect(view.container).toBeEmptyDOMElement();
+      view.unmount();
+    }
+  });
+
+  it('remembers every dismissed plan while the clock moves between plans', () => {
+    render(<DiffBanner />);
+    fireEvent.click(screen.getByRole('button', { name: 'Скрыть' }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    act(() => useAppStore.setState({ state: makePlanningState({ version: 5 }) }));
+    expect(screen.getByRole('status')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Скрыть' }));
+    act(() => useAppStore.setState({ state: makePlanningState({ version: 4 }) }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    act(() => useAppStore.setState({ state: makePlanningState({ version: 5 }) }));
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('switches between the plan before and after the event labelled with the time of the last applied event', () => {
+    render(<DiffBanner />);
+    fireEvent.click(screen.getByRole('button', { name: 'До события 13:00' }));
     expect(useAppStore.getState().showPrevious).toBe(true);
-    expect(screen.getByRole('button', { name: 'До события' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'До события 13:00' })).toHaveAttribute('aria-pressed', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Скрыть' }));
     expect(useAppStore.getState().showPrevious).toBe(false);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();

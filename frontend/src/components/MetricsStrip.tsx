@@ -31,6 +31,9 @@ export function MetricsStrip() {
   const state = useAppStore((s) => s.state);
   const showPrevious = useAppStore((s) => s.showPrevious);
   const busy = useAppStore((s) => s.busy);
+  const clock = useAppStore((s) => s.clock);
+  // Пересчёт с нуля ставит часы на начало дня: пока часы идут или план переходит на их время, он недоступен.
+  const clockBusy = useAppStore((s) => s.playing || s.committing);
   const plan = useAppStore((s) => s.plan);
   const reset = useAppStore((s) => s.reset);
   if (!state) return null;
@@ -42,7 +45,7 @@ export function MetricsStrip() {
       <div className="metrics-strip__title">
         <strong>{state.office.title}</strong>
         <span className="muted">
-          Сейчас {state.now}
+          Сейчас {clock}
           {showPrevious ? ' · показан план до события' : ''}
         </span>
       </div>
@@ -66,7 +69,7 @@ export function MetricsStrip() {
         title="Стоимость нового инженера для оптимизатора зависит от нагрузки дня"
       />
       <div className="metrics-strip__actions">
-        <button type="button" className="btn" onClick={() => void plan()} disabled={busy}>
+        <button type="button" className="btn" onClick={() => void plan()} disabled={busy || clockBusy}>
           Пересчитать с нуля
         </button>
         <button

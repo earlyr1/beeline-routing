@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import type { HHMM, Priority, ServiceRequest, Skill, Transport } from '../../api/types';
+import type { Engineer, Priority, ServiceRequest, Skill, Transport } from '../../api/types';
 import {
+  beforeShiftsHint,
   requestChanges,
   requestEditForm,
   requestUpdateEvent,
@@ -8,7 +9,7 @@ import {
   validateRequestEdit,
   type RequestEditForm,
 } from '../../lib/events';
-import { isValidTime, laterTime, PRIORITY_LABELS, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
+import { PRIORITY_LABELS, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { AsapToggle } from './AsapToggle';
 
@@ -23,11 +24,10 @@ export function RequestEditDialog() {
   const request = state?.requests.find((item) => item.id === editingRequestId);
   if (!state || !request) return null;
   // Ключ по номеру: при переходе к другой заявке форма заполняется заново.
-  return <EditRequestForm key={request.id} original={request} now={state.now} />;
+  return <EditRequestForm key={request.id} original={request} engineers={state.engineers} />;
 }
 
-function EditRequestForm({ original, now }: { original: ServiceRequest; now: HHMM }) {
-  const eventTime = useAppStore((s) => s.eventTime);
+function EditRequestForm({ original, engineers }: { original: ServiceRequest; engineers: Engineer[] }) {
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const pickMode = useAppStore((s) => s.pickMode);
@@ -36,7 +36,8 @@ function EditRequestForm({ original, now }: { original: ServiceRequest; now: HHM
   const startPick = useAppStore((s) => s.startPick);
   const closeEdit = useAppStore((s) => s.closeEdit);
   const [form, setForm] = useState<RequestEditForm>(() => requestEditForm(original));
-  const [time, setTime] = useState(() => (isValidTime(eventTime) ? laterTime(eventTime, now) : now));
+  // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
+  const [time, setTime] = useState(() => useAppStore.getState().clock);
   const [errors, setErrors] = useState<string[]>([]);
   // Точку с карты хранит стор, но видит её только этот диалог, если выбор начал он; в форме она остаётся и после.
   const picking = pickMode && pickFor === 'edit';
@@ -47,13 +48,14 @@ function EditRequestForm({ original, now }: { original: ServiceRequest; now: HHM
   const point = ownPoint ?? form.point;
   const candidate: RequestEditForm = { ...form, point };
   const changes = requestChanges(original, updatedRequest(original, candidate));
+  const hint = beforeShiftsHint(time, engineers);
 
   const update = <K extends keyof RequestEditForm>(key: K, value: RequestEditForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const found = validateRequestEdit(original, candidate, time, now);
+    const found = validateRequestEdit(original, candidate, time);
     setErrors(found);
     if (found.length > 0) return;
     if (await applyEvent(requestUpdateEvent(original, candidate, time))) closeEdit();
@@ -139,9 +141,10 @@ function EditRequestForm({ original, now }: { original: ServiceRequest; now: HHM
           </label>
           <label className="field">
             <span>Время события</span>
-            <input type="time" value={time} min={now} onChange={(event) => setTime(event.target.value)} />
+            <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
           </label>
         </div>
+        {hint && <p className="muted field-note">{hint}</p>}
         {changes.length > 0 && <p className="muted">{`Изменится: ${changes.join(', ')}`}</p>}
         {errors.length > 0 && (
           <ul className="error-list" role="alert">

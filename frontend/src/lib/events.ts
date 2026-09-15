@@ -50,10 +50,19 @@ export interface RequestEditForm {
 
 type VisitFields = Pick<UrgentForm, 'address' | 'point' | 'windowStart' | 'windowEnd' | 'durationMin' | 'asap'>;
 
-export function timeError(time: string, now: HHMM): string | null {
-  if (!isValidTime(time)) return 'Укажите время в формате ЧЧ:ММ';
-  if (toMinutes(time) < toMinutes(now)) return `Время события не может быть раньше ${now}`;
-  return null;
+/** Время события проверяется только по формату: событие ставится на шкалу дня в любое время, и раньше часов тоже. */
+export function timeError(time: string): string | null {
+  return isValidTime(time) ? null : 'Укажите время в формате ЧЧ:ММ';
+}
+
+/** Подсказка в диалогах события: событие раньше всех смен сервер применяет, пересчитывая весь день. */
+export const BEFORE_SHIFTS_HINT = 'Событие до начала смен: план дня пересчитается целиком';
+
+/** Подсказка для события раньше самой ранней смены доступных инженеров; null, если событие внутри дня или время неверное. */
+export function beforeShiftsHint(time: string, engineers: Engineer[]): string | null {
+  const dayStart = earliestShiftStart(engineers);
+  if (dayStart === null || !isValidTime(time)) return null;
+  return toMinutes(time) < toMinutes(dayStart) ? BEFORE_SHIFTS_HINT : null;
 }
 
 /** Проверки окна визита; окно заявки «как можно скорее» задаёт сервер, его поля скрыты и не проверяются. */
@@ -72,9 +81,9 @@ function visitErrors(form: VisitFields): string[] {
   return errors;
 }
 
-export function validateUrgentForm(form: UrgentForm, now: HHMM): string[] {
+export function validateUrgentForm(form: UrgentForm): string[] {
   const errors = visitErrors(form);
-  const time = timeError(form.time, now);
+  const time = timeError(form.time);
   if (time) errors.push(time);
   return errors;
 }
@@ -141,24 +150,20 @@ export function carDowngradeHint(count: number, time: HHMM): string {
 }
 
 /**
- * Работа по заявке уже началась: визит закреплён в плане, и заявка не отменена.
+ * Работа по заявке уже началась к времени на часах: визит закреплён в плане или начался раньше часов, и заявка не отменена.
+ * Правило то же, что у сервера: визит, который начинается ровно в это время, ещё не начат.
  * Такую заявку нельзя ни отменить, ни изменить; визит, к которому инженер только едет, не закреплён.
  */
-export function isWorkStarted(request: ServiceRequest, visit: Visit | undefined): boolean {
-  return Boolean(visit?.pinned) && request.status !== 'cancelled';
-}
-
-/** Время события из панели: не раньше текущего времени плана, а вместо неверного значения текущее время. */
-export function effectiveEventTime(eventTime: string, now: HHMM): HHMM {
-  return isValidTime(eventTime) ? laterTime(eventTime, now) : now;
+export function isWorkStarted(request: ServiceRequest, visit: Visit | undefined, clock: HHMM): boolean {
+  if (!visit || request.status === 'cancelled') return false;
+  return visit.pinned || toMinutes(visit.start) < toMinutes(clock);
 }
 
 export interface RequestActionContext {
   busy: boolean;
   showPrevious: boolean;
-  /** Время события из панели, как его ввёл диспетчер. */
-  eventTime: string;
-  now: HHMM;
+  /** Время на часах шкалы дня: в это время ставятся отмена и возврат. */
+  clock: HHMM;
 }
 
 /** Кнопки «Изменить» и «Отменить» или «Вернуть» у заявки: одно правило для списка заявок и карточки заявки. */
@@ -177,11 +182,11 @@ export interface RequestActionState {
 export function requestActionState(
   request: ServiceRequest,
   visit: Visit | undefined,
-  { busy, showPrevious, eventTime, now }: RequestActionContext,
+  { busy, showPrevious, clock }: RequestActionContext,
 ): RequestActionState {
   const cancelled = request.status === 'cancelled';
-  const started = isWorkStarted(request, visit);
-  const time = effectiveEventTime(eventTime, now);
+  const started = isWorkStarted(request, visit, clock);
+  const time = clock;
   return {
     cancelled,
     disabled: busy || showPrevious || started,
@@ -311,9 +316,9 @@ export function requestChanges(prev: ServiceRequest, next: ServiceRequest): stri
 }
 
 /** Проверки формы изменения: как у срочной заявки и отказ, если в заявке ничего не поменялось. */
-export function validateRequestEdit(original: ServiceRequest, form: RequestEditForm, time: HHMM, now: HHMM): string[] {
+export function validateRequestEdit(original: ServiceRequest, form: RequestEditForm, time: HHMM): string[] {
   const errors = visitErrors(form);
-  const timeProblem = timeError(time, now);
+  const timeProblem = timeError(time);
   if (timeProblem) errors.push(timeProblem);
   else if (requestChanges(original, updatedRequest(original, form)).length === 0) errors.push('Ничего не изменилось');
   return errors;
