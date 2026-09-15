@@ -1,5 +1,8 @@
-import type { Engineer, HHMM, PlanEvent, ServiceRequest, Skill, Transport } from '../api/types';
-import { isValidTime, toMinutes } from './format';
+import type { Engineer, HHMM, Plan, PlanEvent, ServiceRequest, Skill, Transport } from '../api/types';
+import { addMinutes, isValidTime, laterTime, toMinutes } from './format';
+
+/** Длина окна срочной заявки по умолчанию, минут. */
+export const URGENT_WINDOW_MIN = 120;
 
 export interface PickedPoint {
   lat: number;
@@ -35,6 +38,39 @@ export function validateUrgentForm(form: UrgentForm, now: HHMM): string[] {
   const time = timeError(form.time, now);
   if (time) errors.push(time);
   return errors;
+}
+
+/** Самое раннее начало смены среди доступных инженеров; null, если доступных нет. */
+export function earliestShiftStart(engineers: Engineer[]): HHMM | null {
+  let earliest: HHMM | null = null;
+  for (const engineer of engineers) {
+    if (!engineer.available) continue;
+    if (earliest === null || toMinutes(engineer.shift_start) < toMinutes(earliest)) earliest = engineer.shift_start;
+  }
+  return earliest;
+}
+
+/** Окно срочной заявки по умолчанию: с времени события, но не раньше начала смен, длиной два часа. */
+export function defaultUrgentWindow(time: HHMM, engineers: Engineer[]): Pick<UrgentForm, 'windowStart' | 'windowEnd'> {
+  const dayStart = earliestShiftStart(engineers);
+  const windowStart = dayStart === null ? time : laterTime(time, dayStart);
+  return { windowStart, windowEnd: addMinutes(windowStart, URGENT_WINDOW_MIN) };
+}
+
+/** Сколько визитов инженера в плане начинаются в указанное время или позже. */
+export function visitsFrom(plan: Plan, engineerId: string, time: HHMM): number {
+  const from = toMinutes(time);
+  const route = plan.routes.find((item) => item.engineer_id === engineerId);
+  return route ? route.visits.filter((visit) => toMinutes(visit.start) >= from).length : 0;
+}
+
+/** Доступный инженер с наибольшим числом визитов после указанного времени; при равенстве первый по имени. */
+export function busiestEngineerId(engineers: Engineer[], plan: Plan, time: HHMM): string | null {
+  const ranked = engineers
+    .filter((engineer) => engineer.available)
+    .map((engineer) => ({ engineer, visits: visitsFrom(plan, engineer.id, time) }))
+    .sort((a, b) => b.visits - a.visits || a.engineer.name.localeCompare(b.engineer.name, 'ru'));
+  return ranked[0]?.engineer.id ?? null;
 }
 
 export function newUrgentId(timestamp: number): string {

@@ -637,6 +637,18 @@ h4 {
   font-weight: 500;
 }
 
+.route-card td .badge {
+  margin-left: 6px;
+}
+
+.route-card__row {
+  cursor: pointer;
+}
+
+.route-card__row:hover {
+  background: #f7f8fa;
+}
+
 .checks,
 .factors {
   margin: 8px 0;

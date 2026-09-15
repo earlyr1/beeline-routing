@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { addMinutes, formatKm, formatSigned, fromMinutes, isValidTime, laterTime, shortAddress, toMinutes } from './format';
+import {
+  addMinutes,
+  formatDuration,
+  formatKm,
+  formatSigned,
+  fromMinutes,
+  isValidTime,
+  laterTime,
+  shortAddress,
+  toMinutes,
+} from './format';
 
 describe('format', () => {
   it('converts HH:MM to minutes and back', () => {
@@ -32,6 +42,13 @@ describe('format', () => {
     expect(formatSigned(-2)).toBe('−2');
     expect(formatSigned(3.25, 1)).toBe('+3,3');
     expect(formatSigned(-0.01, 1)).toBe('0');
+  });
+
+  it('formats durations in hours and minutes', () => {
+    expect(formatDuration(0)).toBe('0 мин');
+    expect(formatDuration(45)).toBe('45 мин');
+    expect(formatDuration(60)).toBe('1 ч');
+    expect(formatDuration(365)).toBe('6 ч 5 мин');
   });
 
   it('shortens Moscow addresses and drops the flat', () => {

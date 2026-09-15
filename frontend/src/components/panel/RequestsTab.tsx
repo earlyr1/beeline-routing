@@ -5,7 +5,7 @@ import { formatWindow, isValidTime, laterTime, shortAddress } from '../../lib/fo
 import {
   assignmentIndex,
   byId,
-  DIFF_MARK_LABELS,
+  diffBadge,
   diffMarks,
   displayedPlan,
   engineerIdsOf,
@@ -31,7 +31,8 @@ export function RequestsTab() {
   const engineers = byId(state.engineers);
   const requests = byId(state.requests);
   const ids = engineerIdsOf(state);
-  const marks = showPrevious ? new Map() : diffMarks(state.last_diff);
+  // Отметки изменений видны и в плане до события: там бейдж говорит, что произойдёт с заявкой.
+  const marks = diffMarks(state.last_diff);
   const time = isValidTime(eventTime) ? laterTime(eventTime, state.now) : state.now;
   const rows = selectedEngineerId
     ? routeRequestIds(plan, selectedEngineerId)
@@ -61,6 +62,7 @@ export function RequestsTab() {
           const info = assignments.get(request.id);
           const engineer = info ? engineers.get(info.engineerId) : undefined;
           const mark = marks.get(request.id);
+          const badge = mark ? diffBadge(mark, request.id, state.last_diff, engineers, showPrevious) : null;
           const cancelled = request.status === 'cancelled';
           const pinned = Boolean(info?.visit.pinned);
           const classes = [
@@ -88,7 +90,11 @@ export function RequestsTab() {
                   {request.priority === 'urgent' && <span className="badge badge--urgent">Срочная</span>}
                   {cancelled && <span className="badge badge--cancelled">Отменена</span>}
                   {pinned && <span className="badge">Закреплена</span>}
-                  {mark && <span className="badge badge--diff">{DIFF_MARK_LABELS[mark as keyof typeof DIFF_MARK_LABELS]}</span>}
+                  {badge && (
+                    <span className="badge badge--diff" title={badge.title}>
+                      {badge.text}
+                    </span>
+                  )}
                 </div>
               </div>
               <button

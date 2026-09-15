@@ -8,7 +8,7 @@ import {
   rejectProposal,
   sendChat,
 } from '../api/client';
-import type { Proposal } from '../api/types';
+import type { PlanningState, Proposal } from '../api/types';
 import { upsertProposal } from '../lib/proposals';
 import { useAppStore } from './useAppStore';
 
@@ -49,6 +49,11 @@ export const useProposalsStore = create<ProposalsState>()((set, get) => {
     const datasetId = useAppStore.getState().datasetId;
     if (datasetId !== get().datasetId) set({ ...initialProposalsData, datasetId });
     return datasetId;
+  }
+
+  /** План из ответа ставим, только если диспетчер не переключился на другой файл, пока ждали ответ. */
+  function applyState(datasetId: string, state: PlanningState) {
+    if (useAppStore.getState().datasetId === datasetId) useAppStore.getState().setPlanningState(state);
   }
 
   async function mutate(run: (datasetId: string) => Promise<void>) {
@@ -103,7 +108,7 @@ export const useProposalsStore = create<ProposalsState>()((set, get) => {
       mutate(async (datasetId) => {
         const response = await approveProposal(datasetId, proposalId);
         set({ proposals: upsertProposal(get().proposals, response.proposal) });
-        useAppStore.getState().setPlanningState(response.state);
+        applyState(datasetId, response.state);
       }),
 
     reject: (proposalId) =>
@@ -115,7 +120,7 @@ export const useProposalsStore = create<ProposalsState>()((set, get) => {
       mutate(async (datasetId) => {
         const response = await approveAllProposals(datasetId);
         set({ proposals: response.proposals });
-        useAppStore.getState().setPlanningState(response.state);
+        applyState(datasetId, response.state);
       }),
 
     rejectAll: () =>

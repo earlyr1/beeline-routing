@@ -42,6 +42,17 @@ describe('panel tabs', () => {
     expect(screen.getByText('Бригада Комарь').closest('tr')).toHaveTextContent('9,8 км');
   });
 
+  it('ComparisonTab says that the dispatchers column ignores applied events', () => {
+    render(<ComparisonTab />);
+    expect(screen.getByText('Колонка «Диспетчеры» — исходный день, события (3) в ней не учтены.')).toBeInTheDocument();
+  });
+
+  it('ComparisonTab has no events note before any event', () => {
+    resetStore({ state: makePlanningState({ events: [] }) });
+    render(<ComparisonTab />);
+    expect(screen.queryByText(/в ней не учтены/)).not.toBeInTheDocument();
+  });
+
   it('TimelineTab renders visit bars and selects a request', () => {
     render(<TimelineTab />);
     fireEvent.click(screen.getByRole('button', { name: 'Заявка 50104 14:00–14:45' }));

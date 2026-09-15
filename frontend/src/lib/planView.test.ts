@@ -3,9 +3,11 @@ import { makePlanningState } from '../test/fixtures';
 import {
   assignmentIndex,
   byId,
+  diffBadge,
   diffMarks,
   displayedPlan,
   routeRequestIds,
+  routeSummary,
   sortRequestsForList,
   straightLegs,
   unassignedIndex,
@@ -47,6 +49,57 @@ describe('planView', () => {
   it('sorts the list: assigned by start, then unassigned, cancelled last', () => {
     const ids = sortRequestsForList(state.requests, state.plan).map((request) => request.id);
     expect(ids).toEqual(['74198', '84627', '86160', 'URG-001', '50104', '46393', '18754', '10135']);
+  });
+
+  it('labels diff badges with engineers and with the upcoming change in the plan before the event', () => {
+    const engineers = byId(state.engineers);
+    expect(diffBadge('moved', '50104', state.last_diff, engineers, false)).toEqual({
+      text: 'Перенесена от «Бригада Белузин»',
+      title: 'Перенос от «Бригада Белузин» к «Бригада Арташкин»',
+    });
+    expect(diffBadge('moved', '50104', state.last_diff, engineers, true)).toEqual({
+      text: 'Будет перенесена к «Бригада Арташкин»',
+      title: 'Перенос от «Бригада Белузин» к «Бригада Арташкин»',
+    });
+    expect(diffBadge('added', 'URG-001', state.last_diff, engineers, false)).toEqual({ text: 'Новое назначение' });
+    expect(diffBadge('added', 'URG-001', state.last_diff, engineers, true)).toEqual({ text: 'Будет назначена' });
+    expect(diffBadge('shifted', '46393', state.last_diff, engineers, true)).toEqual({ text: 'Сдвинется время' });
+    expect(diffBadge('removed', '10135', state.last_diff, engineers, true)).toEqual({ text: 'Будет снята' });
+  });
+
+  it('summarises a route for the dispatcher', () => {
+    const summary = routeSummary(state, state.plan, 'E02');
+    expect(summary).toMatchObject({ totalKm: 11.2, travelMin: 50, endOfWork: '14:05' });
+    expect(summary?.stops.map((stop) => [stop.visit.request_id, stop.slackMin])).toEqual([
+      ['84627', 120],
+      ['URG-001', 115],
+    ]);
+    expect(summary?.sentences).toEqual([
+      'Маршрут 11,2 км — 32% пробега всего плана; порядок визитов следует окнам заявок.',
+      'Все визиты начинаются внутри окон, минимальный запас до конца окна 1 ч 55 мин (заявка URG-001).',
+      'Работы заканчиваются в 14:05, до конца смены в 22:00 остаётся 7 ч 55 мин.',
+      'Визит 84627 начат до события и закреплён: перепланирование его не меняет.',
+    ]);
+    expect(routeSummary(state, state.plan, 'NOPE')).toBeNull();
+  });
+
+  it('explains late visits, an order that differs from windows and work past the shift', () => {
+    const [e01, ...rest] = state.plan.routes;
+    const visits = [
+      e01.visits[0],
+      e01.visits[1],
+      e01.visits[3],
+      { ...e01.visits[2], arrival: '16:05', start: '16:10', end: '16:55', late_min: 10 },
+    ];
+    const plan = { ...state.plan, routes: [{ ...e01, visits }, ...rest] };
+    const engineers = state.engineers.map((engineer) => (engineer.id === 'E01' ? { ...engineer, shift_end: '16:30' } : engineer));
+    const summary = routeSummary({ ...state, engineers, plan }, plan, 'E01');
+    expect(summary?.endOfWork).toBe('16:55');
+    expect(summary?.sentences.slice(0, 3)).toEqual([
+      'Маршрут 23,7 км — 68% пробега всего плана; порядок отличается от порядка окон: визиты с пересекающимися окнами расставлены так, чтобы сократить переезды.',
+      'С опозданием к окну: 50104 на 10 мин.',
+      'Работы заканчиваются в 16:55, позже конца смены в 16:30.',
+    ]);
   });
 
   it('returns route order for one engineer', () => {

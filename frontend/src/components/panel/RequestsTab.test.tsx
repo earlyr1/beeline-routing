@@ -17,7 +17,10 @@ describe('RequestsTab', () => {
     const moved = rowOf('50104');
     expect(within(moved).getByText('Начало 14:00')).toBeInTheDocument();
     expect(within(moved).getByText('Бригада Арташкин')).toBeInTheDocument();
-    expect(within(moved).getByText('Перенесена')).toBeInTheDocument();
+    expect(within(moved).getByText('Перенесена от «Бригада Белузин»')).toHaveAttribute(
+      'title',
+      'Перенос от «Бригада Белузин» к «Бригада Арташкин»',
+    );
 
     const urgent = rowOf('URG-001');
     expect(within(urgent).getByText('Срочная')).toBeInTheDocument();
@@ -51,11 +54,13 @@ describe('RequestsTab', () => {
     expect(useAppStore.getState().selectedEngineerId).toBe('E01');
   });
 
-  it('shows the previous plan without diff badges and with actions disabled', () => {
+  it('shows the previous plan with upcoming changes marked and actions disabled', () => {
     useAppStore.setState({ showPrevious: true });
     render(<RequestsTab />);
     expect(within(rowOf('50104')).getByText('Бригада Белузин')).toBeInTheDocument();
-    expect(screen.queryByText('Перенесена')).not.toBeInTheDocument();
+    expect(within(rowOf('50104')).getByText('Будет перенесена к «Бригада Арташкин»')).toBeInTheDocument();
+    expect(within(rowOf('URG-001')).getByText('Будет назначена')).toBeInTheDocument();
+    expect(screen.queryByText('Перенесена от «Бригада Белузин»')).not.toBeInTheDocument();
     expect(within(rowOf('46393')).getByRole('button', { name: 'Отменить' })).toBeDisabled();
   });
 });

@@ -1,5 +1,6 @@
 import { useAppStore } from '../../store/useAppStore';
 import { ExplanationCard } from '../ExplanationCard';
+import { RouteCard } from '../RouteCard';
 import { PANEL_TABS } from './tabs';
 
 export function RightPanel() {
@@ -9,6 +10,7 @@ export function RightPanel() {
   return (
     <aside className="panel">
       <ExplanationCard />
+      <RouteCard />
       <nav className="tabs" role="tablist">
         {PANEL_TABS.map((item) => {
           const badge = item.badge?.(app) ?? null;

@@ -17,6 +17,18 @@ describe('DiffBanner', () => {
     expect(screen.getByText(/пробег 31,7 км → 34,9 км · не назначено 1 → 1/)).toBeInTheDocument();
   });
 
+  it('names the engineers whose visit order changed', () => {
+    render(<DiffBanner />);
+    expect(screen.getByText('Изменён порядок: Бригада Арташкин')).toBeInTheDocument();
+  });
+
+  it('omits the order line when no route changed its order', () => {
+    const state = makePlanningState();
+    resetStore({ state: { ...state, last_diff: { ...state.last_diff!, reordered_engineers: [] } } });
+    render(<DiffBanner />);
+    expect(screen.queryByText(/Изменён порядок/)).not.toBeInTheDocument();
+  });
+
   it('switches between the plan before and after the event', () => {
     render(<DiffBanner />);
     fireEvent.click(screen.getByRole('button', { name: 'До события' }));
