@@ -34,6 +34,11 @@ def _without_reverse(lat: float, lon: float) -> ReverseAddress:
     return NO_ADDRESS
 
 
+def run_in_thread(task: Callable[[], None]) -> None:
+    """Фоновая задача в потоке-демоне: процесс не ждёт её при остановке."""
+    threading.Thread(target=task, daemon=True).start()
+
+
 @dataclass
 class AppDeps:
     settings: Settings
@@ -45,6 +50,8 @@ class AppDeps:
     proposals: ProposalStore = field(default_factory=ProposalStore)
     # Адрес точки на карте: (lat, lon) -> короткий адрес и точность.
     reverse_geocode: Callable[[float, float], ReverseAddress] = _without_reverse
+    # Запуск фонового предподсчёта таймлайна; тесты подменяют его, чтобы выполнять задачи сами.
+    run_background: Callable[[Callable[[], None]], None] = run_in_thread
 
 
 def build_llm(settings: Settings) -> LlmClient | None:

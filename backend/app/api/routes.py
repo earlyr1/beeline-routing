@@ -12,22 +12,24 @@ from app.api.ingest_service import preprocess_upload
 from app.api.registry import DatasetRecord
 from app.api.schemas import (
     ClientConfig,
+    CursorRequest,
     DatasetStatus,
     PlanningState,
     PlanRequest,
     RouteGeometry,
-    to_planning_state,
 )
+from app.api.timeline import ensure_precompute, insert_and_replay, move_cursor, planning_state, settle
 from app.domain.models import Event
 from app.planning.explain import build_explanation
 from app.planning.models import Explanation
 from app.planning.session import (
     EventRejected,
     PlanningSession,
-    apply_event,
-    geocode_before_lock,
+    early_event_text,
+    geocode_entry,
     start_session,
 )
+from app.planning.timeline import EVENT_TIME_RANGE_TEXT, LAST_MINUTE, check_known, known_requests
 
 router = APIRouter(prefix="/api")
 
@@ -52,6 +54,13 @@ def _session(record: DatasetRecord) -> PlanningSession:
     if record.session is None:
         raise HTTPException(status_code=409, detail="Датасет ещё обрабатывается, план не готов.")
     return record.session
+
+
+def _check_known(record: DatasetRecord, event: Event) -> None:
+    try:
+        check_known(record.base, record.timeline.entries, event)
+    except EventRejected as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
 
 @router.get("/health")
@@ -88,58 +97,150 @@ def dataset_status(dataset_id: str, deps: Deps) -> DatasetStatus:
 
 @router.post("/datasets/{dataset_id}/plan", response_model=PlanningState)
 def build_plan(dataset_id: str, deps: Deps, body: PlanRequest | None = None) -> PlanningState:
-    """План дня. После событий, со сменой уровня нагрузки или обеда день пересчитывается с нуля.
+    """План дня. С событиями на шкале, со сменой уровня нагрузки или обеда день пересчитывается с нуля.
 
-    Поле workload_level или lunch, которого нет в теле, остаётся значением сессии. Если событий не было и значения
-    те же, возвращается предподсчитанный план без изменений.
+    Поле workload_level или lunch, которого нет в теле, остаётся значением сессии. Пересборка очищает таймлайн и
+    ставит текущее время на 00:00. Если событий на шкале нет и значения те же, возвращается предподсчитанный план без
+    изменений, текущее время остаётся прежним.
     """
     record = _record(deps, dataset_id)
-    with record.lock:
-        session = _session(record)
-        level = session.workload_level if body is None or body.workload_level is None else body.workload_level
-        lunch = session.lunch_enabled if body is None or body.lunch is None else body.lunch
-        if session.events or (level, lunch) != (session.workload_level, session.lunch_enabled):
-            day = record.prepared
-            fresh = start_session(
-                dataset_id,
-                day.region,
-                day.office,
-                day.requests,
-                day.engineers,
-                day.control,
-                deps.ingest.planning,
-                workload_level=level,
-                lunch_enabled=lunch,
+    with record.timeline_lock:
+        with record.lock:
+            session = _session(record)
+            level = (
+                session.workload_level if body is None or body.workload_level is None else body.workload_level
             )
-            session = replace(fresh, version=session.version + 1)
-            record.session = session
-        return to_planning_state(session)
+            lunch = session.lunch_enabled if body is None or body.lunch is None else body.lunch
+            if not record.timeline.entries and (level, lunch) == (
+                session.workload_level,
+                session.lunch_enabled,
+            ):
+                return planning_state(record)
+            day = record.prepared
+            version = record.next_version()
+        # Пересборка идёт без record.lock: состояние, объяснения и линии маршрутов отвечают по прежнему плану.
+        fresh = start_session(
+            dataset_id,
+            day.region,
+            day.office,
+            day.requests,
+            day.engineers,
+            day.control,
+            deps.ingest.planning,
+            workload_level=level,
+            lunch_enabled=lunch,
+        )
+        record.start_day(replace(fresh, version=version))
+        return planning_state(record)
 
 
 @router.get("/datasets/{dataset_id}/state", response_model=PlanningState)
 def get_state(dataset_id: str, deps: Deps) -> PlanningState:
     record = _record(deps, dataset_id)
     with record.lock:
-        return to_planning_state(_session(record))
+        _session(record)
+        return planning_state(record)
 
 
 @router.post("/datasets/{dataset_id}/events", response_model=PlanningState)
 def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
+    """Событие в текущее время плана или позже: встаёт на шкалу, и текущее время переходит к нему.
+
+    Событие раньше текущего времени отклоняется. События на шкале между текущим временем и новым событием
+    применяются по пути. Отклонённое событие на шкале не остаётся, текущее время не меняется.
+    """
     record = _record(deps, dataset_id)
+    ctx = deps.ingest.planning
     with record.lock:
-        snapshot = _session(record)
-    # Геокодер может отвечать долго: адрес срочной заявки и новый адрес изменённой заявки ищем до блокировки
-    # датасета, чтобы не держать остальные запросы к нему. Повторно под блокировкой не геокодируем, даже если
+        _session(record)
+        requests = known_requests(record.base, record.timeline.entries)
+    # Геокодер может отвечать долго: адрес срочной заявки и новый адрес изменённой заявки ищем до блокировок
+    # датасета, чтобы не держать остальные запросы к нему. При пересчётах геокодер больше не вызывается, даже если
     # адрес не нашёлся.
-    event, ctx = geocode_before_lock(event, snapshot, deps.ingest.planning)
+    event, geo = geocode_entry(event, requests, ctx)
+    try:
+        with record.timeline_lock:
+            with record.lock:
+                _session(record)
+                cursor = record.cursor
+                if event.time < cursor:
+                    raise HTTPException(status_code=422, detail=early_event_text(event.time, cursor))
+                entry = record.timeline.create(event, geo)
+            step = insert_and_replay(record, ctx, entry)
+            if step.reason is not None:
+                raise HTTPException(status_code=422, detail=step.reason)
+            settle(record, ctx, max(cursor, event.time))
+            return planning_state(record)
+    finally:
+        ensure_precompute(record, ctx, deps.run_background)
+
+
+@router.post("/datasets/{dataset_id}/timeline/events", response_model=PlanningState)
+def add_timeline_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
+    """Событие на шкале в любое время дня; текущее время плана не меняется.
+
+    Событие не позже текущего времени применяется сразу, план пересчитывается от его места. Если оно не
+    применяется, на шкале его нет, а ответ 422 с причиной. Событие позже текущего времени ждёт своего времени, его
+    шаг считается в фоне.
+    """
+    record = _record(deps, dataset_id)
+    ctx = deps.ingest.planning
+    if event.time > LAST_MINUTE:
+        raise HTTPException(status_code=422, detail=EVENT_TIME_RANGE_TEXT)
     with record.lock:
-        session = _session(record)
-        try:
-            updated = apply_event(session, event, ctx)
-        except EventRejected as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        record.session = updated
-        return to_planning_state(updated)
+        _session(record)
+        _check_known(record, event)
+        requests = known_requests(record.base, record.timeline.entries)
+    event, geo = geocode_entry(event, requests, ctx)
+    try:
+        with record.timeline_lock:
+            with record.lock:
+                # Пока искали адрес, таймлайн мог измениться: номера проверяются ещё раз.
+                _session(record)
+                _check_known(record, event)
+                cursor = record.cursor
+                entry = record.timeline.create(event, geo)
+            if event.time <= cursor:
+                step = insert_and_replay(record, ctx, entry)
+                if step.reason is not None:
+                    raise HTTPException(status_code=422, detail=step.reason)
+            else:
+                with record.lock:
+                    record.timeline.insert(entry)
+            settle(record, ctx)
+            return planning_state(record)
+    finally:
+        ensure_precompute(record, ctx, deps.run_background)
+
+
+@router.delete("/datasets/{dataset_id}/timeline/events/{entry_id}", response_model=PlanningState)
+def delete_timeline_event(dataset_id: str, entry_id: str, deps: Deps) -> PlanningState:
+    """Убирает событие со шкалы. Если оно было применено, план на текущее время пересчитывается от его места."""
+    record = _record(deps, dataset_id)
+    ctx = deps.ingest.planning
+    try:
+        with record.timeline_lock:
+            with record.lock:
+                _session(record)
+                if record.timeline.remove(entry_id) is None:
+                    raise HTTPException(status_code=404, detail=f"Событие {entry_id} не найдено.")
+            settle(record, ctx)
+            return planning_state(record)
+    finally:
+        ensure_precompute(record, ctx, deps.run_background)
+
+
+@router.post("/datasets/{dataset_id}/cursor", response_model=PlanningState)
+def post_cursor(dataset_id: str, body: CursorRequest, deps: Deps) -> PlanningState:
+    """Переносит текущее время плана. Солвер нужен, только если планы до этого времени ещё не посчитаны."""
+    record = _record(deps, dataset_id)
+    ctx = deps.ingest.planning
+    with record.lock:
+        _session(record)
+    move_cursor(record, ctx, body.time)
+    state = planning_state(record)
+    ensure_precompute(record, ctx, deps.run_background)
+    return state
 
 
 @router.get("/datasets/{dataset_id}/explain/{request_id}", response_model=Explanation)

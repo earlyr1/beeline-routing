@@ -193,7 +193,9 @@ def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: I
             ],
             matrix_source=problem.travel.base.source,
         )
-        _set(record, prepared=day, session=session, report=report, status="ready", stage="ready")
+        with record.lock:
+            record.start_day(session)
+            _set(record, prepared=day, report=report, status="ready", stage="ready")
     except ValueError as error:
         _set(record, status="failed", error=str(error))
     except Exception as error:  # noqa: BLE001 - любой сбой предподсчёта показываем пользователю

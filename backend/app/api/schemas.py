@@ -7,10 +7,11 @@ from typing import Literal
 from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
 
 from app.domain.enums import Transport
-from app.domain.models import Engineer, Office, Plan, Request
+from app.domain.models import Engineer, Event, Office, Plan, Request
 from app.domain.timeutil import HHMM
 from app.planning.models import AppliedEvent, PlanDiff
 from app.planning.session import PlanningSession
+from app.planning.timeline import CURSOR_RANGE_TEXT, LAST_MINUTE, TimelineStatus
 from app.planning.workload import WORKLOAD_LEVEL_TEXT, is_workload_level
 
 DatasetStatusValue = Literal["processing", "ready", "failed"]
@@ -69,6 +70,28 @@ class PlanRequest(BaseModel):
         return self
 
 
+class CursorRequest(BaseModel):
+    """Тело POST /cursor: текущее время плана."""
+
+    time: HHMM
+
+    @model_validator(mode="after")
+    def _within_day(self) -> CursorRequest:
+        # Ошибка уровня модели, а не поля: диспетчер видит только текст, без имени поля.
+        if self.time > LAST_MINUTE:
+            raise ValueError(CURSOR_RANGE_TEXT)
+        return self
+
+
+class TimelineItem(BaseModel):
+    """Событие на шкале: применённое событие, если оно применено, иначе запланированное."""
+
+    id: str
+    event: Event
+    status: TimelineStatus
+    reason: str | None = None
+
+
 class PlanningState(BaseModel):
     dataset_id: str
     version: int
@@ -86,6 +109,11 @@ class PlanningState(BaseModel):
     last_diff: PlanDiff | None = None
     events: list[AppliedEvent] = Field(default_factory=list)
     matrix_source: Literal["osrm", "haversine"]
+    # Текущее время плана. now, events, last_diff и previous_plan относятся к плану на это время.
+    cursor: HHMM = 0
+    timeline: list[TimelineItem] = Field(default_factory=list)
+    # Все шаги таймлайна посчитаны: статусы событий впереди окончательные.
+    timeline_ready: bool = True
 
 
 class RouteLeg(BaseModel):
@@ -94,6 +122,8 @@ class RouteLeg(BaseModel):
 
 
 class RouteGeometry(BaseModel):
+    # Версия плана, по которому построены линии.
+    version: int
     engineer_id: str
     transport: Transport
     source: Literal["osrm", "straight"]
@@ -113,7 +143,14 @@ class ClientConfig(BaseModel):
     osrm_available: bool
 
 
-def to_planning_state(session: PlanningSession) -> PlanningState:
+def to_planning_state(
+    session: PlanningSession,
+    *,
+    cursor: int | None = None,
+    timeline: list[TimelineItem] | None = None,
+    timeline_ready: bool = True,
+) -> PlanningState:
+    """Состояние на текущее время cursor (по умолчанию время последнего события сессии)."""
     return PlanningState(
         dataset_id=session.dataset_id,
         version=session.version,
@@ -131,4 +168,7 @@ def to_planning_state(session: PlanningSession) -> PlanningState:
         last_diff=session.last_diff,
         events=session.events,
         matrix_source=session.problem.travel.base.source,
+        cursor=session.now if cursor is None else cursor,
+        timeline=timeline or [],
+        timeline_ready=timeline_ready,
     )

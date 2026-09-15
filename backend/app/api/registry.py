@@ -1,4 +1,4 @@
-"""Датасеты в памяти процесса: статус предподсчёта и текущая сессия планирования."""
+"""Датасеты в памяти процесса: статус предподсчёта, план начала дня, таймлайн и план на текущее время."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from app.api.schemas import DatasetStatus, Progress, UploadReport
 from app.domain.models import Engineer, Office, Plan, Request
 from app.planning.session import PlanningSession
+from app.planning.timeline import Timeline
 
 
 @dataclass
@@ -31,8 +32,21 @@ class DatasetRecord:
     report: UploadReport | None = None
     error: str | None = None
     prepared: PreparedDay | None = None
+    # План на текущее время: план начала дня и все события таймлайна не позже cursor.
     session: PlanningSession | None = None
+    # План начала дня (предподсчёт загрузки или пересборка): от него считаются шаги таймлайна.
+    base: PlanningSession | None = None
+    # Текущее время плана, минуты от полуночи.
+    cursor: int = 0
+    timeline: Timeline = field(default_factory=Timeline)
+    # Короткая блокировка: чтение и замена session, cursor и событий таймлайна. Солвер под ней не работает.
     lock: threading.RLock = field(default_factory=threading.RLock)
+    # Очередь изменений таймлайна, переносов времени с пересчётом и всех решений солвера. Берётся раньше lock.
+    timeline_lock: threading.RLock = field(default_factory=threading.RLock)
+    # Номер последнего нового плана датасета: номера планов не повторяются, в том числе после удаления событий.
+    last_version: int = 0
+    # Ревизия таймлайна, для которой уже запущен фоновый предподсчёт.
+    precompute_revision: int | None = None
 
     def status_model(self) -> DatasetStatus:
         with self.lock:
@@ -44,6 +58,27 @@ class DatasetRecord:
                 report=self.report,
                 error=self.error,
             )
+
+    def start_day(self, session: PlanningSession) -> None:
+        """План дня с нуля: таймлайн очищается, текущее время 00:00. Номера событий tl_<n> не начинаются заново."""
+        with self.lock:
+            self.base = session
+            self.session = session
+            self.cursor = 0
+            self.timeline.clear()
+            self.last_version = max(self.last_version, session.version)
+
+    def next_version(self) -> int:
+        """Номер для следующего нового плана. Номер занимает use_version: отклонённое событие номера не тратит.
+
+        Новые планы считаются по очереди под timeline_lock, поэтому два расчёта не получат один номер.
+        """
+        with self.lock:
+            return self.last_version + 1
+
+    def use_version(self, version: int) -> None:
+        with self.lock:
+            self.last_version = max(self.last_version, version)
 
 
 class DatasetRegistry:

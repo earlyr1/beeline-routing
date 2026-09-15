@@ -27,7 +27,8 @@ def system_rules(now: str) -> str:
 10. В rationale одним-двумя предложениями по-русски объясни, какие слова сообщения привели к предложению."""
 
 
-def session_context(session: PlanningSession) -> dict[str, Any]:
+def session_context(session: PlanningSession, now: int | None = None) -> dict[str, Any]:
+    """Состояние дня для модели; now — текущее время плана (по умолчанию время последнего события сессии)."""
     assigned = {
         visit.request_id: (route.engineer_id, visit)
         for route in session.plan.routes
@@ -61,7 +62,7 @@ def session_context(session: PlanningSession) -> dict[str, Any]:
             }
         )
     return {
-        "now": fmt_hhmm(session.now),
+        "now": fmt_hhmm(session.now if now is None else now),
         "skills": {skill.value: label for skill, label in SKILL_RU.items()},
         "transport": {transport.value: label for transport, label in TRANSPORT_RU.items()},
         "engineers": [
@@ -82,9 +83,11 @@ def session_context(session: PlanningSession) -> dict[str, Any]:
     }
 
 
-def build_messages(text: str, session: PlanningSession) -> list[Message]:
-    context = json.dumps(session_context(session), ensure_ascii=False)
+def build_messages(text: str, session: PlanningSession, now: int | None = None) -> list[Message]:
+    """now — текущее время плана на шкале; без него время последнего события сессии."""
+    now = session.now if now is None else now
+    context = json.dumps(session_context(session, now), ensure_ascii=False)
     return [
-        {"role": "system", "content": system_rules(fmt_hhmm(session.now))},
+        {"role": "system", "content": system_rules(fmt_hhmm(now))},
         {"role": "user", "content": f"Состояние дня (JSON):\n{context}\n\nСообщение диспетчера:\n{text}"},
     ]
