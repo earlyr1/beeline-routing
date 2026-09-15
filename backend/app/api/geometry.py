@@ -62,4 +62,10 @@ def route_geometry(
         legs.append(RouteLeg(to_request_id=visit.request_id, coordinates=coordinates))
         position = destination
     source = "osrm" if use_osrm is not None and all_roads else "straight"
-    return RouteGeometry(engineer_id=engineer_id, transport=engineer.transport, source=source, legs=legs)
+    return RouteGeometry(
+        version=session.version,
+        engineer_id=engineer_id,
+        transport=engineer.transport,
+        source=source,
+        legs=legs,
+    )

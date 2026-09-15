@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -233,30 +233,6 @@ def _known_addresses(answers: dict[str, GeoResult]) -> Callable[[str, str], GeoR
     return lambda address, district: answers.get(address, _NOT_FOUND)
 
 
-def geocode_before_lock(
-    event: Event, session: PlanningSession, ctx: PlanningContext
-) -> tuple[Event, PlanningContext]:
-    """Ищет адрес события заранее и возвращает событие и контекст для apply_event под блокировкой датасета.
-
-    Геокодер может отвечать долго, поэтому API вызывает функцию до блокировки. Срочная заявка получает
-    координаты в самом событии. Новый адрес изменённой заявки ищется, если точку на карте не передали и адрес
-    отличается от сохранённого; ответ геокодера лежит в возвращённом контексте. Под блокировкой геокодер
-    больше не вызывается: адрес, который не искали заранее, считается не найденным.
-    """
-    locked = replace(ctx, geocode=None)
-    sent = event.request
-    if sent is None or ctx.geocode is None:
-        return event, locked
-    if event.type == EventType.URGENT:
-        located = _located(sent, ctx)
-        return (event if located is sent else event.model_copy(update={"request": located})), locked
-    stored = session.request(event.request_id or "") if event.type == EventType.REQUEST_UPDATED else None
-    if stored is None or _has_point(sent) or sent.address == stored.address:
-        return event, locked
-    answer = ctx.geocode(sent.address, stored.district)
-    return event, replace(ctx, geocode=_known_addresses({sent.address: answer}))
-
-
 def replay_checked_event(event: Event, ctx: PlanningContext) -> tuple[Event, PlanningContext]:
     """Готовит к применению изменение заявки, которое уже прошло check_event (предложение помощника).
 
@@ -273,6 +249,33 @@ def replay_checked_event(event: Event, ctx: PlanningContext) -> tuple[Event, Pla
         event.model_copy(update={"request": unlocated}),
         replace(ctx, geocode=_known_addresses({sent.address: answer})),
     )
+
+
+def geocode_entry(
+    event: Event, requests: Mapping[str, Request], ctx: PlanningContext
+) -> tuple[Event, dict[str, GeoResult]]:
+    """Ищет адрес события таймлайна один раз, при добавлении и до блокировок датасета.
+
+    Срочная заявка получает координаты в самом событии. Адрес изменённой заявки без точки на карте ищется всегда,
+    даже если совпадает с сохранённым: к моменту применения адрес заявки может поменять событие раньше по времени.
+    Ответ геокодера возвращается словарём «адрес → ответ» и хранится вместе с событием, повторные применения берут
+    его через offline_context. requests — заявки дня и срочные заявки таймлайна по номеру: из них берётся район.
+    """
+    sent = event.request
+    if sent is None or ctx.geocode is None:
+        return event, {}
+    if event.type == EventType.URGENT:
+        located = _located(sent, ctx)
+        return (event if located is sent else event.model_copy(update={"request": located})), {}
+    known = requests.get(event.request_id or "") if event.type == EventType.REQUEST_UPDATED else None
+    if known is None or _has_point(sent):
+        return event, {}
+    return event, {sent.address: ctx.geocode(sent.address, known.district)}
+
+
+def offline_context(ctx: PlanningContext, answers: Mapping[str, GeoResult]) -> PlanningContext:
+    """Контекст повторного применения: геокодер не вызывается, адреса берутся только из готовых ответов."""
+    return replace(ctx, geocode=_known_addresses(dict(answers)) if answers else None)
 
 
 def _edited_location(stored: Request, sent: Request, ctx: PlanningContext) -> dict[str, Any]:
@@ -463,11 +466,13 @@ def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Pr
     return delay_engineer(problem, event.engineer_id, event.delay_min)
 
 
+def early_event_text(time: int, now: int) -> str:
+    return f"Время события {fmt_hhmm(time)} раньше текущего времени плана {fmt_hhmm(now)}."
+
+
 def _check_time(session: PlanningSession, event: Event) -> None:
     if event.time < session.now:
-        raise EventRejected(
-            f"Время события {fmt_hhmm(event.time)} раньше текущего времени плана {fmt_hhmm(session.now)}."
-        )
+        raise EventRejected(early_event_text(event.time, session.now))
 
 
 def check_event(session: PlanningSession, event: Event, ctx: PlanningContext) -> Event:
@@ -480,11 +485,14 @@ def check_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
     return _apply_to_inputs(session, event, ctx)[2]
 
 
-def apply_event(session: PlanningSession, event: Event, ctx: PlanningContext) -> PlanningSession:
+def apply_event(
+    session: PlanningSession, event: Event, ctx: PlanningContext, *, version: int | None = None
+) -> PlanningSession:
     """Применяет одно событие дня и возвращает НОВУЮ сессию; входная не меняется.
 
     Бросает EventRejected, если событие противоречит текущему состоянию. Уровень нагрузки и обед остаются как в
-    сессии. Лимит OR-Tools обычный и с обедом: перепланирование стартует от текущего плана.
+    сессии. Лимит OR-Tools обычный и с обедом: перепланирование стартует от текущего плана. version — номер нового
+    плана (у сессии и у применённого события); без него следующий за номером входной сессии.
     """
     _check_time(session, event)
     requests, engineers, stored_event = _apply_to_inputs(session, event, ctx)
@@ -496,7 +504,7 @@ def apply_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
     if stored_event.type == EventType.ENGINEER_DELAYED:
         forecast = forecast_delay(problem, session.plan, stored_event.engineer_id, stored_event.delay_min)
         diff = diff.model_copy(update={"delay_forecast": forecast})
-    version = session.version + 1
+    version = session.version + 1 if version is None else version
     applied = AppliedEvent(id=f"ev_{len(session.events) + 1}", event=stored_event, version=version)
     return replace(
         session,

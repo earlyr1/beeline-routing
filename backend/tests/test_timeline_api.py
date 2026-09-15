@@ -1,0 +1,521 @@
+"""Время дня и события на шкале через API: текущее время плана, таймлайн и фоновый предподсчёт."""
+
+import threading
+
+import pytest
+
+from tests.api_helpers import HashGeocoder, make_client, sample_bundle, upload
+from tests.llm_helpers import ScriptedProvider, completion, tool_call
+from tests.timeline_helpers import cancel, fcfs_solves, restore
+
+TIMELINE_FIELDS = ("cursor", "timeline", "timeline_ready")
+
+
+@pytest.fixture
+def solves(monkeypatch):
+    return fcfs_solves(monkeypatch)
+
+
+class Background(list):
+    """Фоновые задачи не запускаются сами: тест выполняет их, когда нужно."""
+
+    def run(self):
+        while self:
+            self.pop(0)()
+
+
+def ready(client, deps, solves):
+    background = Background()
+    deps.run_background = background.append
+    base = f"/api/datasets/{upload(client, 'bundle.json', sample_bundle().model_dump_json().encode())}"
+    assert client.get(base).json()["status"] == "ready"
+    solves.clear()
+    return base, background
+
+
+def dataset(tmp_path, solves, **options):
+    client, deps = make_client(tmp_path, **options)
+    base, background = ready(client, deps, solves)
+    return client, deps, base, background
+
+
+def body(event):
+    return event.model_dump(mode="json")
+
+
+def add(client, base, event):
+    return client.post(f"{base}/timeline/events", json=body(event) if not isinstance(event, dict) else event)
+
+
+def added(client, base, event):
+    response = add(client, base, event)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def at(client, base, time):
+    response = client.post(f"{base}/cursor", json={"time": time})
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert state["cursor"] == time
+    return state
+
+
+def state_of(client, base):
+    return client.get(f"{base}/state").json()
+
+
+def statuses(state):
+    return [(item["id"], item["status"]) for item in state["timeline"]]
+
+
+def request_status(state, request_id):
+    return next(request["status"] for request in state["requests"] if request["id"] == request_id)
+
+
+def plan_part(state):
+    """Состояние без полей таймлайна и номера датасета: план, заявки, события и версия на текущее время."""
+    return {key: value for key, value in state.items() if key not in (*TIMELINE_FIELDS, "dataset_id")}
+
+
+def test_state_after_upload_has_cursor_at_midnight_and_empty_timeline(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    state = state_of(client, base)
+    assert (state["cursor"], state["timeline"], state["timeline_ready"]) == ("00:00", [], True)
+    assert client.post(f"{base}/plan").json() == state
+
+
+def test_future_event_is_pending_and_computed_in_background(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    initial = state_of(client, base)
+
+    state = added(client, base, cancel("R2", "13:00"))
+
+    assert state["timeline"] == [
+        {"id": "tl_1", "event": body(cancel("R2", "13:00")), "status": "pending", "reason": None}
+    ]
+    assert (state["cursor"], state["timeline_ready"]) == ("00:00", False)
+    assert plan_part(state) == plan_part(initial)
+    assert solves == [] and len(background) == 1
+
+    background.run()
+
+    assert solves == ["13:00"]
+    after = state_of(client, base)
+    assert after["timeline_ready"] is True and statuses(after) == [("tl_1", "pending")]
+    assert plan_part(after) == plan_part(initial)
+
+
+def test_cursor_before_and_after_events_recomputes_only_when_the_applied_set_changes(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    initial = state_of(client, base)
+    added(client, base, cancel("R2", "13:00"))
+    added(client, base, cancel("R3", "13:00"))
+
+    before = at(client, base, "12:59")
+    assert plan_part(before) == plan_part(initial) and solves == []
+    assert statuses(before) == [("tl_1", "pending"), ("tl_2", "pending")]
+
+    after = at(client, base, "13:00")
+    # События ровно в текущее время уже применены.
+    assert statuses(after) == [("tl_1", "applied"), ("tl_2", "applied")]
+    assert (request_status(after, "R2"), request_status(after, "R3")) == ("cancelled", "cancelled")
+    assert [applied["id"] for applied in after["events"]] == ["ev_1", "ev_2"]
+    assert (after["now"], after["version"]) == ("13:00", 3)
+    assert [item["event"] for item in after["timeline"]] == [applied["event"] for applied in after["events"]]
+    assert solves == ["13:00", "13:00"]
+    solves.clear()
+
+    assert plan_part(at(client, base, "12:00")) == plan_part(initial)
+    assert plan_part(at(client, base, "18:00")) == plan_part(after)
+    assert plan_part(at(client, base, "00:00")) == plan_part(initial)
+    assert plan_part(at(client, base, "13:00")) == plan_part(after)
+    assert solves == []
+
+
+def test_timeline_replay_equals_sequential_events(tmp_path, solves):
+    client, deps, legacy, _ = dataset(tmp_path, solves)
+    replayed, _ = ready(client, deps, solves)
+    events = [cancel("R3", "11:00"), cancel("R2", "14:00")]
+    for event in events:
+        assert client.post(f"{legacy}/events", json=body(event)).status_code == 200
+    sequential = state_of(client, legacy)
+    for event in reversed(events):
+        added(client, replayed, event)
+
+    state = at(client, replayed, "15:00")
+
+    assert plan_part(state) == plan_part(sequential)
+    assert (sequential["cursor"], sequential["version"]) == ("14:00", 3)
+    assert statuses(sequential) == [("tl_1", "applied"), ("tl_2", "applied")]
+    assert statuses(state) == [("tl_2", "applied"), ("tl_1", "applied")]
+
+
+def test_event_added_before_the_cursor_recomputes_only_later_snapshots(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    added(client, base, cancel("R3", "11:00"))
+    added(client, base, cancel("R2", "14:00"))
+    at(client, base, "15:00")
+    assert solves == ["11:00", "14:00"]
+    solves.clear()
+
+    state = added(client, base, restore("R3", "12:00"))
+
+    assert solves == ["12:00", "14:00"]
+    assert statuses(state) == [("tl_1", "applied"), ("tl_3", "applied"), ("tl_2", "applied")]
+    assert (request_status(state, "R3"), request_status(state, "R2")) == ("active", "cancelled")
+    assert (state["cursor"], state["version"], state["timeline_ready"]) == ("15:00", 5, True)
+    solves.clear()
+
+    early = at(client, base, "11:30")
+    assert (early["version"], request_status(early, "R3")) == (2, "cancelled") and solves == []
+
+
+def test_delete_pending_and_applied_events(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    initial = state_of(client, base)
+    added(client, base, cancel("R3", "11:00"))
+    added(client, base, cancel("R2", "14:00"))
+    at(client, base, "12:00")
+    background.run()
+    assert solves == ["11:00", "14:00"]
+    solves.clear()
+
+    missing = client.delete(f"{base}/timeline/events/tl_9")
+    assert missing.status_code == 404 and missing.json()["detail"] == "Событие tl_9 не найдено."
+
+    pending_deleted = client.delete(f"{base}/timeline/events/tl_2")
+    assert pending_deleted.status_code == 200, pending_deleted.text
+    assert statuses(pending_deleted.json()) == [("tl_1", "applied")]
+
+    applied_deleted = client.delete(f"{base}/timeline/events/tl_1").json()
+    assert plan_part(applied_deleted) == plan_part(initial)
+    assert (applied_deleted["timeline"], applied_deleted["cursor"]) == ([], "12:00")
+    assert solves == []
+
+
+def test_deleting_an_applied_event_recomputes_later_applied_events(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    added(client, base, cancel("R3", "11:00"))
+    added(client, base, cancel("R2", "14:00"))
+    at(client, base, "15:00")
+    solves.clear()
+
+    response = client.delete(f"{base}/timeline/events/tl_1")
+
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert solves == ["14:00"]
+    assert statuses(state) == [("tl_2", "applied")]
+    assert (request_status(state, "R3"), request_status(state, "R2")) == ("active", "cancelled")
+    assert [applied["id"] for applied in state["events"]] == ["ev_1"] and state["version"] == 4
+
+
+def test_rejected_event_gets_status_and_reason_and_is_skipped(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    added(client, base, cancel("R2", "11:00"))
+    added(client, base, cancel("R2", "12:00"))
+    background.run()
+    assert solves == ["11:00"]
+
+    state = state_of(client, base)
+    assert state["timeline_ready"] is True
+    assert [(item["id"], item["status"], item["reason"]) for item in state["timeline"]] == [
+        ("tl_1", "pending", None),
+        ("tl_2", "rejected", "Заявка R2 уже отменена."),
+    ]
+    assert state["timeline"][1]["event"] == body(cancel("R2", "12:00"))
+
+    applied = at(client, base, "13:00")
+    assert statuses(applied) == [("tl_1", "applied"), ("tl_2", "rejected")]
+    assert len(applied["events"]) == 1 and solves == ["11:00"]
+
+    deleted = client.delete(f"{base}/timeline/events/tl_2").json()
+    assert statuses(deleted) == [("tl_1", "applied")] and solves == ["11:00"]
+    assert plan_part(deleted) == plan_part(applied)
+
+
+def test_event_rejected_at_or_before_the_cursor_is_removed_with_422(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    at(client, base, "13:00")
+    added(client, base, cancel("R2", "12:00"))
+    before = state_of(client, base)
+
+    for time in ("12:30", "13:00"):
+        rejected = add(client, base, cancel("R2", time))
+        assert rejected.status_code == 422 and rejected.json()["detail"] == "Заявка R2 уже отменена."
+    assert state_of(client, base) == before
+
+    # Более раннее событие применяется, а прежнее отмечается отклонённым.
+    earlier = added(client, base, cancel("R2", "11:00"))
+    assert [(item["status"], item["event"]["time"]) for item in earlier["timeline"]] == [
+        ("applied", "11:00"),
+        ("rejected", "12:00"),
+    ]
+    assert earlier["timeline"][1]["id"] == "tl_1"
+    assert earlier["timeline"][1]["reason"] == "Заявка R2 уже отменена."
+    assert [applied["event"]["time"] for applied in earlier["events"]] == ["11:00"]
+
+
+def test_timeline_event_checks_ids_and_time_range(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    urgent = {
+        "type": "urgent",
+        "time": "15:00",
+        "request": {
+            "id": "URG-1",
+            "address": "Город Москва, ул.Таганская, д. 1",
+            "lat": 55.751,
+            "lon": 37.61,
+            "duration_min": 30,
+            "window_start": "15:00",
+            "window_end": "17:00",
+            "skill": "local",
+        },
+    }
+    added(client, base, urgent)
+    # В ту же минуту, что и срочная заявка: событие добавлено позже и применяется после неё, работа ещё не начата.
+    added(client, base, cancel("URG-1", "15:00"))
+
+    cases = [
+        (body(cancel("URG-1", "14:00")), "Заявка URG-1 не найдена."),
+        (body(cancel("NOPE", "13:00")), "Заявка NOPE не найдена."),
+        ({"type": "engineer_unavailable", "time": "13:00", "engineer_id": "E9"}, "Инженер E9 не найден."),
+        ({**urgent, "time": "17:00"}, "Заявка с номером URG-1 уже есть в плане."),
+        ({**urgent, "request": {**urgent["request"], "id": "R1"}}, "Заявка с номером R1 уже есть в плане."),
+        (body(cancel("R2", "24:00")), "Время события должно быть от 00:00 до 23:59."),
+        (
+            {"type": "cancel", "time": "13:00"},
+            "Некорректный запрос: для отмены или возврата нужен request_id",
+        ),
+    ]
+    for event, detail in cases:
+        response = add(client, base, event)
+        assert response.status_code == 422, event
+        assert response.json()["detail"] == detail
+    assert statuses(state_of(client, base)) == [("tl_1", "pending"), ("tl_2", "pending")]
+    assert solves == []
+
+    evening = at(client, base, "17:00")
+    assert statuses(evening) == [("tl_1", "applied"), ("tl_2", "applied")]
+    assert request_status(evening, "URG-1") == "cancelled"
+
+
+def test_cursor_validation_and_missing_datasets(tmp_path, solves):
+    client, deps, base, _ = dataset(tmp_path, solves)
+    cases = [
+        ({"time": "24:00"}, "Некорректный запрос: время должно быть от 00:00 до 23:59"),
+        ({"time": "99:59"}, "Некорректный запрос: время должно быть от 00:00 до 23:59"),
+        ({"time": "ab"}, "Некорректный запрос: time: ожидается HH:MM, получено 'ab'"),
+        ({}, "Некорректный запрос: time: обязательное поле"),
+    ]
+    for payload, detail in cases:
+        response = client.post(f"{base}/cursor", json=payload)
+        assert response.status_code == 422 and response.json()["detail"] == detail
+    assert at(client, base, "23:59")["cursor"] == "23:59"
+
+    processing = deps.registry.create().dataset_id
+    for dataset_id, code in (("d_missing", 404), (processing, 409)):
+        prefix = f"/api/datasets/{dataset_id}"
+        responses = [
+            client.post(f"{prefix}/cursor", json={"time": "12:00"}),
+            client.post(f"{prefix}/timeline/events", json=body(cancel("R2", "12:00"))),
+            client.delete(f"{prefix}/timeline/events/tl_1"),
+        ]
+        assert [response.status_code for response in responses] == [code, code, code]
+
+
+def test_legacy_events_use_the_cursor_and_keep_their_texts(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    at(client, base, "13:30")
+
+    early = client.post(f"{base}/events", json=body(cancel("R2", "13:00")))
+    assert early.status_code == 422
+    assert early.json()["detail"] == "Время события 13:00 раньше текущего времени плана 13:30."
+
+    # Работы по R2 (окно с 14:00) ещё не начаты.
+    response = client.post(f"{base}/events", json=body(cancel("R2", "13:45")))
+    assert response.status_code == 200, response.text
+    applied = response.json()
+    assert (applied["cursor"], applied["now"], applied["version"]) == ("13:45", "13:45", 2)
+    assert statuses(applied) == [("tl_1", "applied")]
+
+    # Отмена R3 впереди, до начала работ по ней (окно с 15:00): legacy-событие позже применяет её по пути.
+    added(client, base, cancel("R3", "14:45"))
+    solves.clear()
+    rejected = client.post(f"{base}/events", json=body(cancel("R3", "17:00")))
+    assert rejected.status_code == 422 and rejected.json()["detail"] == "Заявка R3 уже отменена."
+    assert solves == ["14:45"]
+    state = state_of(client, base)
+    assert (state["cursor"], state["version"]) == ("13:45", 2)
+    assert statuses(state) == [("tl_1", "applied"), ("tl_2", "pending")]
+
+    solves.clear()
+    later = at(client, base, "14:45")
+    assert request_status(later, "R3") == "cancelled" and solves == []
+
+
+def with_llm(tmp_path, solves, *responses):
+    client, deps = make_client(tmp_path)
+    provider = ScriptedProvider(*responses)
+    deps.llm = provider.client()
+    base, background = ready(client, deps, solves)
+    return client, base, provider
+
+
+def test_proposal_is_proposed_and_approved_at_the_cursor(tmp_path, solves):
+    call = tool_call("propose_cancel", {"request_id": "R2", "rationale": "Клиент отменил визит"})
+    client, base, provider = with_llm(tmp_path, solves, completion(tool_calls=[call]))
+    at(client, base, "13:00")
+    added(client, base, cancel("R3", "14:00"))
+
+    [proposal] = client.post(f"{base}/chat", json={"text": "Отмена по R2"}).json()["proposals"]
+
+    assert proposal["event"]["time"] == "13:00"
+    system, user = provider.bodies()[0]["messages"]
+    assert "Текущее время плана: 13:00." in system["content"] and '"now": "13:00"' in user["content"]
+
+    result = client.post(f"{base}/proposals/{proposal['id']}/approve").json()
+    state = result["state"]
+    assert state["cursor"] == "13:00"
+    assert statuses(state) == [("tl_2", "applied"), ("tl_1", "pending")]
+    assert result["proposal"]["event"] == state["timeline"][0]["event"] == state["events"][-1]["event"]
+    assert result["proposal"]["result_diff"] == state["last_diff"]
+    assert (request_status(state, "R2"), request_status(state, "R3")) == ("cancelled", "active")
+    assert request_status(at(client, base, "12:00"), "R2") == "active"
+    evening = at(client, base, "17:00")
+    assert (request_status(evening, "R2"), request_status(evening, "R3")) == ("cancelled", "cancelled")
+
+
+def test_proposal_made_before_the_cursor_moved_is_applied_at_the_cursor(tmp_path, solves):
+    call = tool_call("propose_cancel", {"request_id": "R2", "time": "13:00", "rationale": "Отказ клиента"})
+    client, base, _ = with_llm(tmp_path, solves, completion(tool_calls=[call]))
+    [proposal] = client.post(f"{base}/chat", json={"text": "R2 отменена"}).json()["proposals"]
+    # Время сдвинули, но работы по R2 (окно с 14:00) ещё не начаты.
+    at(client, base, "13:30")
+
+    result = client.post(f"{base}/proposals/{proposal['id']}/approve").json()
+
+    assert result["proposal"]["status"] == "approved" and result["proposal"]["event"]["time"] == "13:30"
+    assert (result["state"]["cursor"], result["state"]["now"]) == ("13:30", "13:30")
+    assert statuses(result["state"]) == [("tl_1", "applied")]
+
+
+def test_plan_rebuild_clears_the_timeline_and_keeps_it_without_rebuild(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    moved = at(client, base, "13:00")
+    assert client.post(f"{base}/plan").json() == moved
+
+    added(client, base, cancel("R2", "14:00"))
+    rebuilt = client.post(f"{base}/plan").json()
+
+    assert (rebuilt["timeline"], rebuilt["cursor"], rebuilt["timeline_ready"]) == ([], "00:00", True)
+    assert (rebuilt["version"], rebuilt["events"]) == (2, [])
+    background.run()
+    assert solves == ["00:00"]
+    assert statuses(added(client, base, cancel("R2", "14:00"))) == [("tl_2", "pending")]
+
+
+def test_versions_stay_unique_when_events_are_removed_and_added_again(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    at(client, base, "15:00")
+
+    first = added(client, base, cancel("R2", "14:00"))
+    busy = next(route["engineer_id"] for route in first["plan"]["routes"] if route["visits"])
+    geometry = f"{base}/routes/{busy}/geometry"
+    assert (first["version"], client.get(geometry).json()["version"]) == (2, 2)
+
+    assert client.delete(f"{base}/timeline/events/tl_1").json()["version"] == 1
+    assert client.get(geometry).json()["version"] == 1
+
+    again = added(client, base, cancel("R2", "14:00"))
+    assert (again["version"], client.get(geometry).json()["version"]) == (3, 3)
+
+
+def test_background_precompute_stops_when_the_timeline_changes(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    added(client, base, cancel("R3", "11:00"))
+    added(client, base, cancel("R2", "14:00"))
+    assert len(background) == 2
+
+    stale = background.pop(0)
+    stale()
+    assert solves == [] and state_of(client, base)["timeline_ready"] is False
+
+    background.run()
+    assert solves == ["11:00", "14:00"] and state_of(client, base)["timeline_ready"] is True
+
+    at(client, base, "15:00")
+    assert solves == ["11:00", "14:00"] and background == []
+
+
+def test_cursor_request_during_precompute_waits_for_the_step_and_reuses_it(tmp_path, solves):
+    client, deps = make_client(tmp_path)
+    base, _ = ready(client, deps, solves)
+    workers = []
+
+    def run_in_thread(task):
+        worker = threading.Thread(target=task, daemon=True)
+        workers.append(worker)
+        worker.start()
+
+    deps.run_background = run_in_thread
+    entered, release = solves.hold("14:00")
+    added(client, base, cancel("R3", "11:00"))
+    added(client, base, cancel("R2", "14:00"))
+    assert entered.wait(timeout=30)
+
+    assert state_of(client, base)["timeline_ready"] is False
+    early = at(client, base, "12:00")
+    assert (request_status(early, "R3"), request_status(early, "R2")) == ("cancelled", "active")
+
+    results = {}
+    late = threading.Thread(
+        target=lambda: results.update(late=client.post(f"{base}/cursor", json={"time": "15:00"})), daemon=True
+    )
+    late.start()
+    late.join(timeout=0.3)
+    assert late.is_alive()
+    release.set()
+    late.join(timeout=30)
+    for worker in workers:
+        worker.join(timeout=30)
+
+    response = results["late"]
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert statuses(state) == [("tl_1", "applied"), ("tl_2", "applied")]
+    assert (request_status(state, "R3"), request_status(state, "R2")) == ("cancelled", "cancelled")
+    assert (solves.count("11:00"), solves.count("14:00")) == (1, 1)
+    assert state_of(client, base)["timeline_ready"] is True
+
+
+class CountingGeocoder(HashGeocoder):
+    def __init__(self, category="building"):
+        super().__init__(category)
+        self.queries = []
+
+    def lookup(self, query):
+        self.queries.append(query)
+        return super().lookup(query)
+
+
+def test_timeline_edit_is_geocoded_once_when_added(tmp_path, solves):
+    geocoder = CountingGeocoder(category="highway")
+    client, _, base, _ = dataset(tmp_path, solves, geocoder=geocoder)
+    before = next(request for request in state_of(client, base)["requests"] if request["id"] == "R2")
+    moved = {**before, "address": "Город Москва, ул.Таганская, д. 7", "lat": None, "lon": None}
+    edit = {"type": "request_updated", "time": "12:00", "request_id": "R2", "request": moved}
+
+    added(client, base, edit)
+    looked_up = len(geocoder.queries)
+    assert looked_up > 0
+    added(client, base, cancel("R3", "11:00"))
+    at(client, base, "13:00")
+    state = added(client, base, restore("R3", "11:30"))
+
+    assert len(geocoder.queries) == looked_up
+    assert statuses(state) == [("tl_2", "applied"), ("tl_3", "applied"), ("tl_1", "applied")]
+    stored = next(request for request in state["requests"] if request["id"] == "R2")
+    assert (stored["address"], stored["geocode_precision"]) == ("Город Москва, ул.Таганская, д. 7", "street")
+    assert state["timeline"][2]["event"]["previous_request"]["address"] == before["address"]

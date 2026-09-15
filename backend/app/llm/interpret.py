@@ -215,9 +215,9 @@ def _request_update_event(session: PlanningSession, args: RequestUpdateArgs, tim
 
 
 def _build_event(
-    name: str, args: BaseModel, session: PlanningSession, new_request_id: Callable[[], str]
+    name: str, args: BaseModel, session: PlanningSession, new_request_id: Callable[[], str], now: int
 ) -> Event:
-    time = args.time if args.time is not None else session.now
+    time = args.time if args.time is not None else now
     if name == "propose_request_update":
         return _request_update_event(session, args, time)
     if name == "propose_cancel":
@@ -274,6 +274,7 @@ def _interpret_call(
     new_request_id: Callable[[], str],
     out: Interpretation,
     seen: set[tuple],
+    now: int,
 ) -> None:
     model = ARGUMENT_MODELS.get(call.name)
     if model is None:
@@ -296,7 +297,7 @@ def _interpret_call(
         return
     refusal: str | None = None
     try:
-        event = _build_event(call.name, args, session, new_request_id)
+        event = _build_event(call.name, args, session, new_request_id, now)
     except Refused as error:
         event, refusal = error.event, str(error)
     except Unresolved as error:
@@ -359,11 +360,13 @@ def interpret(
     session: PlanningSession,
     ctx: PlanningContext,
     new_request_id: Callable[[], str],
+    now: int | None = None,
 ) -> Interpretation:
+    """now — текущее время плана на шкале: время события, если модель его не назвала. Без него время сессии."""
     out = Interpretation()
     seen: set[tuple] = set()
     for call in result.calls:
-        _interpret_call(call, session, ctx, new_request_id, out, seen)
+        _interpret_call(call, session, ctx, new_request_id, out, seen, session.now if now is None else now)
     if not result.calls and result.text and result.text.strip():
         out.clarifications.append(result.text.strip())
     return out
