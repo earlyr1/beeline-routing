@@ -1,0 +1,106 @@
+"""Сквозная проверка живого backend: загрузка, план, демо-события, объяснение, геометрия.
+
+Внутри контейнера:  docker compose exec backend python scripts/smoke_api.py
+С хоста (порт проброшен): python3 scripts/smoke_api.py http://127.0.0.1:8001/api ../data/raw/east_synthetic.csv
+Только стандартная библиотека Python.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import time
+import urllib.error
+import urllib.request
+import uuid
+from pathlib import Path
+
+
+def call(method: str, url: str, body: bytes | None = None, headers: dict[str, str] | None = None) -> dict:
+    request = urllib.request.Request(url, data=body, method=method, headers=headers or {})
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            return json.load(response)
+    except urllib.error.HTTPError as error:
+        raise SystemExit(f"{method} {url} -> {error.code}: {error.read().decode('utf-8')}") from error
+
+
+def upload(base: str, path: Path) -> str:
+    boundary = uuid.uuid4().hex
+    head = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{path.name}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    body = head + path.read_bytes() + f"\r\n--{boundary}--\r\n".encode()
+    status = call(
+        "POST", f"{base}/upload", body, {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+    )
+    return status["dataset_id"]
+
+
+def metrics_line(label: str, plan: dict | None) -> None:
+    if plan is None:
+        return
+    m = plan["metrics"]
+    print(
+        f"{label}: инженеров {m['engineers_used']}, км {m['total_km']}, назначено {m['assigned']}, "
+        f"не назначено {m['unassigned']}, нарушений {m['violations']}"
+    )
+
+
+def main(argv: list[str]) -> int:
+    base = argv[1] if len(argv) > 1 else "http://127.0.0.1:8001/api"
+    path = Path(argv[2] if len(argv) > 2 else "/app/data/bundles/east/bundle.json")
+    print("config:", call("GET", f"{base}/config"))
+
+    started = time.monotonic()
+    dataset_id = upload(base, path)
+    while (status := call("GET", f"{base}/datasets/{dataset_id}"))["status"] == "processing":
+        time.sleep(0.5)
+    if status["status"] != "ready":
+        raise SystemExit(f"Предподсчёт завершился ошибкой: {status['error']}")
+    report = status["report"]
+    print(
+        f"готово за {time.monotonic() - started:.1f} с: регион {report['region']}, источник {report['source']}, "
+        f"заявок {report['requests']}, матрица {report['matrix_source']}"
+    )
+
+    state = call("POST", f"{base}/datasets/{dataset_id}/plan")
+    metrics_line("OR-Tools", state["plan"])
+    metrics_line("FCFS", state["baseline"])
+    metrics_line("Диспетчеры", state["control"])
+
+    events = json.loads(path.read_text(encoding="utf-8")).get("events", []) if path.suffix == ".json" else []
+    for event in events:
+        started = time.monotonic()
+        state = call(
+            "POST",
+            f"{base}/datasets/{dataset_id}/events",
+            json.dumps(event).encode("utf-8"),
+            {"Content-Type": "application/json"},
+        )
+        diff = state["last_diff"]
+        print(
+            f"событие {event['type']} в {event['time']} за {time.monotonic() - started:.1f} с: "
+            f"перенесено {len(diff['moved'])}, добавлено {len(diff['added'])}, снято {len(diff['removed'])}, "
+            f"сдвигов времени {len(diff['time_shifts'])}"
+        )
+    if events:
+        metrics_line("OR-Tools после событий", state["plan"])
+
+    visit = next(v for route in state["plan"]["routes"] for v in route["visits"] if not v["pinned"])
+    explanation = call("GET", f"{base}/datasets/{dataset_id}/explain/{visit['request_id']}")
+    print("объяснение:", explanation["summary"])
+
+    for route in [r for r in state["plan"]["routes"] if r["visits"]][:4]:
+        geometry = call("GET", f"{base}/datasets/{dataset_id}/routes/{route['engineer_id']}/geometry")
+        points = sum(len(leg["coordinates"]) for leg in geometry["legs"])
+        print(
+            f"геометрия {route['engineer_id']} ({geometry['transport']}): {geometry['source']}, точек {points}"
+        )
+    print("OK")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

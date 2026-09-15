@@ -1,0 +1,57 @@
+name: beeline-routing
+
+services:
+  frontend:
+    build:
+      context: frontend
+    ports:
+      - "8000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DATA_DIR: /app/data
+      CACHE_PATH: /cache/cache.sqlite
+      OSRM_URL: http://osrm:5000
+    volumes:
+      - backend-cache:/cache
+    expose:
+      - "8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 24
+    restart: unless-stopped
+
+  osrm:
+    image: ghcr.io/project-osrm/osrm-backend:v26.9.0-debian
+    command: ["osrm-routed", "--algorithm", "mld", "--max-table-size", "10000", "/data/moscow.osrm"]
+    volumes:
+      - osrm-data:/data
+    ports:
+      - "127.0.0.1:5050:5000"
+    restart: unless-stopped
+
+  osrm-prepare:
+    profiles: ["prepare"]
+    build:
+      context: .
+      dockerfile: infra/osrm/Dockerfile.prepare
+    environment:
+      OSRM_BBOX: ${OSRM_BBOX:-36.6,54.6,38.9,56.3}
+    volumes:
+      - osrm-data:/data
+
+volumes:
+  osrm-data:
+  backend-cache:

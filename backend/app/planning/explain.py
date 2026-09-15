@@ -1,0 +1,271 @@
+"""Объяснение по заявке языком диспетчера: ограничения, альтернативы, факторы выбора."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from app.domain.enums import SKILL_RU, TRANSPORT_RU, Priority, RequestStatus
+from app.domain.models import Engineer, Plan, Request, Visit
+from app.domain.timeutil import fmt_hhmm
+from app.planning.models import Alternative, ConstraintCheck, Explanation
+from app.solvers.eligibility import Exclusion, exclusion
+from app.solvers.problem import EngineerState, Problem
+from app.solvers.simulate import simulate_route
+
+KM_EPSILON = 0.05
+
+
+@dataclass(frozen=True)
+class Insertion:
+    extra_km: float
+    start: int
+
+
+def _open_sequence(plan: Plan, engineer_id: str) -> list[str]:
+    route = next((r for r in plan.routes if r.engineer_id == engineer_id), None)
+    return [visit.request_id for visit in route.visits if not visit.pinned] if route else []
+
+
+def _route_km(problem: Problem, state: EngineerState, sequence: list[str]) -> float:
+    return sum(visit.leg_km for visit in simulate_route(problem, state, sequence).visits)
+
+
+def best_insertion(
+    problem: Problem, state: EngineerState, sequence: list[str], request_id: str
+) -> Insertion | None:
+    """Самая дешёвая по километрам допустимая вставка заявки в маршрут инженера."""
+    base = _route_km(problem, state, sequence)
+    best: Insertion | None = None
+    for position in range(len(sequence) + 1):
+        candidate = sequence[:position] + [request_id] + sequence[position:]
+        sim = simulate_route(problem, state, candidate)
+        if not sim.feasible:
+            continue
+        extra = round(sum(visit.leg_km for visit in sim.visits) - base, 2)
+        if best is None or extra < best.extra_km:
+            best = Insertion(extra_km=extra, start=sim.visits[position].start)
+    return best
+
+
+def _alternative(
+    problem: Problem, plan: Plan, state: EngineerState, request: Request
+) -> tuple[Alternative, bool]:
+    """Возвращает альтернативу и признак «инженер сейчас без заявок»."""
+    engineer = state.engineer
+    reason = exclusion(request, state)
+    if reason == Exclusion.NO_SKILL:
+        return Alternative(
+            engineer_id=engineer.id, feasible=False, reason=f"Нет навыка «{SKILL_RU[request.skill]}»"
+        ), False
+    if reason == Exclusion.NO_TRANSPORT:
+        return Alternative(
+            engineer_id=engineer.id,
+            feasible=False,
+            reason=f"Нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
+            f"у инженера «{TRANSPORT_RU[engineer.transport]}»",
+        ), False
+    if reason == Exclusion.UNAVAILABLE:
+        since = f" с {fmt_hhmm(engineer.unavailable_from)}" if engineer.unavailable_from is not None else ""
+        return Alternative(
+            engineer_id=engineer.id, feasible=False, reason=f"Инженер недоступен{since}"
+        ), False
+
+    sequence = [rid for rid in _open_sequence(plan, engineer.id) if rid != request.id]
+    idle = not sequence and not problem.pinned.get(engineer.id)
+    insertion = best_insertion(problem, state, sequence, request.id)
+    if insertion is None:
+        alone = simulate_route(problem, state, [request.id])
+        text = (
+            "Не успевает в окно или смену даже без других заявок"
+            if not alone.feasible
+            else "Не помещается в окно или смену вместе со своими заявками"
+        )
+        return Alternative(engineer_id=engineer.id, feasible=False, reason=text), idle
+    note = ", но придётся задействовать ещё одного инженера" if idle else ""
+    return Alternative(
+        engineer_id=engineer.id,
+        feasible=True,
+        extra_km=insertion.extra_km,
+        start=insertion.start,
+        reason=f"Может взять: пробег +{insertion.extra_km:.1f} км, начало {fmt_hhmm(insertion.start)}{note}",
+    ), idle
+
+
+def _window_detail(request: Request, visit: Visit) -> str:
+    text = (
+        f"Прибытие {fmt_hhmm(visit.arrival)}, начало {fmt_hhmm(visit.start)}, окно "
+        f"{fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}"
+    )
+    if visit.start > visit.arrival:
+        text += f", ожидание {visit.start - visit.arrival} мин"
+    if visit.late_min:
+        return text + f", опоздание {visit.late_min} мин"
+    return text + f", запас до конца окна {request.window_end - visit.start} мин"
+
+
+def _assigned_constraints(request: Request, engineer: Engineer, visit: Visit) -> list[ConstraintCheck]:
+    required = request.transport_required
+    if required is None:
+        transport_detail = f"Требований к транспорту нет, у инженера «{TRANSPORT_RU[engineer.transport]}»"
+    else:
+        transport_detail = (
+            f"Нужен «{TRANSPORT_RU[required]}», у инженера «{TRANSPORT_RU[engineer.transport]}»"
+        )
+    until = engineer.shift_end
+    if not engineer.available and engineer.unavailable_from is not None and not visit.pinned:
+        until = min(until, engineer.unavailable_from)
+    return [
+        ConstraintCheck(
+            name="Навык",
+            ok=request.skill in engineer.skills,
+            detail=f"Нужен «{SKILL_RU[request.skill]}», у инженера: "
+            f"{', '.join(SKILL_RU[skill] for skill in engineer.skills)}",
+        ),
+        ConstraintCheck(name="Транспорт", ok=required in (None, engineer.transport), detail=transport_detail),
+        ConstraintCheck(name="Временное окно", ok=visit.late_min == 0, detail=_window_detail(request, visit)),
+        ConstraintCheck(
+            name="Смена",
+            ok=visit.end <= until,
+            detail=f"Окончание работы {fmt_hhmm(visit.end)}, смена до {fmt_hhmm(until)}",
+        ),
+    ]
+
+
+def _unassigned_constraints(problem: Problem, request: Request) -> list[ConstraintCheck]:
+    states = problem.states
+    skilled = [s for s in states if request.skill in s.engineer.skills]
+    required = request.transport_required
+    with_transport = [s for s in skilled if required is None or s.engineer.transport == required]
+    eligible = [s for s in states if exclusion(request, s) is None]
+    solo = [(s, simulate_route(problem, s, [request.id]).visits[0]) for s in eligible]
+    window_ok = any(visit.late_min == 0 for _, visit in solo)
+    shift_ok = any(visit.end <= s.available_until for s, visit in solo)
+    window = f"{fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}"
+    transport_detail = (
+        "Требований к транспорту нет"
+        if required is None
+        else f"Нужен «{TRANSPORT_RU[required]}»: подходящих инженеров {len(with_transport)}"
+    )
+    return [
+        ConstraintCheck(
+            name="Навык",
+            ok=bool(skilled),
+            detail=f"Инженеров с навыком «{SKILL_RU[request.skill]}»: {len(skilled)}",
+        ),
+        ConstraintCheck(name="Транспорт", ok=bool(with_transport), detail=transport_detail),
+        ConstraintCheck(
+            name="Временное окно",
+            ok=window_ok,
+            detail=(
+                f"Хотя бы один доступный подходящий инженер успевает к окну {window}"
+                if window_ok
+                else f"Ни один доступный подходящий инженер не успевает к окну {window}"
+            ),
+        ),
+        ConstraintCheck(
+            name="Смена",
+            ok=shift_ok,
+            detail=(
+                "Хотя бы один подходящий инженер заканчивает работу в пределах смены"
+                if shift_ok
+                else "Ни один подходящий инженер не заканчивает работу в пределах смены"
+            ),
+        ),
+    ]
+
+
+def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explanation:
+    if request.status == RequestStatus.CANCELLED:
+        return Explanation(
+            request_id=request.id, status="cancelled", summary="Заявка отменена и в плане не участвует."
+        )
+
+    assigned = next(
+        (
+            (route.engineer_id, visit)
+            for route in plan.routes
+            for visit in route.visits
+            if visit.request_id == request.id
+        ),
+        None,
+    )
+    if assigned is None:
+        item = next((u for u in plan.unassigned if u.request_id == request.id), None)
+        located = problem.has_request(request.id)
+        alternatives = [_alternative(problem, plan, s, request)[0] for s in problem.states] if located else []
+        return Explanation(
+            request_id=request.id,
+            status="unassigned",
+            summary=item.reason_text if item else "Заявка не назначена.",
+            constraints=_unassigned_constraints(problem, request) if located else [],
+            alternatives=alternatives,
+            unassigned=item,
+        )
+
+    engineer_id, visit = assigned
+    engineer = problem.state(engineer_id).engineer
+    constraints = _assigned_constraints(request, engineer, visit)
+    if visit.pinned:
+        return Explanation(
+            request_id=request.id,
+            status="assigned",
+            engineer_id=engineer_id,
+            summary=f"Исполнитель {engineer.name} начал работу в {fmt_hhmm(visit.start)}, визит закреплён.",
+            factors=["Работа уже началась к моменту последнего события, поэтому заявка не переназначается."],
+            constraints=constraints,
+            visit=visit,
+        )
+
+    state = problem.state(engineer_id)
+    own_sequence = _open_sequence(plan, engineer_id)
+    without = [rid for rid in own_sequence if rid != request.id]
+    own_extra = round(_route_km(problem, state, own_sequence) - _route_km(problem, state, without), 2)
+
+    evaluated = [
+        _alternative(problem, plan, s, request) for s in problem.states if s.engineer.id != engineer_id
+    ]
+    feasible = sorted((pair for pair in evaluated if pair[0].feasible), key=lambda pair: pair[0].extra_km)
+    infeasible = [pair for pair in evaluated if not pair[0].feasible]
+
+    factors: list[str] = []
+    if request.priority == Priority.URGENT:
+        factors.append("Срочная заявка: при нехватке времени планировщик назначает её в первую очередь.")
+    if not feasible:
+        factors.append("Другие инженеры взять заявку не могут: причины указаны в списке альтернатив.")
+    else:
+        best, _ = feasible[0]
+        best_name = problem.state(best.engineer_id).engineer.name
+        delta = best.extra_km - own_extra
+        if delta > KM_EPSILON:
+            factors.append(
+                f"Кратчайшая вставка: у лучшей альтернативы ({best_name}) пробег больше на {delta:.1f} км."
+            )
+        elif delta < -KM_EPSILON:
+            factors.append(
+                f"Локально {best_name} взял бы заявку с пробегом на {-delta:.1f} км меньше, но в общем плане "
+                f"так получается меньше задействованных инженеров или меньший суммарный пробег."
+            )
+        else:
+            factors.append(f"У {best_name} такой же пробег, назначение сохраняет стабильность плана.")
+        if all(idle for _, idle in feasible):
+            factors.append(
+                "Передача любому другому подходящему инженеру задействовала бы ещё одного исполнителя."
+            )
+    factors.append(
+        f"В плане задействовано инженеров: {plan.metrics.engineers_used}, суммарный пробег "
+        f"{plan.metrics.total_km:.1f} км."
+    )
+    return Explanation(
+        request_id=request.id,
+        status="assigned",
+        engineer_id=engineer_id,
+        summary=(
+            f"Исполнитель {engineer.name}. Навык и транспорт подходят, работа начнётся в "
+            f"{fmt_hhmm(visit.start)} в окне {fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}, "
+            f"заявка добавляет к маршруту {own_extra:.1f} км."
+        ),
+        factors=factors,
+        constraints=constraints,
+        visit=visit,
+        alternatives=[pair[0] for pair in feasible] + [pair[0] for pair in infeasible],
+    )

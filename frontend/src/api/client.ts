@@ -1,0 +1,108 @@
+import type {
+  ApproveAllResponse,
+  ApproveResponse,
+  ChatResponse,
+  ClientConfig,
+  DatasetStatus,
+  Explanation,
+  PlanEvent,
+  PlanningState,
+  Proposal,
+  RouteGeometry,
+} from './types';
+
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+function detailText(detail: unknown): string | null {
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) =>
+        typeof item === 'object' && item !== null && 'msg' in item ? String((item as { msg: unknown }).msg) : String(item),
+      )
+      .join('; ');
+  }
+  return null;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, init);
+  } catch {
+    throw new ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.');
+  }
+  if (!response.ok) {
+    let message = `Ошибка сервера ${response.status}`;
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      message = detailText(body.detail) ?? message;
+    } catch {
+      // тело ответа не JSON
+    }
+    throw new ApiError(response.status, message);
+  }
+  return (await response.json()) as T;
+}
+
+const postJson = (body: unknown): RequestInit => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
+
+const dataset = (datasetId: string) => `/datasets/${encodeURIComponent(datasetId)}`;
+
+export const getConfig = () => request<ClientConfig>('/config');
+
+export const getHealth = () => request<{ status: string }>('/health');
+
+export function uploadFile(file: File): Promise<DatasetStatus> {
+  const form = new FormData();
+  form.append('file', file);
+  return request<DatasetStatus>('/upload', { method: 'POST', body: form });
+}
+
+export const getDatasetStatus = (datasetId: string) => request<DatasetStatus>(dataset(datasetId));
+
+export const buildPlan = (datasetId: string) =>
+  request<PlanningState>(`${dataset(datasetId)}/plan`, { method: 'POST' });
+
+export const getPlanningState = (datasetId: string) => request<PlanningState>(`${dataset(datasetId)}/state`);
+
+export const postEvent = (datasetId: string, event: PlanEvent) =>
+  request<PlanningState>(`${dataset(datasetId)}/events`, postJson(event));
+
+export const getExplanation = (datasetId: string, requestId: string) =>
+  request<Explanation>(`${dataset(datasetId)}/explain/${encodeURIComponent(requestId)}`);
+
+export const getRouteGeometry = (datasetId: string, engineerId: string, plan: 'current' | 'previous' = 'current') =>
+  request<RouteGeometry>(`${dataset(datasetId)}/routes/${encodeURIComponent(engineerId)}/geometry?plan=${plan}`);
+
+const proposal = (datasetId: string, proposalId: string) =>
+  `${dataset(datasetId)}/proposals/${encodeURIComponent(proposalId)}`;
+
+export const sendChat = (datasetId: string, text: string) =>
+  request<ChatResponse>(`${dataset(datasetId)}/chat`, postJson({ text }));
+
+export const getProposals = (datasetId: string) => request<Proposal[]>(`${dataset(datasetId)}/proposals`);
+
+export const approveProposal = (datasetId: string, proposalId: string) =>
+  request<ApproveResponse>(`${proposal(datasetId, proposalId)}/approve`, { method: 'POST' });
+
+export const rejectProposal = (datasetId: string, proposalId: string) =>
+  request<Proposal>(`${proposal(datasetId, proposalId)}/reject`, { method: 'POST' });
+
+export const approveAllProposals = (datasetId: string) =>
+  request<ApproveAllResponse>(`${dataset(datasetId)}/proposals/approve-all`, { method: 'POST' });
+
+export const rejectAllProposals = (datasetId: string) =>
+  request<Proposal[]>(`${dataset(datasetId)}/proposals/reject-all`, { method: 'POST' });
