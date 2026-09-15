@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, StrictInt, model_validator
+from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
 
 from app.domain.enums import Transport
 from app.domain.models import Engineer, Office, Plan, Request
@@ -56,9 +56,10 @@ class DatasetStatus(BaseModel):
 
 
 class PlanRequest(BaseModel):
-    """Тело POST /plan. Без тела или без поля workload_level остаётся уровень нагрузки сессии."""
+    """Тело POST /plan. Поле, которого нет в теле (или всё тело), остаётся значением сессии."""
 
     workload_level: StrictInt | None = None
+    lunch: StrictBool | None = None  # обед по плану
 
     @model_validator(mode="after")
     def _known_level(self) -> PlanRequest:
@@ -72,6 +73,7 @@ class PlanningState(BaseModel):
     dataset_id: str
     version: int
     workload_level: int
+    lunch_enabled: bool
     region: str
     office: Office
     now: HHMM
@@ -116,6 +118,7 @@ def to_planning_state(session: PlanningSession) -> PlanningState:
         dataset_id=session.dataset_id,
         version=session.version,
         workload_level=session.workload_level,
+        lunch_enabled=session.lunch_enabled,
         region=session.region,
         office=session.office,
         now=session.now,

@@ -23,16 +23,15 @@ class WorkloadLevel:
     travel_buffer: TravelBuffer
 
 
-# Индекс в кортеже и есть уровень нагрузки. Стоимость инженера везде ниже снятия обычной заявки (drop_normal):
-# оптимизатор по-прежнему скорее задействует ещё одного инженера, чем оставит заявку без исполнителя.
+# Индекс в кортеже и есть уровень нагрузки: самый спокойный, средний и самый напряжённый. Стоимость инженера везде
+# ниже снятия обычной заявки (drop_normal): оптимизатор по-прежнему скорее задействует ещё одного инженера, чем
+# оставит заявку без исполнителя.
 WORKLOAD_LEVELS: tuple[WorkloadLevel, ...] = (
     WorkloadLevel("Спокойный день", "😌", 20_000, TravelBuffer(1.30, 5)),
-    WorkloadLevel("Без спешки", "🙂", 150_000, TravelBuffer(1.20, 5)),
     WorkloadLevel("Обычный день", "😐", 1_000_000, TravelBuffer(1.10, 5)),
-    WorkloadLevel("Плотный день", "😓", 3_000_000, TravelBuffer(1.05, 0)),
     WorkloadLevel("На пределе", "🥵", 6_000_000, TravelBuffer(1.00, 0)),
 )
-DEFAULT_WORKLOAD_LEVEL = 2
+DEFAULT_WORKLOAD_LEVEL = 1
 WORKLOAD_LEVEL_TEXT = f"уровень нагрузки должен быть от 0 до {len(WORKLOAD_LEVELS) - 1}"
 
 

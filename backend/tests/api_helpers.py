@@ -27,7 +27,8 @@ def sample_bundle():
     return Bundle(region="t", office=OFFICE, requests=requests, engineers=day_engineers())
 
 
-def make_client(tmp_path, bundle=None, geocoder=None):
+def make_client(tmp_path, bundle=None, geocoder=None, **limits):
+    """limits переопределяет лимиты OR-Tools (solver_time_limit_s, solver_time_limit_lunch_s): по умолчанию 1 секунда."""
     bundle = bundle or sample_bundle()
     save_bundle(bundle, tmp_path / "bundles" / bundle.region / "bundle.json")
     settings = Settings(
@@ -39,7 +40,7 @@ def make_client(tmp_path, bundle=None, geocoder=None):
         llm_api_key=None,
         llm_model=None,
         geocoder="cache-only",
-        solver_time_limit_s=1,
+        **{"solver_time_limit_s": 1, "solver_time_limit_lunch_s": 1, **limits},
     )
     deps = build_deps(settings, geocoder_override=geocoder or HashGeocoder())
     return TestClient(create_app(deps)), deps

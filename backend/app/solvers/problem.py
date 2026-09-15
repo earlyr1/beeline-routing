@@ -77,6 +77,8 @@ class Problem:
     buffer: TravelBuffer = NO_BUFFER  # запас на дорогу по нагрузке дня, входит в travel_min
     # Обед, начатый до события: остаётся как в прежнем плане, новый обед инженеру уже не нужен.
     pinned_lunch: dict[str, Lunch] = field(default_factory=dict)
+    # Обед по плану в этот день. Без обеда задача планируется так же, как до появления обеда в сервисе.
+    lunch: bool = True
 
     def __post_init__(self) -> None:
         offset = len(self.engineers)
@@ -103,12 +105,14 @@ class Problem:
     def lunch_window(self, state: EngineerState) -> tuple[int, int] | None:
         """Самое раннее и самое позднее начало обеда инженера или None, если обед по плану ему не нужен.
 
-        Обед не нужен, если рабочий день (до конца смены или до недоступности) короче 6 часов, если обед уже
-        начат до события (pinned_lunch) и если окно обеда прошло к моменту, с которого инженер свободен.
+        Обед не нужен в день без обеда (lunch=False), если рабочий день (до конца смены или до недоступности) короче
+        6 часов, если обед уже начат до события (pinned_lunch) и если окно обеда прошло к моменту, с которого инженер
+        свободен.
         """
         engineer = state.engineer
         if (
-            engineer.id in self.pinned_lunch
+            not self.lunch
+            or engineer.id in self.pinned_lunch
             or state.available_until - engineer.shift_start < LUNCH_WORKDAY_MIN
         ):
             return None
@@ -139,10 +143,12 @@ def make_problem(
     osrm: OsrmClient | None = None,
     cache: KVCache | None = None,
     buffer: TravelBuffer = NO_BUFFER,
+    lunch: bool = True,
 ) -> Problem:
     """Задача на начало дня: все инженеры в стартовых точках, все активные заявки открыты.
 
     buffer — запас на дорогу по нагрузке дня. Базовая матрица от него не зависит: OSRM берётся из кэша.
+    lunch — обед по плану в этот день.
     """
     located = [r for r in requests if r.lat is not None and r.lon is not None]
     unplannable = [
@@ -158,4 +164,6 @@ def make_problem(
     travel = TravelTimes(build_base_matrix(points, model, osrm=osrm, cache=cache), model, traffic)
     states = [initial_state(engineer, k) for k, engineer in enumerate(engineers)]
     open_ids = [r.id for r in located if r.status == RequestStatus.ACTIVE]
-    return Problem(located, list(engineers), travel, states, open_ids, unplannable, buffer=buffer)
+    return Problem(
+        located, list(engineers), travel, states, open_ids, unplannable, buffer=buffer, lunch=lunch
+    )
