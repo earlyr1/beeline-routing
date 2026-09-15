@@ -5,7 +5,8 @@ import { useMapLocation } from './useMapLocation';
 import { activateMarker, pickPoint, useMapModel } from './useMapModel';
 import type { LngLat, YMapsComponents } from './yandexLoader';
 
-export const SETTLE_REFRESH_MS = 400;
+/** Когда подтолкнуть камеру после появления карты: векторный движок Яндекса стартует около 1-2 с. */
+export const SETTLE_REFRESH_MS = [800, 2000, 4000];
 export const RESIZE_REFRESH_MS = 150;
 
 export function MapContent({ components }: { components: YMapsComponents }) {
@@ -15,9 +16,10 @@ export function MapContent({ components }: { components: YMapsComponents }) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const settle = window.setTimeout(refreshLocation, SETTLE_REFRESH_MS);
+    const settle = SETTLE_REFRESH_MS.map((delay) => window.setTimeout(refreshLocation, delay));
     const host = hostRef.current;
-    if (!host || typeof ResizeObserver === 'undefined') return () => window.clearTimeout(settle);
+    const clearSettle = () => settle.forEach((timer) => window.clearTimeout(timer));
+    if (!host || typeof ResizeObserver === 'undefined') return clearSettle;
     let debounce: number | undefined;
     const observer = new ResizeObserver(() => {
       window.clearTimeout(debounce);
@@ -25,7 +27,7 @@ export function MapContent({ components }: { components: YMapsComponents }) {
     });
     observer.observe(host);
     return () => {
-      window.clearTimeout(settle);
+      clearSettle();
       window.clearTimeout(debounce);
       observer.disconnect();
     };
