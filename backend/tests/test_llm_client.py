@@ -1,11 +1,80 @@
+import json
+
 import httpx
 import pytest
 
+from app.domain.enums import EventType, Transport
 from app.llm.client import LlmError, ToolCall, parse_json_actions
-from tests.llm_helpers import MESSAGES, ScriptedProvider, completion, tool_call
+from app.llm.interpret import interpret
+from app.llm.prompt import build_messages
+from app.llm.tools import TOOL_SPECS, json_mode_instruction
+from tests.llm_helpers import MESSAGES, ScriptedProvider, completion, ids, named_session, tool_call
+from tests.planning_helpers import context
+
+TRANSPORT_CHANGE = {
+    "engineer_id": "Арташкин",
+    "transport": "bike",
+    "time": "13:00",
+    "rationale": "Машина сломалась, пересел на велосипед",
+}
 
 
-def test_tools_mode_sends_five_tools_and_parses_calls():
+def test_transport_change_tool_spec():
+    spec = TOOL_SPECS["propose_engineer_transport_change"]
+    assert spec["description"] == (
+        "Предложить сменить тип транспорта инженера с указанного времени: машина сломалась, "
+        "пересел на велосипед, выдали автомобиль и т.п."
+    )
+    properties = spec["parameters"]["properties"]
+    assert set(properties) == {"engineer_id", "transport", "time", "rationale"}
+    assert properties["transport"]["enum"] == ["car", "foot", "bike", "public"]
+    assert spec["parameters"]["required"] == ["engineer_id", "transport", "rationale"]
+    schemas = json.loads(json_mode_instruction().split("\n", 1)[1])
+    assert schemas["propose_engineer_transport_change"]["properties"]["transport"]["enum"] == [
+        "car",
+        "foot",
+        "bike",
+        "public",
+    ]
+
+
+@pytest.mark.parametrize("mode", ["tools", "json"])
+def test_transport_change_goes_from_provider_to_pending_draft(mode):
+    if mode == "tools":
+        provider = ScriptedProvider(
+            completion(tool_calls=[tool_call("propose_engineer_transport_change", TRANSPORT_CHANGE)])
+        )
+    else:
+        action = {"actions": [{"tool": "propose_engineer_transport_change", "arguments": TRANSPORT_CHANGE}]}
+        provider = ScriptedProvider(
+            httpx.Response(400, json={"error": {"message": "tools are not supported"}}),
+            completion(content=json.dumps(action, ensure_ascii=False)),
+        )
+    ctx = context()
+    session = named_session(ctx)
+    result = provider.client().complete(build_messages("Арташкин пересел на велосипед", session))
+
+    assert result.mode == mode
+    interpretation = interpret(result, session, ctx, ids())
+    assert interpretation.clarifications == []
+    [draft] = interpretation.drafts
+    assert (draft.event.type, draft.event.engineer_id, draft.event.transport, draft.event.time) == (
+        EventType.ENGINEER_TRANSPORT_CHANGED,
+        "E1",
+        Transport.BIKE,
+        780,
+    )
+    assert draft.event.previous_transport == Transport.CAR and draft.error is None
+    last = provider.bodies()[-1]
+    if mode == "tools":
+        assert "propose_engineer_transport_change" in [tool["function"]["name"] for tool in last["tools"]]
+    else:
+        assert "tools" not in last
+        assert '"propose_engineer_transport_change"' in last["messages"][0]["content"]
+        assert "смена транспорта" in last["messages"][0]["content"]
+
+
+def test_tools_mode_sends_six_tools_and_parses_calls():
     provider = ScriptedProvider(
         completion(
             tool_calls=[
@@ -33,6 +102,7 @@ def test_tools_mode_sends_five_tools_and_parses_calls():
         "propose_cancel",
         "propose_restore",
         "propose_engineer_unavailable",
+        "propose_engineer_transport_change",
         "ask_clarification",
     ]
     assert body["messages"] == MESSAGES
@@ -56,6 +126,7 @@ def test_json_mode_parses_fenced_actions_and_sends_no_tools():
     body = provider.bodies()[0]
     assert "tools" not in body
     assert len(body["messages"]) == 2 and '"actions"' in body["messages"][0]["content"]
+    assert '"propose_engineer_transport_change"' in body["messages"][0]["content"]
 
 
 def test_auto_mode_falls_back_to_json_when_provider_rejects_tools():

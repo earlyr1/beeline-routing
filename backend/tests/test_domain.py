@@ -87,6 +87,25 @@ def test_event_payload_rules():
     assert event.request.id == "R1"
 
 
+def test_transport_change_event_needs_engineer_and_transport():
+    text = "для смены транспорта нужны engineer_id и transport"
+    with pytest.raises(ValidationError, match=text):
+        Event(type=EventType.ENGINEER_TRANSPORT_CHANGED, time="13:00", engineer_id="E1")
+    with pytest.raises(ValidationError, match=text):
+        Event(type="engineer_transport_changed", time="13:00", transport="bike")
+    event = Event(type=EventType.ENGINEER_TRANSPORT_CHANGED, time="13:00", engineer_id="E1", transport="bike")
+    assert (event.transport, event.previous_transport) == (Transport.BIKE, None)
+
+
+def test_other_events_accept_missing_transport():
+    event = Event(type=EventType.CANCEL, time="13:00", request_id="R1")
+    assert (event.transport, event.previous_transport) == (None, None)
+    dumped = event.model_dump(mode="json")
+    assert (dumped["transport"], dumped["previous_transport"]) == (None, None)
+    unavailable = Event(type=EventType.ENGINEER_UNAVAILABLE, time="13:00", engineer_id="E1")
+    assert unavailable.transport is None
+
+
 def test_bundle_json_roundtrip():
     bundle = Bundle(
         region="east",

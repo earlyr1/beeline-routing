@@ -69,6 +69,9 @@ class Event(BaseModel):
     request: Request | None = None
     request_id: str | None = None
     engineer_id: str | None = None
+    # Смена транспорта: transport — новый транспорт от клиента, previous_transport заполняет backend.
+    transport: Transport | None = None
+    previous_transport: Transport | None = None
 
     @model_validator(mode="after")
     def _payload(self) -> Event:
@@ -78,6 +81,10 @@ class Event(BaseModel):
             raise ValueError("для отмены или возврата нужен request_id")
         if self.type == EventType.ENGINEER_UNAVAILABLE and not self.engineer_id:
             raise ValueError("для недоступности инженера нужен engineer_id")
+        if self.type == EventType.ENGINEER_TRANSPORT_CHANGED and (
+            not self.engineer_id or self.transport is None
+        ):
+            raise ValueError("для смены транспорта нужны engineer_id и transport")
         return self
 
 

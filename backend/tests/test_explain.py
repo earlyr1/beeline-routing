@@ -1,4 +1,4 @@
-from app.domain.enums import EventType, ReasonCode, RequestStatus, Skill
+from app.domain.enums import EventType, ReasonCode, RequestStatus, Skill, Transport
 from app.domain.models import Event, Request
 from app.planning.explain import build_explanation
 from app.planning.session import apply_event
@@ -92,6 +92,27 @@ def test_visit_on_the_way_is_explained_as_departed():
     later = _explain(updated, "C")
     assert later.summary.startswith(f"Исполнитель Инженер {busy}")
     assert "в пути" not in later.summary and "начал работу" not in later.summary
+
+
+def test_started_car_visit_stays_valid_after_engineer_changes_to_bike():
+    ctx = context()
+    requests = [
+        req("R1", 1, 0, "10:00", "12:00", transport=Transport.CAR),
+        req("R3", -1, 0, "15:00", "17:00"),
+    ]
+    session = new_session(ctx=ctx, requests=requests, engineers=[eng("E1")])
+    updated = apply_event(
+        session,
+        Event(type=EventType.ENGINEER_TRANSPORT_CHANGED, time="13:00", engineer_id="E1", transport="bike"),
+        ctx,
+    )
+    transport = next(c for c in _explain(updated, "R1").constraints if c.name == "Транспорт")
+    assert transport.ok is True
+    assert transport.detail == (
+        "Нужен «Автомобиль», работа запланирована до смены транспорта, сейчас у инженера «Велосипед»"
+    )
+    later = next(c for c in _explain(updated, "R3").constraints if c.name == "Транспорт")
+    assert later.detail == "Требований к транспорту нет, у инженера «Велосипед»"
 
 
 def _shortcut_problem():

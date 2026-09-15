@@ -5,8 +5,26 @@ import json
 import httpx
 
 from app.llm.client import OpenAiLlmClient
+from tests.helpers import eng
+from tests.planning_helpers import day_requests, new_session
 
 MESSAGES = [{"role": "system", "content": "правила"}, {"role": "user", "content": "сообщение"}]
+
+
+def named_session(ctx):
+    """День с бригадами по фамилиям: помощник называет инженеров так же, как диспетчер."""
+    engineers = [
+        eng("E1").model_copy(update={"name": "Бригада Арташкин"}),
+        eng("E2").model_copy(update={"name": "Бригада Белузин"}),
+    ]
+    requests = day_requests()
+    requests[1] = requests[1].model_copy(update={"address": "Город Москва, ул.Дубининская, д. 59 к 2"})
+    return new_session(ctx=ctx, requests=requests, engineers=engineers)
+
+
+def ids():
+    numbers = iter(range(1, 100))
+    return lambda: f"URG-AI-{next(numbers):03d}"
 
 
 def tool_call(name, arguments, call_id="call_1"):

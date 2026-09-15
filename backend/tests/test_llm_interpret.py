@@ -1,25 +1,10 @@
 from app.domain.enums import EventType, Priority, Skill, Transport
 from app.ingest.geocode import GeoResult
 from app.llm.client import LlmResult, ToolCall
-from app.llm.interpret import interpret
+from app.llm.interpret import NOTHING_FOUND, interpret
 from app.llm.prompt import build_messages
-from tests.helpers import eng
-from tests.planning_helpers import context, day_requests, new_session
-
-
-def named_session(ctx):
-    engineers = [
-        eng("E1").model_copy(update={"name": "Бригада Арташкин"}),
-        eng("E2").model_copy(update={"name": "Бригада Белузин"}),
-    ]
-    requests = day_requests()
-    requests[1] = requests[1].model_copy(update={"address": "Город Москва, ул.Дубининская, д. 59 к 2"})
-    return new_session(ctx=ctx, requests=requests, engineers=engineers)
-
-
-def ids():
-    numbers = iter(range(1, 100))
-    return lambda: f"URG-AI-{next(numbers):03d}"
+from tests.llm_helpers import ids, named_session
+from tests.planning_helpers import context
 
 
 def run(calls, ctx=None, session=None, text=None):
@@ -70,6 +55,81 @@ def test_conflicts_with_day_state_become_failed_drafts():
         [ToolCall("propose_restore", {"request_id": "R2", "time": "13:00", "rationale": "Снова в силе"})]
     )
     assert out.drafts[0].error == "Заявка R2 не отменена, возвращать нечего."
+
+
+def test_transport_change_by_surname_becomes_pending_draft():
+    out = run(
+        [
+            ToolCall(
+                "propose_engineer_transport_change",
+                {
+                    "engineer_id": "Арташкин",
+                    "transport": "bike",
+                    "time": "13:00",
+                    "rationale": "Сломалась машина, пересел на велосипед",
+                },
+            ),
+            ToolCall(
+                "propose_engineer_transport_change",
+                {"engineer_id": "белузин", "transport": "foot", "rationale": "Дальше пешком"},
+            ),
+        ]
+    )
+    assert out.clarifications == []
+    assert [
+        (
+            d.event.type,
+            d.event.engineer_id,
+            d.event.previous_transport,
+            d.event.transport,
+            d.event.time,
+            d.error,
+        )
+        for d in out.drafts
+    ] == [
+        (EventType.ENGINEER_TRANSPORT_CHANGED, "E1", Transport.CAR, Transport.BIKE, 780, None),
+        (EventType.ENGINEER_TRANSPORT_CHANGED, "E2", Transport.CAR, Transport.FOOT, 0, None),
+    ]
+    assert out.drafts[0].rationale == "Сломалась машина, пересел на велосипед"
+
+
+def test_transport_change_for_same_engineer_and_time_keeps_different_transports():
+    arguments = {"engineer_id": "E1", "time": "13:00", "rationale": "Пересел"}
+    out = run(
+        [
+            ToolCall("propose_engineer_transport_change", {**arguments, "transport": "bike"}),
+            ToolCall("propose_engineer_transport_change", {**arguments, "transport": "foot"}),
+            ToolCall("propose_engineer_transport_change", {**arguments, "transport": "bike"}),
+        ]
+    )
+    assert [d.event.transport for d in out.drafts] == [Transport.BIKE, Transport.FOOT]
+
+
+def test_transport_change_with_unknown_transport_or_same_transport():
+    out = run(
+        [
+            ToolCall(
+                "propose_engineer_transport_change",
+                {"engineer_id": "Арташкин", "transport": "plane", "rationale": "Улетел"},
+            ),
+            ToolCall(
+                "propose_engineer_transport_change",
+                {"engineer_id": "Кузнецов", "transport": "bike", "rationale": "Пересел"},
+            ),
+            ToolCall(
+                "propose_engineer_transport_change",
+                {"engineer_id": "Белузин", "transport": "car", "time": "13:00", "rationale": "Выдали машину"},
+            ),
+        ]
+    )
+    assert out.clarifications == [
+        "Не удалось разобрать предложение «propose_engineer_transport_change»: transport: неизвестный тип "
+        "транспорта «plane», допустимы car, foot, bike, public.",
+        "Инженер «Кузнецов» не найден.",
+    ]
+    [draft] = out.drafts
+    assert (draft.event.engineer_id, draft.event.transport) == ("E2", Transport.CAR)
+    assert draft.error == "У Бригада Белузин уже транспорт «Автомобиль»."
 
 
 def test_urgent_request_is_geocoded_and_gets_generated_id():
@@ -156,3 +216,11 @@ def test_prompt_carries_now_engineers_and_assignments():
     assert '"planned_start": "' in user["content"] and user["content"].endswith(
         "Арташкин заболел после обеда"
     )
+
+
+def test_prompt_and_nothing_found_hint_mention_transport_change():
+    system, user = build_messages("Арташкин пересел на велосипед", named_session(context()))
+    assert "смена транспорта" in system["content"]
+    assert "propose_engineer_transport_change" in system["content"]
+    assert '"transport": "car"' in user["content"]
+    assert "смена транспорта" in NOTHING_FOUND

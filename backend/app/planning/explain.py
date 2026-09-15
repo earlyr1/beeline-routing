@@ -126,12 +126,18 @@ def _assigned_constraints(
     request: Request, engineer: Engineer, visit: Visit, held: bool
 ) -> list[ConstraintCheck]:
     required = request.transport_required
+    current = TRANSPORT_RU[engineer.transport]
+    # Закреплённый визит планировался на прежнем транспорте: после смены транспорта он не нарушение.
+    replaced = held and required not in (None, engineer.transport)
     if required is None:
-        transport_detail = f"Требований к транспорту нет, у инженера «{TRANSPORT_RU[engineer.transport]}»"
-    else:
+        transport_detail = f"Требований к транспорту нет, у инженера «{current}»"
+    elif replaced:
         transport_detail = (
-            f"Нужен «{TRANSPORT_RU[required]}», у инженера «{TRANSPORT_RU[engineer.transport]}»"
+            f"Нужен «{TRANSPORT_RU[required]}», работа запланирована до смены транспорта, "
+            f"сейчас у инженера «{current}»"
         )
+    else:
+        transport_detail = f"Нужен «{TRANSPORT_RU[required]}», у инженера «{current}»"
     until = engineer.shift_end
     if not engineer.available and engineer.unavailable_from is not None and not held:
         until = min(until, engineer.unavailable_from)
@@ -142,7 +148,9 @@ def _assigned_constraints(
             detail=f"Нужен «{SKILL_RU[request.skill]}», у инженера: "
             f"{', '.join(SKILL_RU[skill] for skill in engineer.skills)}",
         ),
-        ConstraintCheck(name="Транспорт", ok=required in (None, engineer.transport), detail=transport_detail),
+        ConstraintCheck(
+            name="Транспорт", ok=replaced or required in (None, engineer.transport), detail=transport_detail
+        ),
         ConstraintCheck(name="Временное окно", ok=visit.late_min == 0, detail=_window_detail(request, visit)),
         ConstraintCheck(
             name="Смена",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
-from app.domain.enums import EventType, Priority, RequestStatus
+from app.domain.enums import TRANSPORT_RU, EventType, Priority, RequestStatus
 from app.domain.models import Engineer, Event, Office, Plan, Request, Visit
 from app.domain.timeutil import fmt_hhmm
 from app.geo.kvcache import KVCache
@@ -165,6 +165,13 @@ def _started_visits(plan: Plan, now: int) -> dict[str, Visit]:
     return {visit.request_id: visit for route in plan.routes for visit in route.visits if visit.start < now}
 
 
+def _find_engineer(engineers: list[Engineer], engineer_id: str | None) -> Engineer:
+    engineer = next((e for e in engineers if e.id == engineer_id), None)
+    if engineer is None:
+        raise EventRejected(f"Инженер {engineer_id} не найден.")
+    return engineer
+
+
 def _apply_to_inputs(
     session: PlanningSession, event: Event, ctx: PlanningContext
 ) -> tuple[list[Request], list[Engineer], Event]:
@@ -197,10 +204,23 @@ def _apply_to_inputs(
             request.status = RequestStatus.ACTIVE
         return requests, engineers, event
 
+    if event.type == EventType.ENGINEER_TRANSPORT_CHANGED:
+        engineer = _find_engineer(engineers, event.engineer_id)
+        if not engineer.available:
+            since = (
+                engineer.unavailable_from if engineer.unavailable_from is not None else engineer.shift_start
+            )
+            raise EventRejected(f"{engineer.name} недоступен с {fmt_hhmm(since)}, сменить транспорт нельзя.")
+        if engineer.transport == event.transport:
+            raise EventRejected(f"У {engineer.name} уже транспорт «{TRANSPORT_RU[engineer.transport]}».")
+        # Закреплённые визиты сохраняют прежние время и пробег (pin_problem берёт их из текущего плана),
+        # а все участки после них солвер считает по новому транспорту.
+        previous = engineer.transport
+        engineer.transport = event.transport
+        return requests, engineers, event.model_copy(update={"previous_transport": previous})
+
     if event.type == EventType.ENGINEER_UNAVAILABLE:
-        engineer = next((e for e in engineers if e.id == event.engineer_id), None)
-        if engineer is None:
-            raise EventRejected(f"Инженер {event.engineer_id} не найден.")
+        engineer = _find_engineer(engineers, event.engineer_id)
         if not engineer.available:
             raise EventRejected(
                 f"{engineer.name} уже недоступен с {fmt_hhmm(engineer.unavailable_from or 0)}."
