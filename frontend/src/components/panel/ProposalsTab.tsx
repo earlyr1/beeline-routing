@@ -56,6 +56,8 @@ export function ProposalsTab() {
   const datasetId = useAppStore((s) => s.datasetId);
   const state = useAppStore((s) => s.state);
   const showPrevious = useAppStore((s) => s.showPrevious);
+  // Пока план переходит на время часов, применённое предложение пришло бы в план, который сейчас заменят.
+  const committing = useAppStore((s) => s.committing);
   const { proposals, clarification, sending, working, error, load, send, approve, reject, approveAll, rejectAll } =
     useProposalsStore();
   const [text, setText] = useState('');
@@ -77,7 +79,7 @@ export function ProposalsTab() {
   if (!state) return null;
 
   const pending = proposals.filter((item) => item.status === 'pending');
-  const locked = sending || working || showPrevious;
+  const locked = sending || working || showPrevious || committing;
 
   return (
     <div className="proposals">

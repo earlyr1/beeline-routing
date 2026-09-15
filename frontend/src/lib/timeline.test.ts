@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { makeAsapState, makePlanningState } from '../test/fixtures';
-import { hourTicks, percent, timelineRow, timelineRows, timeScale } from './timeline';
+import { makeAsapState, makePlanningState, makeTimelineItem } from '../test/fixtures';
+import { dayScale, hourTicks, percent, timelineRow, timelineRows, timeScale } from './timeline';
 
 describe('timeline', () => {
   const state = makePlanningState();
@@ -92,6 +92,26 @@ describe('timeline', () => {
     const [e01, ...rest] = state.plan.routes;
     const plan = { ...state.plan, routes: [{ ...e01, lunch: { start: '23:00', end: '23:45' } }, ...rest] };
     expect(timeScale(state, plan).to).toBe(1440);
+  });
+
+  it('builds the day scale of the slider like the plan scale when the events fit inside it', () => {
+    expect(dayScale(state, state.plan)).toEqual({ from: 480, to: 1380 });
+    expect(dayScale(state, state.previous_plan!)).toEqual({ from: 480, to: 1380 });
+  });
+
+  it('keeps the day scale when the dispatcher switches to the plan before the event', () => {
+    const [e01, ...rest] = state.previous_plan!.routes;
+    const previous = { ...state.previous_plan!, routes: [{ ...e01, lunch: { start: '23:00', end: '23:45' } }, ...rest] };
+    const withLate = { ...state, previous_plan: previous };
+    expect(dayScale(withLate, withLate.plan)).toEqual({ from: 480, to: 1440 });
+    expect(dayScale(withLate, previous)).toEqual({ from: 480, to: 1440 });
+  });
+
+  it('widens the day scale to whole hours around the events of the timeline', () => {
+    const early = makeTimelineItem({ event: { type: 'cancel', time: '06:15', request: null, request_id: '50104', engineer_id: null } });
+    const late = makeTimelineItem({ id: 'tl_2', event: { type: 'cancel', time: '23:20', request: null, request_id: '46393', engineer_id: null } });
+    expect(dayScale({ ...state, timeline: [early] }, state.plan)).toEqual({ from: 360, to: 1380 });
+    expect(dayScale({ ...state, timeline: [early, late] }, state.plan)).toEqual({ from: 360, to: 1440 });
   });
 
   it('produces hour ticks', () => {

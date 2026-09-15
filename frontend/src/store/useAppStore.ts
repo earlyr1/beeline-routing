@@ -1,17 +1,22 @@
 import { create } from 'zustand';
 import {
+  addTimelineEvent,
   ApiError,
   buildPlan,
+  deleteTimelineEvent as removeTimelineEvent,
   getConfig,
   getDatasetStatus,
   getPlanningState,
   getReverseGeocode,
-  postEvent,
+  moveCursor,
   uploadFile,
 } from '../api/client';
-import type { ClientConfig, DatasetStatus, HHMM, PlanEvent, PlanningState } from '../api/types';
+import type { ClientConfig, DatasetStatus, HHMM, PlanEvent, PlanningState, TimelineItem } from '../api/types';
 import type { PickedPoint } from '../lib/events';
-import { isValidTime, laterTime } from '../lib/format';
+import { fromMinutes, isValidTime, toMinutes } from '../lib/format';
+import { byId } from '../lib/planView';
+import { NO_TIMELINE_MOVE, newlyRejected, pausesAt, playEnd, rejectedNotice, timelineMove, type TimelineMove } from '../lib/timeBar';
+import { dayScale } from '../lib/timeline';
 import { DEFAULT_LUNCH_ENABLED, DEFAULT_WORKLOAD_LEVEL, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 
 export const POLL_INTERVAL_MS = 1000;
@@ -19,8 +24,10 @@ export const POLL_INTERVAL_MS = 1000;
 export const POLL_RETRIES = 3;
 /** Ключ sessionStorage с набором данных открытого плана: план переживает перезагрузку страницы. */
 export const SESSION_DATASET_KEY = 'routing.datasetId';
-/** Время события по умолчанию для демо: середина рабочего дня, но не раньше текущего времени плана. */
-export const DEFAULT_EVENT_TIME: HHMM = '13:00';
+/** Шаг проигрывания дня: минута плана за 100 мс, то есть час дня за 6 секунд. */
+export const PLAY_TICK_MS = 100;
+/** Часы до первого ответа сервера: после загрузки и пересчёта с нуля план стоит на начале дня. */
+export const DAY_START: HHMM = '00:00';
 
 /** Диалог, для которого диспетчер указывает точку на карте. */
 export type PickOwner = 'urgent' | 'edit';
@@ -28,12 +35,13 @@ export type PickOwner = 'urgent' | 'edit';
 /** Диалог панели событий: на панели осталась только срочная заявка. */
 export type ToolbarDialog = 'urgent';
 
-/** Диалог инженера, который открывает страница бригады. */
+/** Диалог инженера, который открывает страница бригады или меню «Добавить событие». */
 export type EngineerDialogKind = 'transport' | 'unavailable';
 
 export interface EngineerDialog {
   kind: EngineerDialogKind;
-  engineerId: string;
+  /** Инженер со страницы бригады; null — диалог открыт с часов, и форма предлагает самого загруженного. */
+  engineerId: string | null;
 }
 
 /** Поиск адреса по точке срочной заявки: idle — не искали, loading — ждём ответ, done — ответ пришёл. */
@@ -48,7 +56,16 @@ export interface AppData {
   selectedEngineerId: string | null;
   activeTab: string;
   showPrevious: boolean;
-  eventTime: HHMM;
+  /** Время на часах шкалы дня. Во время перетаскивания и проигрывания оно впереди плана, пока его не зафиксируют. */
+  clock: HHMM;
+  /** Диспетчер тянет ползунок часов: план пересчитывается, только когда он его отпустит. */
+  dragging: boolean;
+  /** Часы идут сами: час дня за 6 секунд. */
+  playing: boolean;
+  /** Сервер переводит план на время часов. */
+  committing: boolean;
+  /** Что сделал последний полученный план на шкале: сколько событий применилось и ушли ли часы назад через события. */
+  timelineMove: TimelineMove;
   busy: boolean;
   error: string | null;
   pickMode: boolean;
@@ -58,9 +75,9 @@ export interface AppData {
   /** Заявка, открытая в диалоге «Изменить заявку»; null, когда диалог закрыт. */
   editingRequestId: string | null;
   delayDialogOpen: boolean;
-  /** Инженер со страницы бригады для диалога «Задержка инженера»; null, когда диалог закрыт. */
+  /** Инженер со страницы бригады для диалога «Задержка инженера»; null — диалог закрыт или открыт с часов. */
   delayEngineerId: string | null;
-  /** Диалог смены транспорта или недоступности для инженера со страницы бригады; null, когда закрыт. */
+  /** Диалог смены транспорта или недоступности; null, когда закрыт. */
   engineerDialog: EngineerDialog | null;
   /** Открытый диалог панели событий; пока он открыт, плавающие диалоги стоят левее него. */
   toolbarDialog: ToolbarDialog | null;
@@ -79,15 +96,31 @@ export interface AppActions {
   loadConfig(): Promise<void>;
   upload(file: File): Promise<void>;
   plan(): Promise<void>;
+  /** Поставить событие на шкалу дня. Сначала сервер переводит план на время часов, чтобы событие у часов применилось сразу. */
   applyEvent(event: PlanEvent): Promise<boolean>;
+  /** Убрать событие со шкалы дня. */
+  deleteTimelineEvent(entryId: string): Promise<boolean>;
   /** Вернуть план, открытый до перезагрузки страницы. */
   restoreSession(): Promise<void>;
   setPlanningState(state: PlanningState): void;
+  /** Передвинуть часы только на экране: план на сервере не меняется. */
+  setClock(time: HHMM): void;
+  /** Попросить у сервера план на время часов; true, если план получен или уже на этом времени. */
+  commitClock(): Promise<boolean>;
+  /** Запустить часы: минута дня за PLAY_TICK_MS, на каждом событии впереди план пересчитывается. */
+  play(): void;
+  /** Остановить часы и получить план на их время. */
+  pause(): void;
+  /** Остановить часы без запроса к серверу: план сейчас заменит ответ другого запроса. */
+  stopPlayback(): void;
+  /** Диспетчер взялся за ползунок часов. */
+  startDrag(): void;
+  /** Диспетчер отпустил ползунок: план пересчитывается на время часов. */
+  endDrag(): void;
   selectRequest(requestId: string | null): void;
   selectEngineer(engineerId: string | null): void;
   setTab(tabId: string): void;
   setShowPrevious(value: boolean): void;
-  setEventTime(value: HHMM): void;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
   setWorkloadLevel(level: number): void;
   /** Включить или выключить обед по плану для следующего расчёта плана с нуля. */
@@ -100,11 +133,11 @@ export interface AppActions {
   /** Открыть диалог изменения заявки; точка, выбранная для прежнего изменения, сбрасывается. */
   startEdit(requestId: string): void;
   closeEdit(): void;
-  /** Открыть диалог задержки для инженера со страницы бригады. */
-  startDelay(engineerId: string): void;
+  /** Открыть диалог задержки для инженера со страницы бригады или, с null, для самого загруженного. */
+  startDelay(engineerId: string | null): void;
   closeDelay(): void;
-  /** Открыть смену транспорта или недоступность для инженера со страницы бригады. */
-  openEngineerDialog(kind: EngineerDialogKind, engineerId: string): void;
+  /** Открыть смену транспорта или недоступность для инженера со страницы бригады или, с null, для самого загруженного. */
+  openEngineerDialog(kind: EngineerDialogKind, engineerId: string | null): void;
   closeEngineerDialog(): void;
   openToolbarDialog(dialog: ToolbarDialog): void;
   closeToolbarDialog(): void;
@@ -127,7 +160,11 @@ export const initialAppData: AppData = {
   selectedEngineerId: null,
   activeTab: 'requests',
   showPrevious: false,
-  eventTime: DEFAULT_EVENT_TIME,
+  clock: DAY_START,
+  dragging: false,
+  playing: false,
+  committing: false,
+  timelineMove: NO_TIMELINE_MOVE,
   busy: false,
   error: null,
   pickMode: false,
@@ -154,6 +191,9 @@ const NO_FLOATING_DIALOG = {
 } satisfies Partial<AppData>;
 
 const NO_ADDRESS_LOOKUP = { urgentAddressLookup: 'idle', urgentSuggestedAddress: null } satisfies Partial<AppData>;
+
+/** Новая сессия начинается с остановленными часами. */
+const NO_CLOCK_ACTIVITY = { dragging: false, playing: false, committing: false } satisfies Partial<AppData>;
 
 const OFFLINE_CONFIG: ClientConfig = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: false };
 
@@ -185,6 +225,12 @@ function saveDatasetId(datasetId: string | null): void {
   }
 }
 
+/** Сообщение об отклонённых событиях шкалы для всплывающей ошибки. */
+function rejectedMessage(items: TimelineItem[], state: PlanningState): string {
+  const engineers = byId(state.engineers);
+  return items.map((item) => rejectedNotice(item, engineers)).join(' ');
+}
+
 /** Поколение сессии: растёт при новой загрузке и при «Другой файл». Ответы прошлых поколений игнорируются. */
 let generation = 0;
 const isCurrent = (value: number) => value === generation;
@@ -192,254 +238,505 @@ const isCurrent = (value: number) => value === generation;
 /** Номер поиска адреса по точке: ответ на заменённую точку или для закрытого диалога не подставляется. */
 let addressLookup = 0;
 
-export const useAppStore = create<AppState>()((set, get) => ({
-  ...initialAppData,
+/** Запрос ждал очереди, а диспетчер уже открыл другой файл: такой запрос не отправляется. */
+class StaleSession extends Error {}
 
-  async loadConfig() {
-    try {
-      set({ config: await getConfig() });
-    } catch (error) {
-      set({ config: OFFLINE_CONFIG, error: errorMessage(error) });
-    }
-  },
+/**
+ * Очередь запросов, в ответ на которые сервер присылает план: часы, события шкалы и пересчёт с нуля.
+ * Запросы уходят по одному, поэтому ответ медленного запроса не затирает план, полученный после него.
+ */
+interface RequestLane {
+  tail: Promise<unknown>;
+  size: number;
+}
 
-  async upload(file) {
-    const current = ++generation;
-    saveDatasetId(null);
+let lane: RequestLane = { tail: Promise.resolve(), size: 0 };
+
+function enqueue<T>(current: number, send: () => Promise<T>): Promise<T> {
+  if (!isCurrent(current)) return Promise.reject(new StaleSession());
+  const own = lane;
+  own.size += 1;
+  const result = own.tail.then(() => {
+    if (!isCurrent(current)) throw new StaleSession();
+    return send();
+  });
+  own.tail = result.then(
+    () => {
+      own.size -= 1;
+    },
+    () => {
+      own.size -= 1;
+    },
+  );
+  return result;
+}
+
+/** Фиксация часов в пути: пока она идёт, новые фиксации только просят досылку с последним временем. */
+let commitRun: Promise<boolean> | null = null;
+let commitAgain = false;
+let playTimer: ReturnType<typeof setInterval> | null = null;
+let pollTimer: ReturnType<typeof setTimeout> | null = null;
+/** Поколение, чей опрос состояния сейчас ждёт ответа; -1 — никакой. */
+let pollInFlight = -1;
+
+function stopTicking(): void {
+  if (playTimer !== null) clearInterval(playTimer);
+  playTimer = null;
+}
+
+/**
+ * Забыть всё, что относится к открытому плану, кроме данных стора: таймеры часов и опроса, очередь запросов,
+ * фиксацию в пути. Ответы на прежние запросы после этого игнорируются.
+ */
+export function resetAppSession(): void {
+  generation += 1;
+  addressLookup += 1;
+  lane = { tail: Promise.resolve(), size: 0 };
+  commitRun = null;
+  commitAgain = false;
+  stopTicking();
+  if (pollTimer !== null) clearTimeout(pollTimer);
+  pollTimer = null;
+  pollInFlight = -1;
+}
+
+export const useAppStore = create<AppState>()((set, get) => {
+  /** План с сервера. syncClock ставит часы на его время; фиксация часов их не трогает, диспетчер мог сдвинуть их дальше. */
+  function receive(next: PlanningState, syncClock: boolean): void {
+    const { state: shown, selectedRequestId, editingRequestId, clock } = get();
+    const same = shown !== null && shown.dataset_id === next.dataset_id ? shown : null;
+    const exists = (requestId: string | null) => requestId !== null && next.requests.some((request) => request.id === requestId);
+    const rejected = same ? newlyRejected(same.timeline ?? [], next.timeline ?? []) : [];
+    saveDatasetId(next.dataset_id);
     set({
-      busy: true,
-      error: null,
-      datasetId: null,
-      datasetStatus: null,
-      state: null,
-      selectedRequestId: null,
-      selectedEngineerId: null,
-      ...NO_FLOATING_DIALOG,
-      toolbarDialog: null,
-      mapMenu: null,
-      ...NO_ADDRESS_LOOKUP,
-    });
-    try {
-      let status = await uploadFile(file);
-      if (!isCurrent(current)) return;
-      const datasetId = status.dataset_id;
-      set({ datasetId, datasetStatus: status });
-      let failures = 0;
-      while (status.status === 'processing') {
-        await sleep(POLL_INTERVAL_MS);
-        if (!isCurrent(current)) return;
-        try {
-          status = await getDatasetStatus(datasetId);
-        } catch (error) {
-          if (!isCurrent(current)) return;
-          if (isTransient(error) && failures < POLL_RETRIES) {
-            failures += 1;
-            continue;
-          }
-          // Сбрасываем статус, чтобы кнопка загрузки снова стала доступна.
-          set({ datasetId: null, datasetStatus: null, error: `${withPeriod(errorMessage(error))} Загрузите файл ещё раз.` });
-          return;
-        }
-        failures = 0;
-        if (!isCurrent(current)) return;
-        set({ datasetStatus: status });
-      }
-      if (status.status === 'failed') set({ error: status.error ?? 'Не удалось обработать файл' });
-    } catch (error) {
-      if (isCurrent(current)) set({ error: errorMessage(error) });
-    } finally {
-      if (isCurrent(current)) set({ busy: false });
-    }
-  },
-
-  async plan() {
-    const { datasetId, workloadLevel, lunchEnabled } = get();
-    if (!datasetId) return;
-    const current = generation;
-    set({ busy: true, error: null });
-    try {
-      const state = await buildPlan(datasetId, { workload_level: workloadLevel, lunch: lunchEnabled });
-      if (!isCurrent(current)) return;
-      get().setPlanningState(state);
-      set({ selectedRequestId: null });
-    } catch (error) {
-      if (isCurrent(current)) set({ error: errorMessage(error) });
-    } finally {
-      if (isCurrent(current)) set({ busy: false });
-    }
-  },
-
-  async applyEvent(event) {
-    const { datasetId } = get();
-    if (!datasetId) return false;
-    const current = generation;
-    set({ busy: true, error: null });
-    try {
-      const state = await postEvent(datasetId, event);
-      if (!isCurrent(current)) return false;
-      get().setPlanningState(state);
-      return true;
-    } catch (error) {
-      if (isCurrent(current)) set({ error: errorMessage(error) });
-      return false;
-    } finally {
-      if (isCurrent(current)) set({ busy: false });
-    }
-  },
-
-  async restoreSession() {
-    const datasetId = savedDatasetId();
-    if (!datasetId || get().state) return;
-    const current = generation;
-    try {
-      const state = await getPlanningState(datasetId);
-      if (isCurrent(current)) get().setPlanningState(state);
-    } catch (error) {
-      if (!isCurrent(current)) return;
-      // 404: backend перезапущен и набора больше нет; 409: план ещё не построен. Остаёмся на экране загрузки.
-      if (error instanceof ApiError && (error.status === 404 || error.status === 409)) saveDatasetId(null);
-      else set({ error: errorMessage(error) });
-    }
-  },
-
-  setPlanningState(state) {
-    const { selectedRequestId, editingRequestId, eventTime } = get();
-    const exists = (requestId: string | null) => requestId !== null && state.requests.some((request) => request.id === requestId);
-    saveDatasetId(state.dataset_id);
-    set({
-      state,
-      datasetId: state.dataset_id,
+      state: next,
+      datasetId: next.dataset_id,
       showPrevious: false,
-      eventTime: isValidTime(eventTime) ? laterTime(eventTime, state.now) : state.now,
+      clock: syncClock && isValidTime(next.cursor ?? '') ? next.cursor : clock,
+      timelineMove: same ? timelineMove(same, next) : NO_TIMELINE_MOVE,
       selectedRequestId: exists(selectedRequestId) ? selectedRequestId : null,
       editingRequestId: exists(editingRequestId) ? editingRequestId : null,
       // Нагрузка и обед сессии на сервере: «Пересчитать с нуля» и восстановленный план продолжают с ними.
-      workloadLevel: clampWorkloadLevel(state.workload_level),
-      lunchEnabled: lunchEnabledOf(state.lunch_enabled),
+      workloadLevel: clampWorkloadLevel(next.workload_level),
+      lunchEnabled: lunchEnabledOf(next.lunch_enabled),
+      ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
     });
-  },
+    if (next.timeline_ready === false) schedulePoll();
+  }
 
-  selectRequest(requestId) {
-    set({ selectedRequestId: requestId });
-  },
-
-  selectEngineer(engineerId) {
-    set({ selectedEngineerId: engineerId });
-  },
-
-  setTab(tabId) {
-    set({ activeTab: tabId });
-  },
-
-  setShowPrevious(value) {
-    set({ showPrevious: value && Boolean(get().state?.previous_plan) });
-  },
-
-  setEventTime(value) {
-    set({ eventTime: value });
-  },
-
-  setWorkloadLevel(level) {
-    set({ workloadLevel: clampWorkloadLevel(level) });
-  },
-
-  setLunchEnabled(value) {
-    set({ lunchEnabled: value });
-  },
-
-  startPick(owner) {
-    // Клик по карте теперь выбирает точку, а не открывает меню, поэтому прежнее меню закрывается.
-    // Новая точка срочной заявки заменяет точку из меню: адрес, найденный для прежней точки, к ней не относится.
-    const newUrgentPoint = owner === 'urgent';
-    if (newUrgentPoint) addressLookup += 1;
-    set({ pickMode: true, pickedPoint: null, pickFor: owner ?? null, mapMenu: null, ...(newUrgentPoint ? NO_ADDRESS_LOOKUP : {}) });
-  },
-
-  finishPick(point) {
-    set({ pickMode: false, pickedPoint: point });
-  },
-
-  clearPick(owner) {
-    if (get().pickFor === owner) set({ pickMode: false, pickedPoint: null, pickFor: null });
-  },
-
-  startEdit(requestId) {
-    set({ ...NO_FLOATING_DIALOG, editingRequestId: requestId, mapMenu: null });
-    get().clearPick('edit');
-  },
-
-  closeEdit() {
-    set({ editingRequestId: null });
-    get().clearPick('edit');
-  },
-
-  startDelay(engineerId) {
-    set({ ...NO_FLOATING_DIALOG, delayDialogOpen: true, delayEngineerId: engineerId, mapMenu: null });
-    get().clearPick('edit');
-  },
-
-  closeDelay() {
-    set({ delayDialogOpen: false, delayEngineerId: null });
-  },
-
-  openEngineerDialog(kind, engineerId) {
-    set({ ...NO_FLOATING_DIALOG, engineerDialog: { kind, engineerId }, mapMenu: null });
-    get().clearPick('edit');
-  },
-
-  closeEngineerDialog() {
-    set({ engineerDialog: null });
-  },
-
-  openToolbarDialog(dialog) {
-    set({ toolbarDialog: dialog, mapMenu: null });
-  },
-
-  closeToolbarDialog() {
-    addressLookup += 1;
-    set({ toolbarDialog: null, ...NO_ADDRESS_LOOKUP });
-  },
-
-  openMapMenu(point) {
-    set({ mapMenu: point });
-  },
-
-  closeMapMenu() {
-    set({ mapMenu: null });
-  },
-
-  async addRequestAt(point) {
-    const lookup = ++addressLookup;
+  /** Пока сервер считает планы после событий шкалы, их статусы спрашиваются раз в POLL_INTERVAL_MS. */
+  function schedulePoll(): void {
+    if (pollTimer !== null || pollInFlight === generation) return;
     const current = generation;
-    set({
-      mapMenu: null,
-      toolbarDialog: 'urgent',
-      pickMode: false,
-      pickFor: 'urgent',
-      pickedPoint: point,
-      urgentAddressLookup: 'loading',
-      urgentSuggestedAddress: null,
-    });
-    let address: string | null = null;
-    try {
-      address = (await getReverseGeocode(point.lat, point.lon)).address?.trim() || null;
-    } catch {
-      // Точка вне области, геокодер выключен или недоступен: адрес останется пустым, заявка уйдёт с точкой.
+    pollTimer = setTimeout(() => {
+      pollTimer = null;
+      void pollTimeline(current);
+    }, POLL_INTERVAL_MS);
+  }
+
+  async function pollTimeline(current: number): Promise<void> {
+    const { datasetId, state, dragging, playing, committing, busy } = get();
+    if (!isCurrent(current) || !datasetId || state?.timeline_ready !== false) return;
+    // Пока диспетчер тянет часы или ждёт план, опрос не мешает: следующий ответ сам принесёт статусы.
+    if (dragging || playing || committing || busy) {
+      schedulePoll();
+      return;
     }
-    if (lookup !== addressLookup || !isCurrent(current)) return;
-    set({ urgentAddressLookup: 'done', urgentSuggestedAddress: address });
-  },
+    pollInFlight = current;
+    try {
+      const fresh = await getPlanningState(datasetId);
+      const shown = get().state;
+      if (!isCurrent(current) || !fresh || !shown) return;
+      // Берём только статусы шкалы и готовность: план, выбор и «До события» на экране не сбрасываются.
+      if (fresh.dataset_id === shown.dataset_id && fresh.version === shown.version && fresh.cursor === shown.cursor) {
+        const rejected = newlyRejected(shown.timeline ?? [], fresh.timeline ?? []);
+        set({
+          state: { ...shown, timeline: fresh.timeline, timeline_ready: fresh.timeline_ready },
+          ...(rejected.length > 0 ? { error: rejectedMessage(rejected, shown) } : {}),
+        });
+      }
+    } catch {
+      // Временный сбой опроса: спросим ещё раз.
+    } finally {
+      if (pollInFlight === current) pollInFlight = -1;
+    }
+    if (isCurrent(current) && get().state?.timeline_ready === false) schedulePoll();
+  }
 
-  clearError() {
-    set({ error: null });
-  },
+  function startTicking(): void {
+    stopTicking();
+    const current = generation;
+    playTimer = setInterval(() => tick(current), PLAY_TICK_MS);
+  }
 
-  reset() {
-    generation += 1;
-    addressLookup += 1;
-    saveDatasetId(null);
-    // Нагрузку и обед диспетчер выбирал сам: следующий файл он планирует с тем же выбором.
-    const { config, workloadLevel, lunchEnabled } = get();
-    set({ ...initialAppData, config, workloadLevel, lunchEnabled });
-  },
-}));
+  /** Продолжить часы после фиксации, если диспетчер их не остановил; сбой фиксации останавливает часы. */
+  function resumeAfter(commit: Promise<boolean>, current: number): void {
+    void commit.then((ok) => {
+      if (!isCurrent(current) || !get().playing) return;
+      if (ok) startTicking();
+      else set({ playing: false });
+    });
+  }
+
+  function finishPlayback(): void {
+    stopTicking();
+    set({ playing: false });
+    void get().commitClock();
+  }
+
+  function tick(current: number): void {
+    const { state, clock, playing } = get();
+    if (!isCurrent(current) || !state || !playing) {
+      stopTicking();
+      return;
+    }
+    const end = playEnd(dayScale(state, state.plan));
+    const next = toMinutes(clock) + 1;
+    if (next > end) {
+      finishPlayback();
+      return;
+    }
+    set({ clock: fromMinutes(next) });
+    if (pausesAt(state.timeline ?? [], next)) {
+      // На минуте события часы ждут план с этим событием, а потом идут дальше.
+      stopTicking();
+      resumeAfter(get().commitClock(), current);
+    } else if (next >= end) {
+      finishPlayback();
+    }
+  }
+
+  return {
+    ...initialAppData,
+
+    async loadConfig() {
+      try {
+        set({ config: await getConfig() });
+      } catch (error) {
+        set({ config: OFFLINE_CONFIG, error: errorMessage(error) });
+      }
+    },
+
+    async upload(file) {
+      resetAppSession();
+      const current = generation;
+      saveDatasetId(null);
+      set({
+        busy: true,
+        error: null,
+        datasetId: null,
+        datasetStatus: null,
+        state: null,
+        selectedRequestId: null,
+        selectedEngineerId: null,
+        ...NO_FLOATING_DIALOG,
+        ...NO_CLOCK_ACTIVITY,
+        toolbarDialog: null,
+        mapMenu: null,
+        ...NO_ADDRESS_LOOKUP,
+      });
+      try {
+        let status = await uploadFile(file);
+        if (!isCurrent(current)) return;
+        const datasetId = status.dataset_id;
+        set({ datasetId, datasetStatus: status });
+        let failures = 0;
+        while (status.status === 'processing') {
+          await sleep(POLL_INTERVAL_MS);
+          if (!isCurrent(current)) return;
+          try {
+            status = await getDatasetStatus(datasetId);
+          } catch (error) {
+            if (!isCurrent(current)) return;
+            if (isTransient(error) && failures < POLL_RETRIES) {
+              failures += 1;
+              continue;
+            }
+            // Сбрасываем статус, чтобы кнопка загрузки снова стала доступна.
+            set({ datasetId: null, datasetStatus: null, error: `${withPeriod(errorMessage(error))} Загрузите файл ещё раз.` });
+            return;
+          }
+          failures = 0;
+          if (!isCurrent(current)) return;
+          set({ datasetStatus: status });
+        }
+        if (status.status === 'failed') set({ error: status.error ?? 'Не удалось обработать файл' });
+      } catch (error) {
+        if (isCurrent(current)) set({ error: errorMessage(error) });
+      } finally {
+        if (isCurrent(current)) set({ busy: false });
+      }
+    },
+
+    async plan() {
+      const { datasetId, workloadLevel, lunchEnabled } = get();
+      if (!datasetId) return;
+      // Пересчёт с нуля ставит часы на начало дня: идущие часы останавливаются без фиксации.
+      get().stopPlayback();
+      const current = generation;
+      set({ busy: true, error: null });
+      try {
+        const state = await enqueue(current, () => buildPlan(datasetId, { workload_level: workloadLevel, lunch: lunchEnabled }));
+        if (!isCurrent(current)) return;
+        get().setPlanningState(state);
+        set({ selectedRequestId: null });
+      } catch (error) {
+        if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });
+      } finally {
+        if (isCurrent(current)) set({ busy: false });
+      }
+    },
+
+    async applyEvent(event) {
+      const { datasetId } = get();
+      if (!datasetId) return false;
+      const current = generation;
+      set({ busy: true, error: null });
+      try {
+        // Диспетчер видит на часах их время и ждёт, что событие в это время применится сразу.
+        await get().commitClock();
+        const state = await enqueue(current, () => addTimelineEvent(datasetId, event));
+        if (!isCurrent(current)) return false;
+        get().setPlanningState(state);
+        return true;
+      } catch (error) {
+        if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });
+        return false;
+      } finally {
+        if (isCurrent(current)) set({ busy: false });
+      }
+    },
+
+    async deleteTimelineEvent(entryId) {
+      const { datasetId } = get();
+      if (!datasetId) return false;
+      const current = generation;
+      set({ busy: true, error: null });
+      try {
+        const state = await enqueue(current, () => removeTimelineEvent(datasetId, entryId));
+        if (!isCurrent(current)) return false;
+        get().setPlanningState(state);
+        return true;
+      } catch (error) {
+        if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });
+        return false;
+      } finally {
+        if (isCurrent(current)) set({ busy: false });
+      }
+    },
+
+    async restoreSession() {
+      const datasetId = savedDatasetId();
+      if (!datasetId || get().state) return;
+      const current = generation;
+      try {
+        const state = await getPlanningState(datasetId);
+        if (isCurrent(current)) get().setPlanningState(state);
+      } catch (error) {
+        if (!isCurrent(current)) return;
+        // 404: backend перезапущен и набора больше нет; 409: план ещё не построен. Остаёмся на экране загрузки.
+        if (error instanceof ApiError && (error.status === 404 || error.status === 409)) saveDatasetId(null);
+        else set({ error: errorMessage(error) });
+      }
+    },
+
+    setPlanningState(state) {
+      const { dragging, playing } = get();
+      // Пока диспетчер тянет ползунок или часы идут, часы на экране главнее времени плана.
+      receive(state, !dragging && !playing);
+    },
+
+    setClock(time) {
+      set({ clock: time });
+    },
+
+    commitClock() {
+      const { datasetId, state, clock } = get();
+      if (!datasetId || !state) return Promise.resolve(true);
+      if (commitRun) {
+        // Фиксация уже в пути: когда она вернётся, досылается одна фиксация с последним временем часов.
+        commitAgain = true;
+        return commitRun;
+      }
+      if (clock === state.cursor && lane.size === 0) return Promise.resolve(true);
+      const current = generation;
+      set({ committing: true });
+      const run: Promise<boolean> = enqueue(current, async () => {
+        do {
+          commitAgain = false;
+          const shown = get().state;
+          const target = get().clock;
+          if (!shown || target === shown.cursor) break;
+          const next = await moveCursor(datasetId, target);
+          if (!isCurrent(current)) throw new StaleSession();
+          receive(next, false);
+        } while (commitAgain);
+        return true;
+      })
+        .catch((error: unknown) => {
+          if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });
+          return false;
+        })
+        .finally(() => {
+          if (commitRun === run) commitRun = null;
+          if (isCurrent(current)) set({ committing: false });
+        });
+      commitRun = run;
+      return run;
+    },
+
+    play() {
+      const { state, playing, clock } = get();
+      if (!state || playing) return;
+      const scale = dayScale(state, state.plan);
+      const end = playEnd(scale);
+      // Часы раньше начала шкалы стоят на ползунке в её начале: проигрывание идёт с того места, где ползунок.
+      const start = Math.max(isValidTime(clock) ? toMinutes(clock) : scale.from, scale.from);
+      if (start >= end) return;
+      set({ playing: true, showPrevious: false, clock: fromMinutes(start) });
+      // Часы, которые сервер ещё не видел, сначала фиксируются: иначе события между планом и часами не применятся.
+      resumeAfter(get().commitClock(), generation);
+    },
+
+    pause() {
+      stopTicking();
+      set({ playing: false });
+      void get().commitClock();
+    },
+
+    stopPlayback() {
+      stopTicking();
+      set({ playing: false });
+    },
+
+    startDrag() {
+      stopTicking();
+      // Перетаскивание показывает план после событий: ответ фиксации всё равно переключил бы «До события» посреди жеста.
+      set({ dragging: true, playing: false, showPrevious: false });
+    },
+
+    endDrag() {
+      set({ dragging: false });
+      void get().commitClock();
+    },
+
+    selectRequest(requestId) {
+      set({ selectedRequestId: requestId });
+    },
+
+    selectEngineer(engineerId) {
+      set({ selectedEngineerId: engineerId });
+    },
+
+    setTab(tabId) {
+      set({ activeTab: tabId });
+    },
+
+    setShowPrevious(value) {
+      set({ showPrevious: value && Boolean(get().state?.previous_plan) });
+    },
+
+    setWorkloadLevel(level) {
+      set({ workloadLevel: clampWorkloadLevel(level) });
+    },
+
+    setLunchEnabled(value) {
+      set({ lunchEnabled: value });
+    },
+
+    startPick(owner) {
+      // Клик по карте теперь выбирает точку, а не открывает меню, поэтому прежнее меню закрывается.
+      // Новая точка срочной заявки заменяет точку из меню: адрес, найденный для прежней точки, к ней не относится.
+      const newUrgentPoint = owner === 'urgent';
+      if (newUrgentPoint) addressLookup += 1;
+      set({ pickMode: true, pickedPoint: null, pickFor: owner ?? null, mapMenu: null, ...(newUrgentPoint ? NO_ADDRESS_LOOKUP : {}) });
+    },
+
+    finishPick(point) {
+      set({ pickMode: false, pickedPoint: point });
+    },
+
+    clearPick(owner) {
+      if (get().pickFor === owner) set({ pickMode: false, pickedPoint: null, pickFor: null });
+    },
+
+    startEdit(requestId) {
+      set({ ...NO_FLOATING_DIALOG, editingRequestId: requestId, mapMenu: null });
+      get().clearPick('edit');
+    },
+
+    closeEdit() {
+      set({ editingRequestId: null });
+      get().clearPick('edit');
+    },
+
+    startDelay(engineerId) {
+      set({ ...NO_FLOATING_DIALOG, delayDialogOpen: true, delayEngineerId: engineerId, mapMenu: null });
+      get().clearPick('edit');
+    },
+
+    closeDelay() {
+      set({ delayDialogOpen: false, delayEngineerId: null });
+    },
+
+    openEngineerDialog(kind, engineerId) {
+      set({ ...NO_FLOATING_DIALOG, engineerDialog: { kind, engineerId }, mapMenu: null });
+      get().clearPick('edit');
+    },
+
+    closeEngineerDialog() {
+      set({ engineerDialog: null });
+    },
+
+    openToolbarDialog(dialog) {
+      set({ toolbarDialog: dialog, mapMenu: null });
+    },
+
+    closeToolbarDialog() {
+      addressLookup += 1;
+      set({ toolbarDialog: null, ...NO_ADDRESS_LOOKUP });
+    },
+
+    openMapMenu(point) {
+      set({ mapMenu: point });
+    },
+
+    closeMapMenu() {
+      set({ mapMenu: null });
+    },
+
+    async addRequestAt(point) {
+      const lookup = ++addressLookup;
+      const current = generation;
+      set({
+        mapMenu: null,
+        toolbarDialog: 'urgent',
+        pickMode: false,
+        pickFor: 'urgent',
+        pickedPoint: point,
+        urgentAddressLookup: 'loading',
+        urgentSuggestedAddress: null,
+      });
+      let address: string | null = null;
+      try {
+        address = (await getReverseGeocode(point.lat, point.lon)).address?.trim() || null;
+      } catch {
+        // Точка вне области, геокодер выключен или недоступен: адрес останется пустым, заявка уйдёт с точкой.
+      }
+      if (lookup !== addressLookup || !isCurrent(current)) return;
+      set({ urgentAddressLookup: 'done', urgentSuggestedAddress: address });
+    },
+
+    clearError() {
+      set({ error: null });
+    },
+
+    reset() {
+      resetAppSession();
+      saveDatasetId(null);
+      // Нагрузку и обед диспетчер выбирал сам: следующий файл он планирует с тем же выбором.
+      const { config, workloadLevel, lunchEnabled } = get();
+      set({ ...initialAppData, config, workloadLevel, lunchEnabled });
+    },
+  };
+});

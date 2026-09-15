@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { ServiceRequest } from '../api/types';
 import { makeAsapRequest, makeDelayEvent, makeDelayForecast, makePlanningState, makeRequestUpdateEvent } from '../test/fixtures';
 import {
+  BEFORE_SHIFTS_HINT,
+  beforeShiftsHint,
   buildUrgentEvent,
   busiestEngineerId,
   cancelEvent,
@@ -12,7 +14,6 @@ import {
   delayEvent,
   describeEvent,
   earliestShiftStart,
-  effectiveEventTime,
   forecastLines,
   isWorkStarted,
   latestShiftEnd,
@@ -48,19 +49,30 @@ const form: UrgentForm = {
 };
 
 describe('events', () => {
-  it('accepts a valid urgent form', () => {
-    expect(validateUrgentForm(form, '13:00')).toEqual([]);
+  it('accepts a valid urgent form at any time of the day', () => {
+    expect(validateUrgentForm(form)).toEqual([]);
+    expect(validateUrgentForm({ ...form, time: '00:05' })).toEqual([]);
   });
 
   it('reports every problem in Russian', () => {
-    const errors = validateUrgentForm({ ...form, address: ' ', windowEnd: '12:00', durationMin: 0, time: '12:59' }, '13:00');
+    const errors = validateUrgentForm({ ...form, address: ' ', windowEnd: '12:00', durationMin: 0, time: '9' });
     expect(errors).toEqual([
       'Укажите адрес или точку на карте',
       'Конец окна должен быть позже начала',
       'Длительность должна быть больше нуля',
-      'Время события не может быть раньше 13:00',
+      'Укажите время в формате ЧЧ:ММ',
     ]);
-    expect(timeError('9', '13:00')).toBe('Укажите время в формате ЧЧ:ММ');
+    expect(timeError('9')).toBe('Укажите время в формате ЧЧ:ММ');
+    expect(timeError('07:45')).toBeNull();
+  });
+
+  it('warns that an event before the first shift replans the whole day', () => {
+    const { engineers } = makePlanningState();
+    expect(beforeShiftsHint('09:59', engineers)).toBe(BEFORE_SHIFTS_HINT);
+    expect(BEFORE_SHIFTS_HINT).toBe('Событие до начала смен: план дня пересчитается целиком');
+    expect(beforeShiftsHint('10:00', engineers)).toBeNull();
+    expect(beforeShiftsHint('9', engineers)).toBeNull();
+    expect(beforeShiftsHint('00:00', [])).toBeNull();
   });
 
   it('builds an urgent event with a full request from a map point', () => {
@@ -90,10 +102,10 @@ describe('events', () => {
   });
 
   it('skips the window checks of an urgent request as soon as possible', () => {
-    expect(validateUrgentForm({ ...form, asap: true, windowStart: '', windowEnd: '' }, '13:00')).toEqual([]);
-    expect(validateUrgentForm({ ...form, asap: true, address: ' ', windowStart: '14:00', windowEnd: '12:00', time: '12:00' }, '13:00')).toEqual([
+    expect(validateUrgentForm({ ...form, asap: true, windowStart: '', windowEnd: '' })).toEqual([]);
+    expect(validateUrgentForm({ ...form, asap: true, address: ' ', windowStart: '14:00', windowEnd: '12:00', time: '' })).toEqual([
       'Укажите адрес или точку на карте',
-      'Время события не может быть раньше 13:00',
+      'Укажите время в формате ЧЧ:ММ',
     ]);
   });
 
@@ -328,45 +340,43 @@ describe('request update', () => {
   });
 
   it('skips the window checks of a request edited as soon as possible', () => {
-    expect(validateRequestEdit(original, { ...form, asap: true, windowStart: '', windowEnd: '' }, '13:30', '13:00')).toEqual([]);
+    expect(validateRequestEdit(original, { ...form, asap: true, windowStart: '', windowEnd: '' }, '13:30')).toEqual([]);
     const stored = makeAsapRequest();
-    expect(validateRequestEdit(stored, { ...requestEditForm(stored), windowEnd: '12:00' }, '13:30', '13:00')).toEqual(['Ничего не изменилось']);
-    expect(validateRequestEdit(stored, { ...requestEditForm(stored), asap: false, windowEnd: '12:00' }, '13:30', '13:00')).toEqual([
+    expect(validateRequestEdit(stored, { ...requestEditForm(stored), windowEnd: '12:00' }, '13:30')).toEqual(['Ничего не изменилось']);
+    expect(validateRequestEdit(stored, { ...requestEditForm(stored), asap: false, windowEnd: '12:00' }, '13:30')).toEqual([
       'Конец окна должен быть позже начала',
     ]);
   });
 
   it('validates the edit like the urgent form and refuses an unchanged request', () => {
-    expect(validateRequestEdit(original, form, '13:30', '13:00')).toEqual(['Ничего не изменилось']);
-    expect(validateRequestEdit(original, { ...form, durationMin: 60 }, '13:30', '13:00')).toEqual([]);
-    expect(validateRequestEdit(original, form, '12:00', '13:00')).toEqual(['Время события не может быть раньше 13:00']);
-    expect(validateRequestEdit(original, { ...form, address: ' ', windowEnd: '14:00', durationMin: 0 }, '12:59', '13:00')).toEqual([
+    expect(validateRequestEdit(original, form, '13:30')).toEqual(['Ничего не изменилось']);
+    expect(validateRequestEdit(original, { ...form, durationMin: 60 }, '13:30')).toEqual([]);
+    expect(validateRequestEdit(original, { ...form, durationMin: 60 }, '08:00')).toEqual([]);
+    expect(validateRequestEdit(original, form, '12:60')).toEqual(['Укажите время в формате ЧЧ:ММ']);
+    expect(validateRequestEdit(original, { ...form, address: ' ', windowEnd: '14:00', durationMin: 0 }, '')).toEqual([
       'Укажите адрес или точку на карте',
       'Конец окна должен быть позже начала',
       'Длительность должна быть больше нуля',
-      'Время события не может быть раньше 13:00',
+      'Укажите время в формате ЧЧ:ММ',
     ]);
-    expect(validateRequestEdit(original, { ...form, windowStart: '' }, '13:30', '13:00')).toEqual(['Укажите окно визита в формате ЧЧ:ММ']);
+    expect(validateRequestEdit(original, { ...form, windowStart: '' }, '13:30')).toEqual(['Укажите окно визита в формате ЧЧ:ММ']);
   });
 
-  it('treats a pinned visit of an active request as started work', () => {
+  it('treats a pinned visit or a visit that started before the clock as started work, like the server', () => {
     const visits = assignmentIndex(state.plan);
     const visitOf = (id: string) => visits.get(id)?.visit;
-    expect(isWorkStarted(requestOf('74198'), visitOf('74198'))).toBe(true);
-    expect(isWorkStarted(requestOf('50104'), visitOf('50104'))).toBe(false);
-    expect(isWorkStarted({ ...requestOf('74198'), status: 'cancelled' }, visitOf('74198'))).toBe(false);
-    expect(isWorkStarted(requestOf('18754'), undefined)).toBe(false);
+    expect(isWorkStarted(requestOf('74198'), visitOf('74198'), '09:00')).toBe(true);
+    expect(isWorkStarted(requestOf('50104'), visitOf('50104'), '13:00')).toBe(false);
+    // Визит 50104 начинается в 14:00: в 14:00 работа ещё не началась, в 14:01 уже идёт.
+    expect(isWorkStarted(requestOf('50104'), visitOf('50104'), '14:00')).toBe(false);
+    expect(isWorkStarted(requestOf('50104'), visitOf('50104'), '14:01')).toBe(true);
+    expect(isWorkStarted({ ...requestOf('74198'), status: 'cancelled' }, visitOf('74198'), '13:00')).toBe(false);
+    expect(isWorkStarted(requestOf('18754'), undefined, '23:00')).toBe(false);
   });
 
-  it('uses the toolbar time for events but never a time earlier than now or an invalid one', () => {
-    expect(effectiveEventTime('13:30', '13:00')).toBe('13:30');
-    expect(effectiveEventTime('12:00', '13:00')).toBe('13:00');
-    expect(effectiveEventTime('', '13:00')).toBe('13:00');
-  });
-
-  it('shares one rule for the edit, cancel and restore buttons of a request', () => {
+  it('shares one rule for the edit, cancel and restore buttons of a request at the clock', () => {
     const visits = assignmentIndex(state.plan);
-    const idle = { busy: false, showPrevious: false, eventTime: '13:30', now: '13:00' };
+    const idle = { busy: false, showPrevious: false, clock: '13:30' };
     const actionsOf = (id: string, patch = {}) => requestActionState(requestOf(id), visits.get(id)?.visit, { ...idle, ...patch });
 
     expect(actionsOf('50104')).toEqual({
@@ -378,7 +388,12 @@ describe('request update', () => {
       cancelEvent: cancelEvent('50104', '13:30'),
     });
     expect(actionsOf('10135')).toMatchObject({ cancelled: true, disabled: false, cancelLabel: 'Вернуть', cancelEvent: restoreEvent('10135', '13:30') });
-    expect(actionsOf('50104', { eventTime: '12:00' }).cancelEvent.time).toBe('13:00');
+    expect(actionsOf('50104', { clock: '08:15' }).cancelEvent).toEqual(cancelEvent('50104', '08:15'));
+    expect(actionsOf('50104', { clock: '14:30' })).toMatchObject({
+      disabled: true,
+      editTitle: 'Работа уже началась, изменить нельзя',
+      cancelTitle: 'Работа уже началась, отменить нельзя',
+    });
     expect(actionsOf('74198')).toMatchObject({
       disabled: true,
       editTitle: 'Работа уже началась, изменить нельзя',

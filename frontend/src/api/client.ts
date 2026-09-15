@@ -3,8 +3,10 @@ import type {
   ApproveResponse,
   ChatResponse,
   ClientConfig,
+  CursorRequest,
   DatasetStatus,
   Explanation,
+  HHMM,
   PlanEvent,
   PlanningState,
   PlanRequest,
@@ -86,8 +88,20 @@ export function buildPlan(datasetId: string, body: PlanRequest = {}): Promise<Pl
 
 export const getPlanningState = (datasetId: string) => request<PlanningState>(`${dataset(datasetId)}/state`);
 
+/** Прежний способ: событие применяется, и план сразу переходит на его время. Экран пользуется шкалой дня. */
 export const postEvent = (datasetId: string, event: PlanEvent) =>
   request<PlanningState>(`${dataset(datasetId)}/events`, postJson(event));
+
+/** Событие на шкалу дня: время плана не меняется, событие позже него остаётся впереди. */
+export const addTimelineEvent = (datasetId: string, event: PlanEvent) =>
+  request<PlanningState>(`${dataset(datasetId)}/timeline/events`, postJson(event));
+
+export const deleteTimelineEvent = (datasetId: string, entryId: string) =>
+  request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+
+/** План на время дня: применены все события шкалы не позже этого времени. */
+export const moveCursor = (datasetId: string, time: HHMM) =>
+  request<PlanningState>(`${dataset(datasetId)}/cursor`, postJson({ time } satisfies CursorRequest));
 
 export const getExplanation = (datasetId: string, requestId: string) =>
   request<Explanation>(`${dataset(datasetId)}/explain/${encodeURIComponent(requestId)}`);

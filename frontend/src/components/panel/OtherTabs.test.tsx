@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ENGINEER_PALETTE } from '../../lib/colors';
+import { percent } from '../../lib/timeline';
 import { useAppStore } from '../../store/useAppStore';
 import { makeAsapState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
@@ -99,6 +100,15 @@ describe('panel tabs', () => {
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
     expect(screen.getByText(/текущее время 13:00/)).toBeInTheDocument();
     expect(screen.getByText('09:00')).toBeInTheDocument();
+  });
+
+  it('TimelineTab draws the now line of every engineer at the clock of the day', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '15:00' });
+    const { container } = render(<TimelineTab />);
+    expect(screen.getByText(/текущее время 15:00/)).toBeInTheDocument();
+    const lines = Array.from(container.querySelectorAll('.timeline__now'));
+    expect(lines).toHaveLength(3);
+    for (const line of lines) expect(line).toHaveStyle({ left: `${percent({ from: 480, to: 1380 }, 900)}%` });
   });
 
   it('TimelineTab draws a grey lunch bar that opens nothing and no bar without a lunch', () => {

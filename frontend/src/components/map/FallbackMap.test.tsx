@@ -55,7 +55,7 @@ describe('FallbackMap', () => {
     vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
     const { container } = render(<FallbackMap note={NOTE} />);
 
-    expect(markerIcons(container)).toHaveLength(12);
+    expect(markerIcons(container)).toHaveLength(14);
     expect(container.querySelectorAll('img.leaflet-marker-icon')).toHaveLength(0);
     expect(screen.getByTitle('г. Москва, ул Юных Ленинцев, д 83с 4')).toHaveClass('marker', 'marker--office');
     expect(screen.getByTitle('г. Москва, ул Юных Ленинцев, д 83с 4')).toHaveTextContent('Офис');
@@ -77,6 +77,8 @@ describe('FallbackMap', () => {
       if (engineerId === 'E02') return new Promise((resolve) => (resolveE02 = resolve));
       return Promise.reject(new Error('offline'));
     });
+    // Часы до начала смен: никто ещё не выехал, и слой часов не делит отрезки маршрутов.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '08:00' });
     const { container } = render(<FallbackMap note={NOTE} />);
 
     expect(routePaths(container)).toHaveLength(6);
@@ -117,6 +119,7 @@ describe('FallbackMap', () => {
 
   it('selects an engineer from the start marker and dims other engineers and their routes', async () => {
     vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '08:00' });
     const { container } = render(<FallbackMap note={NOTE} />);
 
     fireEvent.click(screen.getByTitle('Старт: Бригада Белузин'));
@@ -129,7 +132,7 @@ describe('FallbackMap', () => {
       expect(path).toHaveAttribute('stroke-width', '3');
       expect(Number(path.getAttribute('stroke-opacity'))).toBeCloseTo(0.25, 2);
     }
-    expect(markerIcons(container)).toHaveLength(12);
+    expect(markerIcons(container)).toHaveLength(14);
 
     fireEvent.click(screen.getByTitle('Старт: Бригада Белузин'));
     expect(useAppStore.getState().selectedEngineerId).toBeNull();
@@ -196,6 +199,32 @@ describe('FallbackMap', () => {
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
   });
 
+  it('показывает, где инженеры сейчас, и гасит проеханные отрезки', async () => {
+    vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
+    const { container } = render(<FallbackMap note={NOTE} />);
+
+    // Часы фикстуры стоят на 13:00: обе бригады в пути к следующему клиенту.
+    expect(screen.getByTitle('Бригада Арташкин: в пути к 50104')).toHaveClass('marker', 'marker--now');
+    expect(screen.getByTitle('Бригада Белузин: в пути к URG-001')).toBeInTheDocument();
+    // Четыре отрезка базового плана без двух текущих плюс три линии слоя часов.
+    expect(routePaths(container)).toHaveLength(7);
+    const faded = routePaths(container).filter((path) => Number(path.getAttribute('stroke-opacity')) < 0.9);
+    expect(faded).toHaveLength(4);
+    for (const path of faded) expect(Number(path.getAttribute('stroke-opacity'))).toBeCloseTo(0.25, 2);
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
+  });
+
+  it('ведёт маркер «где сейчас» за часами, не перезапрашивая геометрию', async () => {
+    vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
+    render(<FallbackMap note={NOTE} />);
+    await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
+
+    act(() => useAppStore.getState().setClock('14:10'));
+    expect(screen.getByTitle('Бригада Арташкин: работает у 50104')).toBeInTheDocument();
+    expect(screen.getByTitle('Бригада Белузин: обед')).toBeInTheDocument();
+    expect(api.getRouteGeometry).toHaveBeenCalledTimes(2);
+  });
+
   it('survives the StrictMode double mount and cleans the map up on unmount', async () => {
     vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
     const { container, unmount } = render(
@@ -204,7 +233,7 @@ describe('FallbackMap', () => {
       </StrictMode>,
     );
     expect(container.querySelectorAll('.leaflet-container')).toHaveLength(1);
-    expect(markerIcons(container)).toHaveLength(12);
+    expect(markerIcons(container)).toHaveLength(14);
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalled());
     unmount();
     expect(container.querySelector('.leaflet-marker-icon')).toBeNull();

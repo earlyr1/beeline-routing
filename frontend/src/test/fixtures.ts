@@ -10,6 +10,7 @@ import type {
   RouteGeometry,
   ServiceRequest,
   Skill,
+  TimelineItem,
   Visit,
 } from '../api/types';
 
@@ -212,8 +213,39 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
     matrix_source: 'osrm',
     workload_level: 1,
     lunch_enabled: true,
+    cursor: '13:00',
+    timeline: [],
+    timeline_ready: true,
     ...overrides,
   };
+}
+
+/** Событие на шкале дня: применённое, впереди или отклонённое. */
+export function makeTimelineItem(overrides: Partial<TimelineItem> = {}): TimelineItem {
+  return {
+    id: 'tl_1',
+    event: { type: 'cancel', time: '09:30', request: null, request_id: '10135', engineer_id: null },
+    status: 'applied',
+    reason: null,
+    ...overrides,
+  };
+}
+
+/** Шкала дня фикстуры: три применённых события плана и два впереди, одно из них отклонено. */
+export function makeTimeline(): TimelineItem[] {
+  const [cancel, unavailable, urgent] = makePlanningState().events.map((item) => item.event);
+  return [
+    makeTimelineItem({ id: 'tl_1', event: cancel }),
+    makeTimelineItem({ id: 'tl_2', event: unavailable }),
+    makeTimelineItem({ id: 'tl_3', event: urgent }),
+    makeTimelineItem({ id: 'tl_4', event: makeDelayEvent({ time: '15:00' }), status: 'pending' }),
+    makeTimelineItem({
+      id: 'tl_5',
+      event: { type: 'cancel', time: '16:30', request: null, request_id: '74198', engineer_id: null },
+      status: 'rejected',
+      reason: 'Заявка 74198 уже выполнена.',
+    }),
+  ];
 }
 
 /** Смена транспорта Бригады Арташкин с автомобиля на велосипед, как её возвращает сервер после применения. */
@@ -358,6 +390,7 @@ export function makeExplanation(overrides: Partial<Explanation> = {}): Explanati
 export function makeRouteGeometry(): RouteGeometry {
   return {
     engineer_id: 'E02',
+    version: 4,
     transport: 'car',
     source: 'osrm',
     legs: [

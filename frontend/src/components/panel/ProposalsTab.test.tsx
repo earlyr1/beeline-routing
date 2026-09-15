@@ -81,6 +81,14 @@ describe('ProposalsTab', () => {
     expect(actions.rejectAll).toHaveBeenCalled();
   });
 
+  it('locks approving while the plan is being moved to the clock', () => {
+    setup({ proposals: [makeProposal()] });
+    useAppStore.setState({ committing: true });
+    render(<ProposalsTab />);
+    expect(screen.getByRole('button', { name: 'Применить' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Применить все (1)' })).toBeDisabled();
+  });
+
   it('locks actions while the previous plan is shown', () => {
     setup({ proposals: [makeProposal()] });
     useAppStore.setState({ showPrevious: true });

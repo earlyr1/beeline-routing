@@ -51,10 +51,10 @@ describe('ExplanationCard', () => {
     expect(useAppStore.getState().editingRequestId).toBe('50104');
   });
 
-  it('cancels the request from the header next to «Изменить» at the event time of the toolbar', async () => {
+  it('cancels the request from the header next to «Изменить» at the time on the clock', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', eventTime: '13:30', applyEvent });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '13:30', applyEvent });
     render(<ExplanationCard />);
     await screen.findByText(/Назначена Бригада Арташкин/);
     expect(headerActions().map((button) => button.textContent)).toEqual(['Изменить', 'Отменить', '✕']);
@@ -66,15 +66,24 @@ describe('ExplanationCard', () => {
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
-  it('restores a cancelled request from the header, never earlier than now', async () => {
+  it('restores a cancelled request from the header at the time on the clock, even before the time of the plan', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation({ request_id: '10135', status: 'cancelled', visit: null }));
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '10135', eventTime: '12:00', applyEvent });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '10135', clock: '12:00', applyEvent });
     render(<ExplanationCard />);
     await screen.findByText(/Назначена Бригада Арташкин/);
     expect(screen.queryByRole('button', { name: 'Отменить' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Вернуть' }));
-    expect(applyEvent).toHaveBeenCalledWith(restoreEvent('10135', '13:00'));
+    expect(applyEvent).toHaveBeenCalledWith(restoreEvent('10135', '12:00'));
+  });
+
+  it('treats a visit that started before the clock as started work, like the server', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '14:10' });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(screen.getByRole('button', { name: 'Изменить' })).toHaveAttribute('title', 'Работа уже началась, изменить нельзя');
+    expect(screen.getByRole('button', { name: 'Отменить' })).toBeDisabled();
   });
 
   it.each([
@@ -140,6 +149,21 @@ describe('ExplanationCard', () => {
       within(card()).getByText(/^ул\.Перовская, д\. 42 к 1 · как можно скорее с 13:00 · 60 мин · Аварийные работы · нужен транспорт/),
     ).toBeInTheDocument();
     expect(within(card()).queryByText(/· окно /)).not.toBeInTheDocument();
+  });
+
+  it('показывает статус заявки на время часов рядом с её номером', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '14:10' });
+    const view = render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(within(card()).getByText('В работе')).toHaveClass('badge', 'badge--clock-working');
+    view.unmount();
+
+    // В 11:30 инженер ещё не выехал к 50104: статуса нет.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '11:30' });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(within(card()).queryByText('В работе')).not.toBeInTheDocument();
   });
 
   it('renders nothing without a selection', () => {

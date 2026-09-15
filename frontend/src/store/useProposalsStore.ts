@@ -51,9 +51,17 @@ export const useProposalsStore = create<ProposalsState>()((set, get) => {
     return datasetId;
   }
 
-  /** План из ответа ставим, только если диспетчер не переключился на другой файл, пока ждали ответ. */
+  /**
+   * План из ответа ставим, только если диспетчер не переключился на другой файл, пока ждали ответ.
+   * Применённое предложение переводит план на время события: идущие часы останавливаются без фиксации,
+   * иначе следующая фиксация вернула бы план назад, и часы встают на время плана.
+   */
   function applyState(datasetId: string, state: PlanningState) {
-    if (useAppStore.getState().datasetId === datasetId) useAppStore.getState().setPlanningState(state);
+    const app = useAppStore.getState();
+    if (app.datasetId !== datasetId) return;
+    app.stopPlayback();
+    app.setPlanningState(state);
+    if (state.cursor) app.setClock(state.cursor);
   }
 
   async function mutate(run: (datasetId: string) => Promise<void>) {

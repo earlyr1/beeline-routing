@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { Skill, Transport } from '../../api/types';
-import { buildUrgentEvent, defaultUrgentWindow, newUrgentId, validateUrgentForm, type PickedPoint, type UrgentForm } from '../../lib/events';
-import { isValidTime, laterTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
+import {
+  beforeShiftsHint,
+  buildUrgentEvent,
+  defaultUrgentWindow,
+  newUrgentId,
+  validateUrgentForm,
+  type PickedPoint,
+  type UrgentForm,
+} from '../../lib/events';
+import { isValidTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { AsapToggle } from './AsapToggle';
 
@@ -12,7 +20,6 @@ const samePoint = (a: PickedPoint | null, b: PickedPoint | null) => a?.lat === b
 
 export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const state = useAppStore((s) => s.state);
-  const eventTime = useAppStore((s) => s.eventTime);
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const pickMode = useAppStore((s) => s.pickMode);
@@ -22,19 +29,21 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const clearPick = useAppStore((s) => s.clearPick);
   const addressLookup = useAppStore((s) => s.urgentAddressLookup);
   const suggestedAddress = useAppStore((s) => s.urgentSuggestedAddress);
-  const now = state?.now ?? '00:00';
   const engineers = state?.engineers ?? [];
-  const initialTime = isValidTime(eventTime) ? laterTime(eventTime, now) : now;
-  const [form, setForm] = useState<UrgentForm>(() => ({
-    address: '',
-    point: null,
-    ...defaultUrgentWindow(initialTime, engineers),
-    durationMin: 60,
-    skill: 'emergency',
-    transport: 'car',
-    time: initialTime,
-    asap: false,
-  }));
+  const [form, setForm] = useState<UrgentForm>(() => {
+    // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
+    const time = useAppStore.getState().clock;
+    return {
+      address: '',
+      point: null,
+      ...defaultUrgentWindow(time, engineers),
+      durationMin: 60,
+      skill: 'emergency',
+      transport: 'car',
+      time,
+      asap: false,
+    };
+  });
   // Пока диспетчер не правил окно руками, окно следует за временем события.
   const [windowTouched, setWindowTouched] = useState(false);
   // Адрес, который диспетчер ввёл сам, адрес найденной по точке не заменяет.
@@ -47,6 +56,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
     if (ownPoint) setForm((prev) => ({ ...prev, point: ownPoint }));
   }, [ownPoint]);
   const point = ownPoint ?? form.point;
+  const hint = beforeShiftsHint(form.time, engineers);
 
   // Адрес, который диалог сам подставил по точке из меню карты; null — такого адреса в поле нет.
   const autoAddress = useRef<string | null>(null);
@@ -96,7 +106,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const candidate = { ...form, point };
-    const found = validateUrgentForm(candidate, now);
+    const found = validateUrgentForm(candidate);
     setErrors(found);
     if (found.length > 0) return;
     const ok = await applyEvent(buildUrgentEvent(candidate, newUrgentId(Date.now()), engineers));
@@ -167,8 +177,9 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
         </div>
         <label className="field">
           <span>Время события</span>
-          <input type="time" value={form.time} min={now} onChange={(event) => updateTime(event.target.value)} />
+          <input type="time" value={form.time} onChange={(event) => updateTime(event.target.value)} />
         </label>
+        {hint && <p className="muted field-note">{hint}</p>}
         {errors.length > 0 && (
           <ul className="error-list" role="alert">
             {errors.map((error) => (

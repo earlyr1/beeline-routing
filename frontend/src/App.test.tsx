@@ -74,6 +74,27 @@ describe('App', () => {
       'Сравнение',
       'Рекомендуемые изменения',
     ]);
+    const bar = screen.getByRole('region', { name: 'Время дня' });
+    expect(within(bar).getByRole('slider', { name: 'Текущее время' })).toBeInTheDocument();
+    expect(within(bar).getByRole('button', { name: 'Запустить' })).toBeInTheDocument();
+    expect(screen.getByRole('banner').contains(bar)).toBe(false);
+    expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
+  });
+
+  it('opens «Инженер заболел» from the clock of the day with the busiest engineer at the clock time', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    render(<App />);
+    const bar = within(screen.getByRole('region', { name: 'Время дня' }));
+    fireEvent.click(bar.getByRole('button', { name: 'Добавить событие' }));
+    fireEvent.click(bar.getByRole('menuitem', { name: 'Инженер заболел' }));
+    expect(openDialogs()).toEqual(['Инженер недоступен']);
+    expect(engineerIn('Инженер недоступен')).toBe('E01');
+    expect(within(screen.getByRole('dialog', { name: 'Инженер недоступен' })).getByLabelText('Недоступен с')).toHaveValue('13:00');
+
+    fireEvent.click(bar.getByRole('button', { name: 'Добавить событие' }));
+    fireEvent.click(bar.getByRole('menuitem', { name: 'Задержка инженера' }));
+    expect(openDialogs()).toEqual(['Задержка инженера']);
+    expect(engineerIn('Задержка инженера')).toBe('E01');
     expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
   });
 
@@ -97,7 +118,8 @@ describe('App', () => {
   });
 
   it('opens the engineer dialogs from the brigade page preselected, one floating dialog at a time', async () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00' });
+    // В 13:00 визит URG-001 (с 13:05) ещё не начат, и его можно изменить.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
     render(<App />);
     fireEvent.click(screen.getByRole('tab', { name: 'Бригады' }));
     fireEvent.click(screen.getByRole('button', { name: /^Бригада Белузин/ }));

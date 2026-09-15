@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, buildPlan, getReverseGeocode, getRouteGeometry, postEvent, uploadFile } from './client';
+import {
+  addTimelineEvent,
+  ApiError,
+  buildPlan,
+  deleteTimelineEvent,
+  getReverseGeocode,
+  getRouteGeometry,
+  moveCursor,
+  postEvent,
+  uploadFile,
+} from './client';
 import type { PlanEvent } from './types';
 
 const cancel: PlanEvent = { type: 'cancel', time: '13:00', request: null, request_id: '50104', engineer_id: null };
@@ -31,6 +41,34 @@ describe('api client', () => {
     expect(url).toBe('/api/datasets/d%201/events');
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
     expect(JSON.parse(init.body as string)).toEqual(cancel);
+  });
+
+  it('adds an event to the timeline of the day as JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply(200, { version: 2 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await addTimelineEvent('d 1', cancel);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/datasets/d%201/timeline/events');
+    expect(init.method).toBe('POST');
+    expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
+    expect(JSON.parse(init.body as string)).toEqual(cancel);
+  });
+
+  it('deletes a timeline event by its id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply(200, { version: 2 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await deleteTimelineEvent('d1', 'tl/1');
+    expect(fetchMock.mock.calls[0]).toEqual(['/api/datasets/d1/timeline/events/tl%2F1', { method: 'DELETE' }]);
+  });
+
+  it('moves the plan cursor to a time of the day', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply(200, { version: 2 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await moveCursor('d1', '14:05');
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/datasets/d1/cursor');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ time: '14:05' });
   });
 
   it('sends the workload level and the lunch with the plan request only when they are given', async () => {

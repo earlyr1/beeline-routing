@@ -1,6 +1,14 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('../../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/client')>();
+  return { ...actual, addTimelineEvent: vi.fn(), moveCursor: vi.fn(), postEvent: vi.fn() };
+});
+
+import * as api from '../../api/client';
 import type { PlanningState, ServiceRequest, Transport } from '../../api/types';
+import { BEFORE_SHIFTS_HINT, cancelEvent, unavailableEvent } from '../../lib/events';
 import { toMinutes } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { makeAsapRequest, makeAsapState, makePlanningState } from '../../test/fixtures';
@@ -35,7 +43,7 @@ function withBusyBeluzin(state: PlanningState): PlanningState {
 }
 
 beforeEach(() => {
-  resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00' });
+  resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
 });
 
 describe('UrgentRequestDialog', () => {
@@ -50,10 +58,13 @@ describe('UrgentRequestDialog', () => {
     expect(await screen.findByText('Укажите адрес или точку на карте')).toBeInTheDocument();
     expect(applyEvent).not.toHaveBeenCalled();
 
+    expect(valueOf('Время события')).toBe('13:00');
+    expect(screen.getByLabelText('Время события')).not.toHaveAttribute('min');
     fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
-    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '12:00' } });
+    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '' } });
     fireEvent.click(submit);
-    expect(await screen.findByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
+    expect(await screen.findByText('Укажите время в формате ЧЧ:ММ')).toBeInTheDocument();
+    expect(applyEvent).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '13:15' } });
     fireEvent.click(submit);
@@ -75,12 +86,13 @@ describe('UrgentRequestDialog', () => {
 
   it('starts the default window inside working hours right after planning the day', async () => {
     const state = makePlanningState({ now: '00:00' });
-    resetStore({ datasetId: 'd_test', state, eventTime: '00:00' });
+    resetStore({ datasetId: 'd_test', state, clock: '00:00' });
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
     render(<UrgentRequestDialog onClose={() => undefined} />);
     expect(valueOf('Время события')).toBe('00:00');
     expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['10:00', '12:00']);
+    expect(screen.getByText(BEFORE_SHIFTS_HINT)).toHaveClass('muted');
 
     fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
     fireEvent.click(screen.getByRole('button', { name: 'Добавить и перепланировать' }));
@@ -97,7 +109,7 @@ describe('UrgentRequestDialog', () => {
   });
 
   it('moves the default window with the event time until the dispatcher edits it', () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState({ now: '00:00' }), eventTime: '00:00' });
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ now: '00:00' }), clock: '00:00' });
     render(<UrgentRequestDialog onClose={() => undefined} />);
     fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '09:00' } });
     expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['10:00', '12:00']);
@@ -121,7 +133,7 @@ describe('UrgentRequestDialog', () => {
     resetStore({
       datasetId: 'd_test',
       state: makePlanningState(),
-      eventTime: '13:00',
+      clock: '13:00',
       pickFor: 'urgent',
       pickedPoint: { lat: 55.71234, lon: 37.80123 },
       urgentAddressLookup: 'loading',
@@ -146,7 +158,7 @@ describe('UrgentRequestDialog', () => {
     resetStore({
       datasetId: 'd_test',
       state: makePlanningState(),
-      eventTime: '13:00',
+      clock: '13:00',
       pickFor: 'urgent',
       pickedPoint: { lat: 55.71234, lon: 37.80123 },
       urgentAddressLookup: 'loading',
@@ -164,7 +176,7 @@ describe('UrgentRequestDialog', () => {
     resetStore({
       datasetId: 'd_test',
       state: makePlanningState(),
-      eventTime: '13:00',
+      clock: '13:00',
       applyEvent,
       pickFor: 'urgent',
       pickedPoint: { lat: 55.71234, lon: 37.80123 },
@@ -195,7 +207,7 @@ describe('UrgentRequestDialog as soon as possible', () => {
     const engineers = state.engineers.map((engineer) =>
       engineer.id === 'E02' ? { ...engineer, shift_end: '23:00' } : engineer.id === 'E03' ? { ...engineer, shift_end: '23:30' } : engineer,
     );
-    resetStore({ datasetId: 'd_test', state: { ...state, engineers }, eventTime: '13:00', applyEvent });
+    resetStore({ datasetId: 'd_test', state: { ...state, engineers }, clock: '13:00', applyEvent });
     render(<UrgentRequestDialog onClose={onClose} />);
     const asap = screen.getByLabelText('Как можно скорее');
     expect(asap).not.toBeChecked();
@@ -231,7 +243,7 @@ describe('UrgentRequestDialog as soon as possible', () => {
     resetStore({
       datasetId: 'd_test',
       state: makePlanningState(),
-      eventTime: '13:00',
+      clock: '13:00',
       applyEvent,
       pickFor: 'urgent',
       pickedPoint: { lat: 55.71234, lon: 37.80123 },
@@ -263,7 +275,7 @@ describe('UrgentRequestDialog address of a point picked again', () => {
     resetStore({
       datasetId: 'd_test',
       state: makePlanningState(),
-      eventTime: '13:00',
+      clock: '13:00',
       pickFor: 'urgent',
       pickedPoint: menuPoint,
       urgentAddressLookup: 'done',
@@ -314,7 +326,7 @@ describe('map point ownership', () => {
   const dialog = (name: string) => within(screen.getByRole('dialog', { name }));
 
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:30', editingRequestId: '46393' });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:30', editingRequestId: '46393' });
   });
 
   it('keeps the points of the urgent request and the request edit apart while both dialogs are open', () => {
@@ -363,7 +375,7 @@ describe('EngineerDelayDialog', () => {
   const submitButton = () => screen.getByRole('button', { name: 'Перепланировать' });
 
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', delayDialogOpen: true, delayEngineerId: 'E01' });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '14:00', delayDialogOpen: true, delayEngineerId: 'E01' });
   });
 
   it('opens for the engineer of the brigade page, sets the minutes from presets and submits the delay', async () => {
@@ -404,7 +416,7 @@ describe('EngineerDelayDialog', () => {
   });
 
   it('preselects the engineer of the brigade page and keeps it when the time changes', () => {
-    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true, delayEngineerId: 'E01' });
+    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), clock: '13:00', delayDialogOpen: true, delayEngineerId: 'E01' });
     render(<EngineerDelayDialog />);
     expect(valueOf('Инженер')).toBe('E01');
     fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '16:00' } });
@@ -412,7 +424,7 @@ describe('EngineerDelayDialog', () => {
   });
 
   it('falls back to the busiest engineer for a brigade that is already unavailable and follows the time until the dispatcher picks one', () => {
-    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), eventTime: '13:00', delayDialogOpen: true, delayEngineerId: 'E03' });
+    resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), clock: '13:00', delayDialogOpen: true, delayEngineerId: 'E03' });
     render(<EngineerDelayDialog />);
     expect(valueOf('Инженер')).toBe('E02');
     expect(screen.getByRole('option', { name: 'Бригада Белузин (визитов после 13:00: 3)' })).toBeInTheDocument();
@@ -435,11 +447,16 @@ describe('EngineerDelayDialog', () => {
       expect(await screen.findByText('Задержка должна быть от 5 до 480 минут')).toBeInTheDocument();
     }
     fireEvent.change(minutes, { target: { value: '480' } });
-    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '12:00' } });
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '' } });
     fireEvent.click(submitButton());
-    expect(await screen.findByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
+    expect(await screen.findByText('Укажите время в формате ЧЧ:ММ')).toBeInTheDocument();
     expect(screen.queryByText('Задержка должна быть от 5 до 480 минут')).not.toBeInTheDocument();
     expect(applyEvent).not.toHaveBeenCalled();
+
+    // Время раньше часов принимается: событие встанет на шкалу дня в прошлое, и план пересчитается с него.
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '12:00' } });
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(applyEvent).toHaveBeenCalledWith(expect.objectContaining({ time: '12:00', delay_min: 480 })));
   });
 
   it('stays open when the server rejects the delay and closes on «Отмена»', async () => {
@@ -457,7 +474,7 @@ describe('EngineerDelayDialog', () => {
 
 describe('EngineerUnavailableDialog', () => {
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '14:00', engineerDialog: { kind: 'unavailable', engineerId: 'E02' } });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '14:00', engineerDialog: { kind: 'unavailable', engineerId: 'E02' } });
   });
 
   it('opens as a floating dialog for the engineer of the brigade page and submits the event', async () => {
@@ -483,7 +500,7 @@ describe('EngineerUnavailableDialog', () => {
     resetStore({
       datasetId: 'd_test',
       state: withBusyBeluzin(makePlanningState()),
-      eventTime: '13:00',
+      clock: '13:00',
       engineerDialog: { kind: 'unavailable', engineerId: 'E01' },
     });
     render(<EngineerUnavailableDialog />);
@@ -499,7 +516,7 @@ describe('EngineerUnavailableDialog', () => {
     resetStore({
       datasetId: 'd_test',
       state: withBusyBeluzin(makePlanningState()),
-      eventTime: '13:00',
+      clock: '13:00',
       engineerDialog: { kind: 'unavailable', engineerId: 'E03' },
     });
     render(<EngineerUnavailableDialog />);
@@ -520,14 +537,99 @@ describe('EngineerUnavailableDialog', () => {
   });
 });
 
+describe('event dialogs on the clock of the day', () => {
+  beforeEach(() => {
+    vi.mocked(api.addTimelineEvent).mockReset();
+    vi.mocked(api.moveCursor).mockReset();
+    vi.mocked(api.postEvent).mockReset();
+  });
+
+  it('preselects the busiest engineer at the clock when an engineer dialog opens without an engineer', () => {
+    const state = withBusyBeluzin(makePlanningState());
+    resetStore({ datasetId: 'd_test', state, clock: '13:00', delayDialogOpen: true, delayEngineerId: null });
+    const delay = render(<EngineerDelayDialog />);
+    expect([valueOf('Инженер'), valueOf('Задержка с')]).toEqual(['E02', '13:00']);
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '16:00' } });
+    expect(valueOf('Инженер')).toBe('E01');
+    delay.unmount();
+
+    resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'unavailable', engineerId: null } });
+    const unavailable = render(<EngineerUnavailableDialog />);
+    expect([valueOf('Инженер'), valueOf('Недоступен с')]).toEqual(['E02', '13:00']);
+    fireEvent.change(screen.getByLabelText('Недоступен с'), { target: { value: '16:00' } });
+    expect(valueOf('Инженер')).toBe('E01');
+    unavailable.unmount();
+
+    resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'transport', engineerId: null } });
+    render(<TransportChangeDialog />);
+    expect([valueOf('Инженер'), valueOf('Сменить с')]).toEqual(['E02', '13:00']);
+    fireEvent.change(screen.getByLabelText('Сменить с'), { target: { value: '16:00' } });
+    expect(valueOf('Инженер')).toBe('E01');
+  });
+
+  it('renders the delay dialog only while it is open', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', delayDialogOpen: false, delayEngineerId: 'E01' });
+    expect(render(<EngineerDelayDialog />).container).toBeEmptyDOMElement();
+  });
+
+  it('warns in every event dialog that an event before the shifts replans the whole day', () => {
+    const early = { datasetId: 'd_test', state: makePlanningState(), clock: '08:30' };
+    const dialogs = [
+      { patch: {}, element: <UrgentRequestDialog onClose={() => undefined} />, time: 'Время события' },
+      { patch: { delayDialogOpen: true }, element: <EngineerDelayDialog />, time: 'Задержка с' },
+      { patch: { engineerDialog: { kind: 'unavailable' as const, engineerId: null } }, element: <EngineerUnavailableDialog />, time: 'Недоступен с' },
+      { patch: { engineerDialog: { kind: 'transport' as const, engineerId: null } }, element: <TransportChangeDialog />, time: 'Сменить с' },
+      { patch: { editingRequestId: '46393' }, element: <RequestEditDialog />, time: 'Время события' },
+    ];
+    for (const { patch, element, time } of dialogs) {
+      resetStore({ ...early, ...patch });
+      const view = render(element);
+      expect(valueOf(time)).toBe('08:30');
+      expect(screen.getByText(BEFORE_SHIFTS_HINT)).toHaveClass('muted');
+      fireEvent.change(screen.getByLabelText(time), { target: { value: '10:00' } });
+      expect(screen.queryByText(BEFORE_SHIFTS_HINT)).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
+  it('posts the event to the timeline of the day at the clock time and keeps the dialog open on a refusal', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', engineerDialog: { kind: 'unavailable', engineerId: 'E02' } });
+    vi.mocked(api.addTimelineEvent)
+      .mockRejectedValueOnce(new api.ApiError(422, 'Инженер E02 уже недоступен.'))
+      .mockResolvedValueOnce(makePlanningState({ version: 5 }));
+    render(<EngineerUnavailableDialog />);
+    fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
+    await waitFor(() => expect(useAppStore.getState().error).toBe('Инженер E02 уже недоступен.'));
+    expect(useAppStore.getState()).toMatchObject({ engineerDialog: { kind: 'unavailable', engineerId: 'E02' }, busy: false });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
+    await waitFor(() => expect(useAppStore.getState().engineerDialog).toBeNull());
+    expect(vi.mocked(api.addTimelineEvent).mock.calls).toEqual([
+      ['d_test', unavailableEvent('E02', '13:00')],
+      ['d_test', unavailableEvent('E02', '13:00')],
+    ]);
+    expect(useAppStore.getState().state?.version).toBe(5);
+    expect(api.postEvent).not.toHaveBeenCalled();
+    expect(api.moveCursor).not.toHaveBeenCalled();
+  });
+
+  it('sends an event earlier than the clock to the timeline as it is, without moving the plan', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(makePlanningState({ version: 5 }));
+    expect(await useAppStore.getState().applyEvent(cancelEvent('46393', '11:30'))).toBe(true);
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('46393', '11:30'));
+    expect(api.postEvent).not.toHaveBeenCalled();
+  });
+});
+
 describe('TransportChangeDialog', () => {
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
   });
 
   it('opens as a floating dialog for the engineer of the brigade page, suggests a bike instead of the car and submits', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
-    useAppStore.setState({ applyEvent, eventTime: '14:00' });
+    useAppStore.setState({ applyEvent, clock: '14:00' });
     render(<TransportChangeDialog />);
     expect(screen.getByRole('dialog', { name: 'Смена транспорта' })).toHaveClass('dialog', 'dialog--floating');
     expect(optionsOf('Инженер')).toEqual([
@@ -554,7 +656,7 @@ describe('TransportChangeDialog', () => {
   });
 
   it('hides the car hint when no car-only requests are left after the time', () => {
-    useAppStore.setState({ eventTime: '16:00' });
+    useAppStore.setState({ clock: '16:00' });
     render(<TransportChangeDialog />);
     expect(valueOf('Новый транспорт')).toBe('bike');
     expect(screen.queryByText(/Заявок с требованием/)).not.toBeInTheDocument();
@@ -564,7 +666,7 @@ describe('TransportChangeDialog', () => {
     resetStore({
       datasetId: 'd_test',
       state: withTransport(makePlanningState(), 'E02', 'foot'),
-      eventTime: '13:00',
+      clock: '13:00',
       engineerDialog: { kind: 'transport', engineerId: 'E01' },
     });
     render(<TransportChangeDialog />);
@@ -587,7 +689,7 @@ describe('TransportChangeDialog', () => {
 
   it('keeps the engineer of the brigade page and its transport when the time changes', () => {
     const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'foot');
-    resetStore({ datasetId: 'd_test', state, eventTime: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
+    resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
     render(<TransportChangeDialog />);
     expect(valueOf('Инженер')).toBe('E01');
     expect(valueOf('Новый транспорт')).toBe('bike');
@@ -598,7 +700,7 @@ describe('TransportChangeDialog', () => {
 
   it('falls back to the busiest available engineer when the brigade is already unavailable', () => {
     const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'foot');
-    resetStore({ datasetId: 'd_test', state, eventTime: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E03' } });
+    resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E03' } });
     render(<TransportChangeDialog />);
     expect(valueOf('Инженер')).toBe('E02');
     expect(screen.getByRole('option', { name: 'Бригада Белузин · Пешеход (визитов после 13:00: 3)' })).toBeInTheDocument();
@@ -609,15 +711,19 @@ describe('TransportChangeDialog', () => {
     expect(valueOf('Новый транспорт')).toBe('bike');
   });
 
-  it('rejects a time earlier than now', async () => {
+  it('accepts a time earlier than the clock and rejects only a time in a wrong format', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
     render(<TransportChangeDialog />);
     expect(valueOf('Сменить с')).toBe('13:00');
+    fireEvent.change(screen.getByLabelText('Сменить с'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
+    expect(await screen.findByText('Укажите время в формате ЧЧ:ММ')).toBeInTheDocument();
+    expect(applyEvent).not.toHaveBeenCalled();
+
     fireEvent.change(screen.getByLabelText('Сменить с'), { target: { value: '12:00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
-    expect(await screen.findByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
-    expect(applyEvent).not.toHaveBeenCalled();
+    await waitFor(() => expect(applyEvent).toHaveBeenCalledWith(expect.objectContaining({ time: '12:00', engineer_id: 'E01' })));
   });
 
   it('stays open when the server rejects the change and closes on «Отмена»', async () => {
@@ -639,7 +745,7 @@ describe('RequestEditDialog', () => {
   const submitButton = () => screen.getByRole('button', { name: 'Сохранить и перепланировать' });
 
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:30', editingRequestId: '46393' });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:30', editingRequestId: '46393' });
   });
 
   it('prefills the form from the current request', () => {
@@ -659,10 +765,11 @@ describe('RequestEditDialog', () => {
     expect(screen.queryByText(/Изменится/)).not.toBeInTheDocument();
   });
 
-  it('defaults the event time to now when the toolbar time is earlier', () => {
-    useAppStore.setState({ eventTime: '12:00' });
+  it('defaults the event time to the clock even when the plan is at a later time', () => {
+    useAppStore.setState({ clock: '12:00' });
     render(<RequestEditDialog />);
-    expect(valueOf('Время события')).toBe('13:00');
+    expect(valueOf('Время события')).toBe('12:00');
+    expect(screen.getByLabelText('Время события')).not.toHaveAttribute('min');
   });
 
   it('refuses to submit an unchanged request', async () => {
@@ -679,10 +786,10 @@ describe('RequestEditDialog', () => {
     useAppStore.setState({ applyEvent });
     render(<RequestEditDialog />);
     fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '14:30' } });
-    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '12:00' } });
+    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '' } });
     fireEvent.click(submitButton());
     expect(await screen.findByText('Конец окна должен быть позже начала')).toBeInTheDocument();
-    expect(screen.getByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
+    expect(screen.getByText('Укажите время в формате ЧЧ:ММ')).toBeInTheDocument();
     expect(screen.queryByText('Ничего не изменилось')).not.toBeInTheDocument();
     expect(applyEvent).not.toHaveBeenCalled();
   });
@@ -786,7 +893,7 @@ describe('RequestEditDialog', () => {
 
   it('prefills «как можно скорее» from the request and turns it back into a window', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
-    resetStore({ datasetId: 'd_test', state: makeAsapState(), eventTime: '13:30', editingRequestId: 'URG-002', applyEvent });
+    resetStore({ datasetId: 'd_test', state: makeAsapState(), clock: '13:30', editingRequestId: 'URG-002', applyEvent });
     render(<RequestEditDialog />);
     const asap = screen.getByLabelText('Как можно скорее');
     expect(asap).toBeChecked();
@@ -819,17 +926,19 @@ describe('RequestEditDialog', () => {
 });
 
 describe('EventToolbar', () => {
-  it('rejects an event time earlier than now and opens the urgent request dialog', () => {
+  it('opens the urgent request dialog with the time on the clock', () => {
+    useAppStore.setState({ clock: '11:40' });
     render(<EventToolbar />);
-    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '12:00' } });
-    expect(screen.getByText('Время события не может быть раньше 13:00')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Срочная заявка' }));
-    expect(screen.getByRole('dialog', { name: 'Срочная заявка' })).toBeInTheDocument();
+    const dialog = within(screen.getByRole('dialog', { name: 'Срочная заявка' }));
+    expect(dialog.getByLabelText('Время события')).toHaveValue('11:40');
   });
 
-  it('keeps only the event time and the urgent request: engineer events open from the brigade page', () => {
-    render(<EventToolbar />);
-    expect(screen.getByLabelText('Время события')).toBeInTheDocument();
+  it('keeps only the urgent request without its own event time: the time comes from the clock of the day', () => {
+    const { container } = render(<EventToolbar />);
+    expect(screen.queryByLabelText('Время события')).not.toBeInTheDocument();
+    expect(container.querySelector('input')).toBeNull();
+    expect(screen.queryByText(/раньше текущего времени|не может быть раньше/)).not.toBeInTheDocument();
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Срочная заявка']);
   });
 
@@ -843,11 +952,11 @@ describe('EventToolbar', () => {
   });
 
   it('disables the urgent request while showing the plan before the event or replanning', () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', showPrevious: true });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', showPrevious: true });
     const view = render(<EventToolbar />);
     expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeDisabled();
     view.unmount();
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), eventTime: '13:00', busy: true });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', busy: true });
     render(<EventToolbar />);
     expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeDisabled();
   });

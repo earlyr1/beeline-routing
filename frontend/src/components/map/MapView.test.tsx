@@ -48,7 +48,7 @@ describe('MapView', () => {
 
     expect(screen.getByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
     expect(screen.queryByText('Карта отключена')).not.toBeInTheDocument();
-    expect(container.querySelectorAll('.leaflet-marker-icon')).toHaveLength(12);
+    expect(container.querySelectorAll('.leaflet-marker-icon')).toHaveLength(14);
     expect(screen.getByTitle(/^URG-001:/)).toHaveClass('marker--urgent');
     expect(screen.getByRole('button', { name: 'Весь план' })).toBeInTheDocument();
     expect(loadYandexMaps).not.toHaveBeenCalled();
@@ -65,7 +65,7 @@ describe('MapView', () => {
     expect(await screen.findByText('Яндекс Карты недоступны, показана подложка OpenStreetMap')).toHaveAttribute('title', reason);
     expect(screen.queryByText('Карта не загрузилась')).not.toBeInTheDocument();
     // Заметка появляется в том же коммите, а маркеры Leaflet добавляет эффект чуть позже.
-    await waitFor(() => expect(container.querySelectorAll('.leaflet-marker-icon')).toHaveLength(12));
+    await waitFor(() => expect(container.querySelectorAll('.leaflet-marker-icon')).toHaveLength(14));
     expect(loadYandexMaps).toHaveBeenCalledWith('test-key');
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
   });

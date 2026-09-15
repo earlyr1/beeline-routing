@@ -53,6 +53,22 @@ describe('MetricsStrip', () => {
     expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 2, lunch: false });
   });
 
+  it('shows the time on the clock of the day as the current time', () => {
+    useAppStore.setState({ clock: '14:25' });
+    render(<MetricsStrip />);
+    expect(screen.getByText('Сейчас 14:25')).toBeInTheDocument();
+  });
+
+  it.each([
+    ['the clock plays', { playing: true }],
+    ['the plan is being moved to the clock', { committing: true }],
+  ])('does not rebuild the day from scratch while %s', (_, patch) => {
+    useAppStore.setState(patch);
+    render(<MetricsStrip />);
+    expect(screen.getByRole('button', { name: 'Пересчитать с нуля' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Другой файл' })).toBeEnabled();
+  });
+
   it('shows a day with lunch', () => {
     render(<MetricsStrip />);
     const item = screen.getByTitle('Стоимость нового инженера для оптимизатора зависит от нагрузки дня');

@@ -265,6 +265,34 @@ export interface PlanningState {
   workload_level: number;
   /** Обед по плану в сессии: без него маршруты без обеда, а план дня с нуля считается быстрее. */
   lunch_enabled: boolean;
+  /**
+   * Время на шкале дня, на которое показан план: применены все события шкалы не позже него.
+   * now, events, last_diff и previous_plan относятся к плану на это время.
+   */
+  cursor: HHMM;
+  /** События шкалы дня в порядке применения: по времени, при равном времени по порядку добавления. */
+  timeline: TimelineItem[];
+  /** Сервер уже посчитал план после каждого события шкалы; пока false, статусы событий впереди могут измениться. */
+  timeline_ready: boolean;
+}
+
+/** applied — применено к плану на cursor; pending — впереди, позже cursor; rejected — сервер его не принял. */
+export type TimelineStatus = 'applied' | 'pending' | 'rejected';
+
+/** Событие на шкале дня. */
+export interface TimelineItem {
+  /** Номер вида tl_<n>: не повторяется в наборе данных. */
+  id: string;
+  /** Применённое событие со значениями сервера (previous_*), иначе событие как его запланировали. */
+  event: PlanEvent;
+  status: TimelineStatus;
+  /** Почему событие отклонено; null у применённых и событий впереди. */
+  reason: string | null;
+}
+
+/** Тело POST /api/datasets/{id}/cursor. */
+export interface CursorRequest {
+  time: HHMM;
 }
 
 /** Тело POST /api/datasets/{id}/plan: пропущенное поле оставляет значение сессии. */
@@ -283,6 +311,8 @@ export interface RouteLeg {
 
 export interface RouteGeometry {
   engineer_id: string;
+  /** Версия плана, по которому построена геометрия: кэш линий не путает планы на разное время. */
+  version: number;
   transport: Transport;
   source: 'osrm' | 'straight';
   legs: RouteLeg[];
