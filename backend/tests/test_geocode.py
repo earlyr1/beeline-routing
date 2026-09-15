@@ -149,6 +149,123 @@ def test_after_network_failure_geocoder_is_not_called_for_a_minute(tmp_path, net
     assert len(attempts) == 2
 
 
+def test_manual_address_finds_the_house_query_of_export_format(tmp_path):
+    geocoder = FakeGeocoder({"Москва, Перовская улица, 42к1": GeoHit(55.74548, 37.78192, "building")})
+    result = geocode_address(
+        "Москва, Перовская улица 42к1", "", geocoder, JsonGeocodeCache(tmp_path / "c.json")
+    )
+    assert result == GeoResult(55.74548, 37.78192, "house", "Москва, Перовская улица, 42к1")
+    assert geocoder.calls == ["Москва, Перовская улица, 42к1"]
+
+
+NO_STREET_TYPE = "Москва, Перовская, 42к1"
+
+
+@pytest.mark.parametrize(
+    ("category", "place_rank", "precision"),
+    [
+        ("building", 30, "house"),
+        ("place", 28, "house"),
+        ("highway", 26, "street"),
+        ("highway", 30, "street"),
+        ("landuse", 27, "street"),
+        ("place", 16, "locality"),
+        ("boundary", 14, "locality"),
+    ],
+)
+def test_raw_address_precision_comes_from_place_rank(tmp_path, category, place_rank, precision):
+    geocoder = FakeGeocoder({NO_STREET_TYPE: GeoHit(55.74, 37.78, category, place_rank)})
+    result = geocode_address(NO_STREET_TYPE, "", geocoder, JsonGeocodeCache(tmp_path / "c.json"))
+    assert result == GeoResult(55.74, 37.78, precision, NO_STREET_TYPE)
+
+
+@pytest.mark.parametrize(
+    ("category", "precision"),
+    [
+        ("building", "house"),
+        ("place", "house"),
+        ("highway", "street"),
+        ("boundary", "locality"),
+        ("", "locality"),
+    ],
+)
+def test_raw_address_precision_from_old_cache_entry_uses_category(tmp_path, category, precision):
+    path = tmp_path / "cache.json"
+    path.write_text(json.dumps({NO_STREET_TYPE: [55.74, 37.78, category]}), encoding="utf-8")
+    result = geocode_address(NO_STREET_TYPE, "", None, JsonGeocodeCache(path))
+    assert result == GeoResult(55.74, 37.78, precision, NO_STREET_TYPE)
+
+
+def test_raw_address_hit_outside_region_is_skipped(tmp_path):
+    geocoder = FakeGeocoder(
+        {
+            NO_STREET_TYPE: GeoHit(59.93, 30.31, "building", 30),
+            "район Перово, Москва": GeoHit(55.74, 37.77, "boundary", 14),
+        }
+    )
+    result = geocode_address(NO_STREET_TYPE, "Перово", geocoder, JsonGeocodeCache(tmp_path / "c.json"))
+    assert result == GeoResult(55.74, 37.77, "locality", "район Перово, Москва")
+
+
+SAMARKANDSKY = "Город Москва, б-р.Самаркандский Квартал 137а, д. к5"
+
+
+def test_coarse_raw_address_hit_does_not_beat_a_street_variant(tmp_path):
+    geocoder = FakeGeocoder(
+        {
+            SAMARKANDSKY: GeoHit(55.75, 37.62, "place", 16),
+            "Москва, Самаркандский бульвар": GeoHit(55.70, 37.82, "highway", 26),
+        }
+    )
+    result = geocode_address(SAMARKANDSKY, "Выхино", geocoder, JsonGeocodeCache(tmp_path / "c.json"))
+    assert result == GeoResult(55.70, 37.82, "street", "Москва, Самаркандский бульвар")
+
+
+def test_coarse_raw_address_hit_is_kept_when_nothing_more_precise_is_found(tmp_path):
+    geocoder = FakeGeocoder(
+        {
+            SAMARKANDSKY: GeoHit(55.71, 37.81, "boundary", 16),
+            "район Выхино, Москва": GeoHit(55.70, 37.82, "boundary", 14),
+        }
+    )
+    result = geocode_address(SAMARKANDSKY, "Выхино", geocoder, JsonGeocodeCache(tmp_path / "c.json"))
+    assert result == GeoResult(55.71, 37.81, "locality", SAMARKANDSKY)
+    assert geocoder.calls == [
+        SAMARKANDSKY,
+        "Москва, Самаркандский бульвар",
+        "Москва, бульвар Самаркандский",
+        "район Выхино, Москва",
+    ]
+
+
+def test_cache_round_trip_with_and_without_place_rank(tmp_path):
+    path = tmp_path / "cache.json"
+    cache = JsonGeocodeCache(path)
+    cache.put("дом", GeoHit(55.74, 37.78, "building", 30))
+    cache.put("улица", GeoHit(55.75, 37.77, "highway"))
+    cache.put("промах", None)
+    cache.save()
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "дом": [55.74, 37.78, "building", 30],
+        "улица": [55.75, 37.77, "highway"],
+        "промах": None,
+    }
+    loaded = JsonGeocodeCache(path)
+    assert loaded.get("дом") == (True, GeoHit(55.74, 37.78, "building", 30))
+    assert loaded.get("улица") == (True, GeoHit(55.75, 37.77, "highway", None))
+    assert loaded.get("промах") == (True, None)
+
+
+def test_nominatim_client_reads_place_rank():
+    def handler(request):
+        return httpx.Response(
+            200, json=[{"lat": "55.745478", "lon": "37.781916", "category": "building", "place_rank": 30}]
+        )
+
+    geocoder = NominatimGeocoder(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    assert geocoder.lookup("Москва, Перовская улица, 42к1") == GeoHit(55.745478, 37.781916, "building", 30)
+
+
 def test_cached_variant_is_used_while_network_is_down(tmp_path, network_up):
     attempts = []
     cache = JsonGeocodeCache(tmp_path / "c.json")
