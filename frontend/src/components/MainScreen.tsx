@@ -13,6 +13,8 @@ export function MainScreen() {
   const pickFor = useAppStore((s) => s.pickFor);
   const editingRequestId = useAppStore((s) => s.editingRequestId);
   const delayDialogOpen = useAppStore((s) => s.delayDialogOpen);
+  // Диалог панели событий и диалог изменения заявки или задержки открыты вместе: второй стоит левее, чтобы не закрыть первый.
+  const toolbarDialogOpen = useAppStore((s) => s.toolbarDialog !== null);
   // Подсказка называет диалог, который начал выбор точки: оба диалога могут быть открыты одновременно.
   const pickHint =
     pickFor === 'edit' && editingRequestId
@@ -21,7 +23,7 @@ export function MainScreen() {
         ? 'Кликните по карте, чтобы указать место срочной заявки'
         : 'Кликните по карте, чтобы указать точку';
   return (
-    <div className="app-shell">
+    <div className={`app-shell${toolbarDialogOpen ? ' app-shell--toolbar-dialog' : ''}`}>
       <header className="topbar">
         <MetricsStrip />
         <EventToolbar />

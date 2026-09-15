@@ -538,6 +538,18 @@ describe('EventToolbar', () => {
     expect(screen.getByRole('dialog', { name: 'Инженер недоступен' })).toBeInTheDocument();
   });
 
+  it('keeps the open dialog in the store and closes it from the dialog', () => {
+    render(<EventToolbar />);
+    fireEvent.click(screen.getByRole('button', { name: 'Смена транспорта' }));
+    expect(useAppStore.getState().toolbarDialog).toBe('transport');
+    fireEvent.click(screen.getByRole('button', { name: 'Срочная заявка' }));
+    expect(useAppStore.getState().toolbarDialog).toBe('urgent');
+    expect(screen.queryByRole('dialog', { name: 'Смена транспорта' })).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Срочная заявка' })).getByRole('button', { name: 'Отмена' }));
+    expect(useAppStore.getState().toolbarDialog).toBeNull();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
   it('opens the transport change dialog from a button between the urgent request and the delay', () => {
     render(<EventToolbar />);
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual([

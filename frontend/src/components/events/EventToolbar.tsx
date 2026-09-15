@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import { timeError } from '../../lib/events';
 import { useAppStore } from '../../store/useAppStore';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
@@ -12,7 +11,10 @@ export function EventToolbar() {
   const busy = useAppStore((s) => s.busy);
   const showPrevious = useAppStore((s) => s.showPrevious);
   const startDelay = useAppStore((s) => s.startDelay);
-  const [dialog, setDialog] = useState<'urgent' | 'transport' | 'unavailable' | null>(null);
+  // Открытый диалог хранит стор: главный экран сдвигает по нему диалоги изменения заявки и задержки.
+  const dialog = useAppStore((s) => s.toolbarDialog);
+  const setDialog = useAppStore((s) => s.openToolbarDialog);
+  const closeDialog = useAppStore((s) => s.closeToolbarDialog);
   if (!state) return null;
 
   const error = timeError(eventTime, state.now);
@@ -36,9 +38,9 @@ export function EventToolbar() {
       <button type="button" className="btn" disabled={busy || showPrevious} onClick={() => setDialog('unavailable')}>
         Инженер недоступен
       </button>
-      {dialog === 'urgent' && <UrgentRequestDialog onClose={() => setDialog(null)} />}
-      {dialog === 'transport' && <TransportChangeDialog onClose={() => setDialog(null)} />}
-      {dialog === 'unavailable' && <EngineerUnavailableDialog onClose={() => setDialog(null)} />}
+      {dialog === 'urgent' && <UrgentRequestDialog onClose={closeDialog} />}
+      {dialog === 'transport' && <TransportChangeDialog onClose={closeDialog} />}
+      {dialog === 'unavailable' && <EngineerUnavailableDialog onClose={closeDialog} />}
     </div>
   );
 }

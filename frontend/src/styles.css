@@ -854,6 +854,20 @@ h4 {
   overflow: auto;
 }
 
+/* Диалог панели событий стоит на том же месте: пока он открыт, изменение заявки и задержка открываются левее. */
+.app-shell--toolbar-dialog .dialog--floating {
+  right: calc(16px + 460px + 12px);
+}
+
+@media (max-width: 1000px) {
+  .app-shell--toolbar-dialog .dialog--floating {
+    top: auto;
+    right: 16px;
+    bottom: 16px;
+    max-height: calc(50vh - 24px);
+  }
+}
+
 /* Быстрый выбор минут в диалоге задержки */
 .delay-presets {
   display: flex;

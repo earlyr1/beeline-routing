@@ -76,6 +76,21 @@ describe('App', () => {
     expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
   });
 
+  it('moves the request edit aside while an event toolbar dialog is open', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), editingRequestId: '50104' });
+    const { container } = render(<App />);
+    const shell = () => container.querySelector('.app-shell');
+    expect(shell()).not.toHaveClass('app-shell--toolbar-dialog');
+    fireEvent.click(within(screen.getByRole('banner')).getByRole('button', { name: 'Смена транспорта' }));
+    expect(screen.getByRole('dialog', { name: 'Смена транспорта' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Изменить заявку' })).toBeInTheDocument();
+    expect(shell()).toHaveClass('app-shell--toolbar-dialog');
+
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Смена транспорта' })).getByRole('button', { name: 'Отмена' }));
+    expect(shell()).not.toHaveClass('app-shell--toolbar-dialog');
+    expect(await screen.findByText('Подложка OpenStreetMap: ключ Яндекс Карт не задан')).toBeInTheDocument();
+  });
+
   it('names the dialog that is picking a point on the map', async () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), editingRequestId: '50104', pickMode: true, pickFor: 'urgent' });
     render(<App />);

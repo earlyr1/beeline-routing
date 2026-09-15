@@ -255,6 +255,20 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
   });
 
+  it('remembers the open event toolbar dialog next to the request edit and forgets it on a new session', () => {
+    useAppStore.getState().openToolbarDialog('transport');
+    useAppStore.getState().startEdit('50104');
+    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: 'transport', editingRequestId: '50104' });
+    useAppStore.getState().openToolbarDialog('urgent');
+    expect(useAppStore.getState().toolbarDialog).toBe('urgent');
+    useAppStore.getState().closeToolbarDialog();
+    expect(useAppStore.getState()).toMatchObject({ toolbarDialog: null, editingRequestId: '50104' });
+
+    useAppStore.getState().openToolbarDialog('unavailable');
+    useAppStore.getState().reset();
+    expect(useAppStore.getState().toolbarDialog).toBeNull();
+  });
+
   it('keeps only one of the delay and request edit dialogs open', () => {
     useAppStore.getState().startEdit('50104');
     useAppStore.getState().startPick('edit');

@@ -15,6 +15,9 @@ export const DEFAULT_EVENT_TIME: HHMM = '13:00';
 /** Диалог, для которого диспетчер указывает точку на карте. */
 export type PickOwner = 'urgent' | 'edit';
 
+/** Диалог панели событий; из них одновременно открыт только один. */
+export type ToolbarDialog = 'urgent' | 'transport' | 'unavailable';
+
 export interface AppData {
   config: ClientConfig | null;
   datasetId: string | null;
@@ -36,6 +39,8 @@ export interface AppData {
   delayDialogOpen: boolean;
   /** Инженер, выбранный в карточке маршрута для диалога «Задержка инженера»; null — выбрать в диалоге. */
   delayEngineerId: string | null;
+  /** Открытый диалог панели событий; пока он открыт, диалоги изменения заявки и задержки стоят левее него. */
+  toolbarDialog: ToolbarDialog | null;
 }
 
 export interface AppActions {
@@ -62,6 +67,8 @@ export interface AppActions {
   /** Открыть диалог задержки; engineerId из карточки маршрута, null — инженера выберут в диалоге. */
   startDelay(engineerId: string | null): void;
   closeDelay(): void;
+  openToolbarDialog(dialog: ToolbarDialog): void;
+  closeToolbarDialog(): void;
   clearError(): void;
   reset(): void;
 }
@@ -86,6 +93,7 @@ export const initialAppData: AppData = {
   editingRequestId: null,
   delayDialogOpen: false,
   delayEngineerId: null,
+  toolbarDialog: null,
 };
 
 const OFFLINE_CONFIG: ClientConfig = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: false };
@@ -147,6 +155,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
       editingRequestId: null,
       delayDialogOpen: false,
       delayEngineerId: null,
+      toolbarDialog: null,
     });
     try {
       let status = await uploadFile(file);
@@ -295,6 +304,14 @@ export const useAppStore = create<AppState>()((set, get) => ({
 
   closeDelay() {
     set({ delayDialogOpen: false, delayEngineerId: null });
+  },
+
+  openToolbarDialog(dialog) {
+    set({ toolbarDialog: dialog });
+  },
+
+  closeToolbarDialog() {
+    set({ toolbarDialog: null });
   },
 
   clearError() {
