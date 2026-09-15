@@ -4,6 +4,10 @@ import json
 from app.domain.models import Metrics
 from app.geo.matrix import TrafficProfile
 from app.ingest.geocode import GeoHit
+from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
+from app.solvers.ortools_solver import OrToolsSolver
+from app.solvers.problem import make_problem
+from app.synth import prepare as prepare_module
 from app.synth.config import SynthConfig
 from app.synth.prepare import build_parser, prepare_region, self_check
 from tests.test_synth import CONFIG
@@ -32,7 +36,20 @@ class HashGeocoder:
         return GeoHit(55.74 + digest[0] / 255 * 0.03, 37.60 + digest[1] / 255 * 0.05, "building")
 
 
-def test_prepare_region_end_to_end(tmp_path):
+def test_prepare_region_end_to_end(tmp_path, monkeypatch):
+    buffers, weights = [], []
+
+    def spy_problem(*args, **kwargs):
+        buffers.append(kwargs.get("buffer"))
+        return make_problem(*args, **kwargs)
+
+    class SpySolver(OrToolsSolver):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            weights.append(self.weights)
+
+    monkeypatch.setattr(prepare_module, "make_problem", spy_problem)
+    monkeypatch.setattr(prepare_module, "OrToolsSolver", SpySolver)
     (tmp_path / "data" / "raw").mkdir(parents=True)
     (tmp_path / "data" / "raw" / "t_synthetic.csv").write_bytes(SYNTHETIC.encode("cp1251"))
     (tmp_path / "data" / "raw" / "t_control.csv").write_bytes(CONTROL.encode("utf-8"))
@@ -60,6 +77,9 @@ def test_prepare_region_end_to_end(tmp_path):
     assert len(result.bundle.engineers) == 2 and len(result.bundle.requests) == 2
     assert result.bundle.control_plan.metrics.engineers_used == 2
     assert "| Оптимизированный (OR-Tools) | 1 |" in result.report
+    # Бандл считается на уровне нагрузки по умолчанию: отчёт совпадает с тем, что сервис покажет без выбора уровня.
+    assert buffers == [travel_buffer(DEFAULT_WORKLOAD_LEVEL)]
+    assert weights == [workload_weights(DEFAULT_WORKLOAD_LEVEL)]
     cache = json.loads((tmp_path / "data" / "geocode_cache.json").read_text(encoding="utf-8"))
     assert "Москва, Юных Ленинцев улица, 83с4" in cache
 

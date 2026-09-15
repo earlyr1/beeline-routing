@@ -19,6 +19,7 @@ from app.geo.osrm import OsrmClient
 from app.ingest.beeline_csv import RawFile, parse_beeline_csv
 from app.ingest.bundle import save_bundle
 from app.ingest.geocode import Geocoder, JsonGeocodeCache, NominatimGeocoder, geocode_address
+from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
@@ -147,9 +148,20 @@ def prepare_region(
         k: (r.lat, r.lon) for k, r in enumerate(requests) if r.lat is not None and r.lon is not None
     }
     engineers, crew_to_engineer = build_engineers(cfg, region, control, office, row_points)
-    problem = make_problem(requests, engineers, model=TravelModel(), traffic=traffic, osrm=osrm, cache=cache)
+    # Бандл считается на уровне нагрузки по умолчанию: отчёт совпадает с тем, что сервис покажет без выбора уровня.
+    problem = make_problem(
+        requests,
+        engineers,
+        model=TravelModel(),
+        traffic=traffic,
+        osrm=osrm,
+        cache=cache,
+        buffer=travel_buffer(DEFAULT_WORKLOAD_LEVEL),
+    )
     fcfs = FcfsSolver().solve(problem)
-    optimized = OrToolsSolver(time_limit_s=time_limit_s).solve(problem)
+    optimized = OrToolsSolver(
+        time_limit_s=time_limit_s, weights=workload_weights(DEFAULT_WORKLOAD_LEVEL)
+    ).solve(problem)
     control_plan = build_control_plan(problem, control, synthetic, crew_to_engineer)
     events = build_demo_events(cfg, region, requests, control, synthetic, crew_to_engineer, optimized)
     bundle = Bundle(

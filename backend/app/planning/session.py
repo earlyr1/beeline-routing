@@ -16,6 +16,7 @@ from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
 from app.planning.models import AppliedEvent, PlanDiff
+from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
@@ -69,6 +70,8 @@ class PlanningSession:
     events: list[AppliedEvent] = field(default_factory=list)
     now: int = 0
     version: int = 1
+    # Уровень нагрузки дня (app/planning/workload.py): веса OR-Tools и запас на дорогу во всех решениях сессии.
+    workload_level: int = DEFAULT_WORKLOAD_LEVEL
 
     def request(self, request_id: str) -> Request | None:
         return next((r for r in self.requests if r.id == request_id), None)
@@ -77,8 +80,25 @@ class PlanningSession:
         return next((e for e in self.engineers if e.id == engineer_id), None)
 
 
-def _solve(problem: Problem, ctx: PlanningContext) -> tuple[Plan, Plan]:
-    return OrToolsSolver(time_limit_s=ctx.time_limit_s).solve(problem), FcfsSolver().solve(problem)
+def _day_problem(
+    requests: list[Request], engineers: list[Engineer], ctx: PlanningContext, workload_level: int
+) -> Problem:
+    """Задача на начало дня с запасом на дорогу уровня нагрузки. Базовая матрица берётся из кэша, если уже была."""
+    return make_problem(
+        requests,
+        engineers,
+        model=ctx.model,
+        traffic=ctx.traffic,
+        osrm=ctx.osrm,
+        cache=ctx.cache,
+        buffer=travel_buffer(workload_level),
+    )
+
+
+def _solve(problem: Problem, ctx: PlanningContext, workload_level: int) -> tuple[Plan, Plan]:
+    """Оптимизированный план с весами уровня нагрузки и базовый FCFS. Стоимость инженера FCFS не использует."""
+    optimizer = OrToolsSolver(time_limit_s=ctx.time_limit_s, weights=workload_weights(workload_level))
+    return optimizer.solve(problem), FcfsSolver().solve(problem)
 
 
 def start_session(
@@ -89,11 +109,11 @@ def start_session(
     engineers: list[Engineer],
     control: Plan | None,
     ctx: PlanningContext,
+    *,
+    workload_level: int = DEFAULT_WORKLOAD_LEVEL,
 ) -> PlanningSession:
-    problem = make_problem(
-        requests, engineers, model=ctx.model, traffic=ctx.traffic, osrm=ctx.osrm, cache=ctx.cache
-    )
-    plan, baseline = _solve(problem, ctx)
+    problem = _day_problem(requests, engineers, ctx, workload_level)
+    plan, baseline = _solve(problem, ctx, workload_level)
     return PlanningSession(
         dataset_id=dataset_id,
         region=region,
@@ -104,6 +124,7 @@ def start_session(
         problem=problem,
         plan=plan,
         baseline=baseline,
+        workload_level=workload_level,
     )
 
 
@@ -433,15 +454,13 @@ def check_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
 def apply_event(session: PlanningSession, event: Event, ctx: PlanningContext) -> PlanningSession:
     """Применяет одно событие дня и возвращает НОВУЮ сессию; входная не меняется.
 
-    Бросает EventRejected, если событие противоречит текущему состоянию.
+    Бросает EventRejected, если событие противоречит текущему состоянию. Уровень нагрузки остаётся уровнем сессии.
     """
     _check_time(session, event)
     requests, engineers, stored_event = _apply_to_inputs(session, event, ctx)
-    base = make_problem(
-        requests, engineers, model=ctx.model, traffic=ctx.traffic, osrm=ctx.osrm, cache=ctx.cache
-    )
+    base = _day_problem(requests, engineers, ctx, session.workload_level)
     problem = _pinned_problem(base, session, stored_event)
-    plan, baseline = _solve(problem, ctx)
+    plan, baseline = _solve(problem, ctx, session.workload_level)
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}
     diff = compute_diff(session.plan, plan, cancelled)
     if stored_event.type == EventType.ENGINEER_DELAYED:

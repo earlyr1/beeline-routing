@@ -10,7 +10,14 @@ from app.api.deps import AppDeps
 from app.api.geometry import route_geometry
 from app.api.ingest_service import preprocess_upload
 from app.api.registry import DatasetRecord
-from app.api.schemas import ClientConfig, DatasetStatus, PlanningState, RouteGeometry, to_planning_state
+from app.api.schemas import (
+    ClientConfig,
+    DatasetStatus,
+    PlanningState,
+    PlanRequest,
+    RouteGeometry,
+    to_planning_state,
+)
 from app.domain.models import Event
 from app.planning.explain import build_explanation
 from app.planning.models import Explanation
@@ -80,11 +87,17 @@ def dataset_status(dataset_id: str, deps: Deps) -> DatasetStatus:
 
 
 @router.post("/datasets/{dataset_id}/plan", response_model=PlanningState)
-def build_plan(dataset_id: str, deps: Deps) -> PlanningState:
+def build_plan(dataset_id: str, deps: Deps, body: PlanRequest | None = None) -> PlanningState:
+    """План дня. После событий или со сменой уровня нагрузки день пересчитывается с нуля.
+
+    Без тела или без поля workload_level остаётся уровень сессии. Если событий не было и уровень тот же,
+    возвращается предподсчитанный план без изменений.
+    """
     record = _record(deps, dataset_id)
     with record.lock:
         session = _session(record)
-        if session.events:
+        level = session.workload_level if body is None or body.workload_level is None else body.workload_level
+        if session.events or level != session.workload_level:
             day = record.prepared
             fresh = start_session(
                 dataset_id,
@@ -94,6 +107,7 @@ def build_plan(dataset_id: str, deps: Deps) -> PlanningState:
                 day.engineers,
                 day.control,
                 deps.ingest.planning,
+                workload_level=level,
             )
             session = replace(fresh, version=session.version + 1)
             record.session = session

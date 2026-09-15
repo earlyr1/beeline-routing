@@ -7,6 +7,7 @@ from app.domain.models import Event
 from app.planning.session import EventRejected, apply_event, check_event
 from tests.helpers import eng, req
 from tests.planning_helpers import (
+    EXACT_TRAVEL_LEVEL,
     IN_TRANSIT_TO_B,
     busy_engineer,
     context,
@@ -49,7 +50,10 @@ def test_downgrade_to_bike_moves_car_only_work_and_recomputes_later_legs():
     ctx = context()
     # E2 умеет только подключения: утром выгоднее отдать всё E1.
     engineers = [eng("E1"), eng("E2", skills=[Skill.CONNECTION])]
-    session = new_session(ctx=ctx, requests=downgrade_requests(), engineers=engineers)
+    # Минуты участков сверяются прямо с матрицей, поэтому дорога без запаса.
+    session = new_session(
+        ctx=ctx, requests=downgrade_requests(), engineers=engineers, workload_level=EXACT_TRAVEL_LEVEL
+    )
     assert routes(session.plan) == {"E1": ["R1", "R2", "R3"], "E2": []}
     morning = visit_of(session.plan, "E1", "R1")
 
@@ -103,7 +107,7 @@ def test_upgrade_to_car_lets_idle_engineer_take_car_only_request():
     ctx = context()
     requests = [req("CR", 2, 0, "14:00", "16:00", transport=Transport.CAR)]
     engineers = [eng("E1", shift=("09:00", "12:00")), eng("E2", transport=Transport.FOOT)]
-    session = new_session(ctx=ctx, requests=requests, engineers=engineers)
+    session = new_session(ctx=ctx, requests=requests, engineers=engineers, workload_level=EXACT_TRAVEL_LEVEL)
     [waiting] = session.plan.unassigned
     assert (waiting.request_id, waiting.reason_code) == ("CR", ReasonCode.DOES_NOT_FIT)
 

@@ -5,7 +5,7 @@ from app.api.registry import DatasetRecord
 from app.domain.models import Bundle
 from app.ingest.geocode import GeoHit
 from tests.api_helpers import csv_bytes, make_client, sample_bundle, upload
-from tests.planning_helpers import OFFICE, day_engineers, transit_requests
+from tests.planning_helpers import EXACT_TRAVEL_LEVEL, OFFICE, day_engineers, transit_requests
 
 
 def _ready_dataset(client):
@@ -416,7 +416,8 @@ def test_visit_on_the_way_is_not_shown_as_started_and_can_be_cancelled(tmp_path)
     bundle = Bundle(region="t", office=OFFICE, requests=requests, engineers=day_engineers())
     client, _ = make_client(tmp_path, bundle=bundle)
     base = f"/api/datasets/{upload(client, 'bundle.json', bundle.model_dump_json().encode())}"
-    plan = client.post(f"{base}/plan").json()["plan"]
+    # Время выездов в сценарии считается по дороге без запаса.
+    plan = client.post(f"{base}/plan", json={"workload_level": EXACT_TRAVEL_LEVEL}).json()["plan"]
     starts = {v["request_id"]: v["start"] for route in plan["routes"] for v in route["visits"]}
     assert sorted(starts) == ["A", "B", "C"] and min(starts.values()) > "09:10"
 
