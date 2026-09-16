@@ -39,13 +39,13 @@ export function useMapLayers(): MapLayers | null {
   return model ? { model, clock } : null;
 }
 
-/** Клик по маркеру закрывает меню карты. В режиме выбора точки маркеры ничего не выбирают. */
+/** Клик по маркеру заявки закрывает меню карты и выбирает заявку. В режиме выбора точки маркеры ничего не выбирают. */
 export function activateMarker(target: MarkerTarget): void {
-  const { pickMode, selectedEngineerId, selectRequest, selectEngineer, closeMapMenu } = useAppStore.getState();
+  if (target.kind !== 'request') return;
+  const { pickMode, selectRequest, closeMapMenu } = useAppStore.getState();
   closeMapMenu();
   if (pickMode) return;
-  if (target.kind === 'request') selectRequest(target.requestId);
-  if (target.kind === 'engineer') selectEngineer(selectedEngineerId === target.engineerId ? null : target.engineerId);
+  selectRequest(target.requestId);
 }
 
 /**

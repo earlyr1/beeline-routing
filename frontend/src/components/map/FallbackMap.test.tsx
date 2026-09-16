@@ -117,12 +117,20 @@ describe('FallbackMap', () => {
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
   });
 
-  it('selects an engineer from the start marker and dims other engineers and their routes', async () => {
+  it('does not select an engineer from the map and dims other engineers and their routes for a chosen one', async () => {
     vi.mocked(api.getRouteGeometry).mockRejectedValue(new Error('offline'));
     resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '08:00' });
     const { container } = render(<FallbackMap note={NOTE} />);
 
+    // Маркер бригады не интерактивный: клик по нему ничего не выбирает.
+    expect(screen.getByTitle('Старт: Бригада Белузин').closest('.leaflet-marker-icon')).not.toHaveClass('leaflet-interactive');
     fireEvent.click(screen.getByTitle('Старт: Бригада Белузин'));
+    expect(useAppStore.getState().selectedEngineerId).toBeNull();
+    // Клик уходит карте, как по пустому месту: открывается меню «Добавить заявку здесь».
+    expect(useAppStore.getState().mapMenu).not.toBeNull();
+    act(() => useAppStore.getState().closeMapMenu());
+
+    act(() => useAppStore.getState().selectEngineer('E02'));
     expect(useAppStore.getState().selectedEngineerId).toBe('E02');
     expect(screen.getByTitle('Старт: Бригада Арташкин')).toHaveClass('marker--dimmed');
     expect(screen.getByTitle(/^74198:/)).toHaveClass('marker--dimmed');
@@ -134,8 +142,7 @@ describe('FallbackMap', () => {
     }
     expect(markerIcons(container)).toHaveLength(14);
 
-    fireEvent.click(screen.getByTitle('Старт: Бригада Белузин'));
-    expect(useAppStore.getState().selectedEngineerId).toBeNull();
+    act(() => useAppStore.getState().selectEngineer(null));
     expect(screen.getByTitle('Старт: Бригада Арташкин')).not.toHaveClass('marker--dimmed');
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalledTimes(2));
   });
@@ -188,8 +195,8 @@ describe('FallbackMap', () => {
     const { container } = render(<FallbackMap note={NOTE} />);
     const map = container.querySelector('.leaflet-container') as HTMLElement;
 
-    fireEvent.click(screen.getByTitle('Старт: Бригада Белузин'));
-    expect(useAppStore.getState()).toMatchObject({ selectedEngineerId: 'E02', mapMenu: null });
+    fireEvent.click(screen.getByTitle(/^74198:/));
+    expect(useAppStore.getState()).toMatchObject({ selectedRequestId: '74198', mapMenu: null });
 
     fireEvent.click(map, { clientX: MAP_WIDTH / 2, clientY: MAP_HEIGHT / 2 });
     expect(await screen.findByRole('group', { name: 'Меню карты' })).toBeInTheDocument();

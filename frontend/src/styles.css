@@ -838,6 +838,20 @@ h4 {
   cursor: pointer;
 }
 
+/* Офис и бригады на карте не кликаются: клик уходит к заявке под маркером бригады или к самой карте. */
+.marker--office,
+.marker--start,
+.marker--now {
+  pointer-events: none;
+  cursor: default;
+}
+
+/* Яндекс Карты оборачивают маркер в свои элементы размером с маркер, и клик ловит обёртка: пропускаем и её. */
+.ymaps3--marker:has(.marker--office, .marker--start, .marker--now),
+.ymaps3--marker:has(.marker--office, .marker--start, .marker--now) * {
+  pointer-events: none;
+}
+
 .marker--office {
   background: #f3f4f6;
   color: var(--muted);

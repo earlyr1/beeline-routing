@@ -2,7 +2,7 @@ import * as L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { MapMarker, MapPolyline } from '../../lib/mapModel';
+import { isClickableMarker, type MapMarker, type MapPolyline } from '../../lib/mapModel';
 import { toLatLng, toLatLngBounds } from '../../lib/mapView';
 import { useAppStore } from '../../store/useAppStore';
 import './fallbackMap.css';
@@ -36,7 +36,7 @@ function markerElement(marker: MapMarker): HTMLElement {
 }
 
 function addMarker(group: L.LayerGroup, marker: MapMarker): void {
-  const clickable = marker.target.kind !== 'office';
+  const clickable = isClickableMarker(marker);
   const layer = L.marker(toLatLng(marker.coordinates), {
     icon: L.divIcon({ html: markerElement(marker), className: 'fallback-map__icon', iconSize: undefined }),
     zIndexOffset: marker.zIndex * Z_INDEX_STEP,

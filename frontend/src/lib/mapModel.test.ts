@@ -6,6 +6,7 @@ import {
   buildClockLayer,
   buildMapModel,
   DIMMED_ROUTE_OPACITY,
+  isClickableMarker,
   legKey,
   NO_CLOCK_LEGS,
   NOW_MARKER_Z_INDEX,
@@ -61,6 +62,18 @@ describe('buildMapModel', () => {
       title: 'г. Москва, ул Юных Ленинцев, д 83с 4',
       label: 'Офис',
     });
+  });
+
+  it('makes only request markers clickable', () => {
+    const model = buildMapModel(input());
+    const clock = buildClockLayer(clockInput());
+    expect(isClickableMarker(markerOf(model, 'start-E01'))).toBe(false);
+    expect(isClickableMarker(markerOf(model, 'office'))).toBe(false);
+    expect(clock.markers.length).toBeGreaterThan(0);
+    for (const marker of clock.markers) expect(isClickableMarker(marker)).toBe(false);
+    const requests = model.markers.filter((marker) => marker.target.kind === 'request');
+    expect(requests.length).toBeGreaterThan(0);
+    for (const marker of requests) expect(isClickableMarker(marker)).toBe(true);
   });
 
   it('colors engineer starts and dims unavailable engineers', () => {

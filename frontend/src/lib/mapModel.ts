@@ -32,6 +32,15 @@ export interface MarkerStyle {
   color?: string;
 }
 
+/**
+ * На карте кликаются только заявки. Офис и бригады (старт и «где сейчас») клик пропускают: маркер бригады стоит
+ * поверх заявки, у которой она работает или закончила день, и иначе заявку было не выбрать. Бригада открывается
+ * из карточки заявки или вкладки «Бригады».
+ */
+export function isClickableMarker(marker: MapMarker): boolean {
+  return marker.target.kind === 'request';
+}
+
 /** Маркер без привязки к библиотеке карт: координаты, CSS-классы, подпись и подсказка. */
 export interface MapMarker {
   key: string;

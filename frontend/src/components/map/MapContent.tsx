@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import type { MapMarker, MapPolyline } from '../../lib/mapModel';
+import { isClickableMarker, type MapMarker, type MapPolyline } from '../../lib/mapModel';
 import { useAppStore } from '../../store/useAppStore';
 import { MAP_MENU_Z_INDEX, MapMenu } from './MapMenu';
 import { MapOverviewButton } from './MapOverviewButton';
@@ -33,12 +33,12 @@ export function MapContent({ components }: { components: YMapsComponents }) {
           style={marker.style}
           title={marker.title}
           onClick={
-            marker.target.kind === 'office'
-              ? undefined
-              : (event) => {
+            isClickableMarker(marker)
+              ? (event) => {
                   event.stopPropagation();
                   activateMarker(marker.target);
                 }
+              : undefined
           }
         >
           {marker.label}

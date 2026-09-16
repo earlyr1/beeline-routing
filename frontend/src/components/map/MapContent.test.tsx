@@ -103,14 +103,15 @@ describe('MapContent', () => {
     expect(screen.getAllByTestId('feature').some((feature) => feature.getAttribute('data-coordinates') === road)).toBe(false);
   });
 
-  it('selects requests and engineers from markers and picks a point in pick mode', async () => {
+  it('selects requests from markers, ignores engineer markers and picks a point in pick mode', async () => {
     render(<MapContent components={fake} />);
     fireEvent.click(screen.getByTitle(/^50104:/));
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
     expect(screen.getByTestId('map')).toHaveAttribute('data-center', '37.7336,55.7212');
 
+    // Бригады на карте не кликаются: их маркер стоит поверх заявки, у которой бригада работает или закончила день.
     fireEvent.click(screen.getByTitle('Старт: Бригада Белузин'));
-    expect(useAppStore.getState().selectedEngineerId).toBe('E02');
+    expect(useAppStore.getState()).toMatchObject({ selectedEngineerId: null, selectedRequestId: '50104' });
 
     act(() => useAppStore.getState().startPick());
     fireEvent.click(screen.getByRole('button', { name: 'map-click' }));
