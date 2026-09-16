@@ -14,7 +14,7 @@
 ## Перечисления
 
 - `Skill`: `local` (Локальные работы), `connection` (Работы на подключение и дозаказы), `emergency` (Аварийные работы)
-- `Transport`: `car` (Автомобиль), `foot` (Пешеход), `bike` (Велосипед), `public` (Общественный транспорт)
+- `Transport`: `car` (Автомобиль), `bike` (Велосипед), `public` (Общественный транспорт и пешком). С 16.09.2026 пешеход входит в `public`: на входе прежнее значение `foot` принимается и читается как `public`, в ответах и схеме его нет.
 - `Priority`: `normal` (Обычная), `urgent` (Срочная)
 - `RequestStatus`: `active`, `cancelled`
 - `EventType`: `urgent`, `cancel`, `restore`, `engineer_unavailable`, `engineer_transport_changed`, `request_updated`, `engineer_delayed`
@@ -114,7 +114,7 @@
  "last_diff": PlanDiff | null,
  "events": [AppliedEvent], "matrix_source": "osrm"}
 
-// RouteGeometry. source "osrm" для car/bike/foot (дорожный граф), "straight" для public или без OSRM
+// RouteGeometry. source "osrm" для car/bike (дорожный граф), "straight" для public или без OSRM
 {"engineer_id": "E01", "transport": "car", "source": "osrm",
  "legs": [{"to_request_id": "74198", "coordinates": [[37.78, 55.70], [37.79, 55.71]]}]}
 

@@ -1498,7 +1498,7 @@
         "local",
         "connection"
       ],
-      "transport": "foot",
+      "transport": "public",
       "available": true,
       "unavailable_from": null
     },
@@ -1527,7 +1527,7 @@
         "local",
         "connection"
       ],
-      "transport": "foot",
+      "transport": "public",
       "available": true,
       "unavailable_from": null
     },
@@ -1580,7 +1580,7 @@
       "time": "13:00",
       "request": null,
       "request_id": null,
-      "engineer_id": "E04",
+      "engineer_id": "E11",
       "transport": null,
       "previous_transport": null,
       "previous_request": null,
@@ -1810,87 +1810,87 @@
         "visits": [
           {
             "request_id": "31815",
-            "arrival": "10:22",
-            "start": "10:22",
-            "end": "10:52",
+            "arrival": "10:26",
+            "start": "10:26",
+            "end": "10:56",
             "leg_km": 1.68,
-            "leg_min": 22,
+            "leg_min": 26,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "86599",
-            "arrival": "11:14",
-            "start": "11:14",
-            "end": "12:24",
+            "arrival": "11:22",
+            "start": "11:22",
+            "end": "12:32",
             "leg_km": 1.67,
-            "leg_min": 22,
+            "leg_min": 26,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "18638",
-            "arrival": "12:49",
+            "arrival": "13:05",
             "start": "14:00",
             "end": "15:10",
             "leg_km": 2.38,
-            "leg_min": 25,
+            "leg_min": 33,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "19502",
-            "arrival": "15:31",
+            "arrival": "15:32",
             "start": "16:00",
             "end": "16:30",
             "leg_km": 1.39,
-            "leg_min": 21,
+            "leg_min": 22,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "21683",
-            "arrival": "16:52",
+            "arrival": "16:54",
             "start": "18:00",
             "end": "19:10",
             "leg_km": 1.52,
-            "leg_min": 22,
-            "late_min": 0,
-            "pinned": false
-          },
-          {
-            "request_id": "56976",
-            "arrival": "19:34",
-            "start": "19:34",
-            "end": "20:04",
-            "leg_km": 2.01,
             "leg_min": 24,
             "late_min": 0,
             "pinned": false
           },
           {
+            "request_id": "56976",
+            "arrival": "19:40",
+            "start": "19:40",
+            "end": "20:10",
+            "leg_km": 2.01,
+            "leg_min": 30,
+            "late_min": 0,
+            "pinned": false
+          },
+          {
             "request_id": "84814",
-            "arrival": "20:26",
-            "start": "20:26",
-            "end": "20:56",
+            "arrival": "20:35",
+            "start": "20:35",
+            "end": "21:05",
             "leg_km": 1.66,
-            "leg_min": 22,
-            "late_min": 26,
+            "leg_min": 25,
+            "late_min": 35,
             "pinned": false
           },
           {
             "request_id": "26138",
-            "arrival": "21:23",
-            "start": "21:23",
-            "end": "22:33",
+            "arrival": "21:39",
+            "start": "21:39",
+            "end": "22:49",
             "leg_km": 2.75,
-            "leg_min": 27,
+            "leg_min": 34,
             "late_min": 0,
             "pinned": false
           }
         ],
         "total_km": 15.06,
-        "total_travel_min": 185,
+        "total_travel_min": 220,
         "lunch": null
       },
       {
@@ -2014,47 +2014,47 @@
         "visits": [
           {
             "request_id": "20742",
-            "arrival": "10:37",
-            "start": "10:37",
-            "end": "11:07",
+            "arrival": "10:40",
+            "start": "10:40",
+            "end": "11:10",
             "leg_km": 5.42,
-            "leg_min": 37,
+            "leg_min": 40,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "68973",
-            "arrival": "11:48",
+            "arrival": "11:52",
             "start": "16:00",
             "end": "17:10",
             "leg_km": 6.49,
-            "leg_min": 41,
+            "leg_min": 42,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "79713",
-            "arrival": "17:42",
-            "start": "17:42",
-            "end": "18:52",
+            "arrival": "17:47",
+            "start": "17:47",
+            "end": "18:57",
             "leg_km": 4.2,
-            "leg_min": 32,
+            "leg_min": 37,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "68459",
-            "arrival": "19:20",
-            "start": "19:20",
-            "end": "20:30",
+            "arrival": "19:32",
+            "start": "19:32",
+            "end": "20:42",
             "leg_km": 3.12,
-            "leg_min": 28,
+            "leg_min": 35,
             "late_min": 0,
             "pinned": false
           }
         ],
         "total_km": 19.23,
-        "total_travel_min": 138,
+        "total_travel_min": 154,
         "lunch": null
       },
       {
@@ -2150,47 +2150,47 @@
         "visits": [
           {
             "request_id": "93737",
-            "arrival": "10:30",
+            "arrival": "10:20",
             "start": "12:00",
             "end": "12:30",
-            "leg_km": 2.06,
-            "leg_min": 30,
+            "leg_km": 1.22,
+            "leg_min": 20,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "14336",
-            "arrival": "13:24",
+            "arrival": "13:04",
             "start": "14:00",
             "end": "15:10",
-            "leg_km": 4.02,
-            "leg_min": 54,
+            "leg_km": 2.82,
+            "leg_min": 34,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "72057",
-            "arrival": "16:04",
-            "start": "16:04",
-            "end": "17:14",
-            "leg_km": 4.04,
-            "leg_min": 54,
-            "late_min": 4,
+            "arrival": "15:42",
+            "start": "15:42",
+            "end": "16:52",
+            "leg_km": 2.21,
+            "leg_min": 32,
+            "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "93041",
-            "arrival": "17:33",
+            "arrival": "17:07",
             "start": "18:00",
             "end": "18:30",
-            "leg_km": 1.1,
-            "leg_min": 19,
+            "leg_km": 0.75,
+            "leg_min": 15,
             "late_min": 0,
             "pinned": false
           }
         ],
-        "total_km": 11.22,
-        "total_travel_min": 157,
+        "total_km": 7.0,
+        "total_travel_min": 101,
         "lunch": null
       },
       {
@@ -2236,47 +2236,47 @@
         "visits": [
           {
             "request_id": "68691",
-            "arrival": "11:09",
-            "start": "11:09",
-            "end": "12:19",
-            "leg_km": 5.1,
-            "leg_min": 69,
+            "arrival": "10:31",
+            "start": "10:31",
+            "end": "11:41",
+            "leg_km": 2.15,
+            "leg_min": 31,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "56808",
-            "arrival": "12:55",
+            "arrival": "12:09",
             "start": "14:00",
             "end": "15:10",
-            "leg_km": 2.56,
-            "leg_min": 36,
+            "leg_km": 1.9,
+            "leg_min": 28,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "78274",
-            "arrival": "16:00",
+            "arrival": "15:45",
             "start": "16:00",
             "end": "16:30",
-            "leg_km": 3.69,
-            "leg_min": 50,
+            "leg_km": 3.09,
+            "leg_min": 35,
             "late_min": 0,
             "pinned": false
           },
           {
             "request_id": "44177",
-            "arrival": "17:01",
+            "arrival": "16:59",
             "start": "20:00",
             "end": "21:10",
-            "leg_km": 2.09,
-            "leg_min": 31,
+            "leg_km": 1.92,
+            "leg_min": 29,
             "late_min": 0,
             "pinned": false
           }
         ],
-        "total_km": 13.44,
-        "total_travel_min": 186,
+        "total_km": 9.06,
+        "total_travel_min": 123,
         "lunch": null
       },
       {
@@ -2443,25 +2443,24 @@
         "E05": 29.29,
         "E06": 19.23,
         "E07": 49.31,
-        "E08": 11.22,
+        "E08": 7.0,
         "E09": 8.61,
-        "E10": 13.44,
+        "E10": 9.06,
         "E11": 19.44,
         "E12": 52.04
       },
-      "total_km": 342.2,
+      "total_km": 333.6,
       "assigned": 71,
       "unassigned": 1,
-      "violations": 10
+      "violations": 9
     },
     "violations": [
       "69082: начало 14:07 позже окна до 14:00 на 7 мин",
       "75030: начало 20:47 позже окна до 20:00 на 47 мин",
-      "84814: начало 20:26 позже окна до 20:00 на 26 мин",
-      "26138: окончание 22:33 позже конца смены 22:00",
+      "84814: начало 20:35 позже окна до 20:00 на 35 мин",
+      "26138: окончание 22:49 позже конца смены 22:00",
       "26690: начало 12:01 позже окна до 12:00 на 1 мин",
       "17548: начало 12:04 позже окна до 12:00 на 4 мин",
-      "72057: начало 16:04 позже окна до 16:00 на 4 мин",
       "83323: окончание 22:04 позже конца смены 22:00",
       "59442: начало 22:01 позже окна до 22:00 на 1 мин",
       "59442: окончание 22:31 позже конца смены 22:00"
