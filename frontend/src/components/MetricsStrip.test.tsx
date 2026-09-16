@@ -14,6 +14,8 @@ import { MetricsStrip } from './MetricsStrip';
 
 const workload = () => screen.getByRole('combobox', { name: 'Нагрузка инженеров' }) as HTMLSelectElement;
 const lunch = () => screen.getByRole('button', { name: 'Обед по плану' });
+const apply = () => screen.getByRole('button', { name: 'Применить' });
+const queryApply = () => screen.queryByRole('button', { name: 'Применить' });
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -57,7 +59,8 @@ describe('MetricsStrip', () => {
     ]);
     expect(lunch()).toHaveTextContent('без обеда');
     expect(lunch()).toHaveAttribute('aria-pressed', 'false');
-    const title = 'Смена нагрузки или обеда пересчитывает день заново: события дня сбрасываются, часы встают на начало дня';
+    const title =
+      'Нагрузка и обед применяются кнопкой «Применить»: день пересчитывается заново, события дня сбрасываются, часы встают на начало дня';
     expect(workload()).toHaveAttribute('title', title);
     expect(lunch()).toHaveAttribute('title', title);
   });
@@ -69,12 +72,17 @@ describe('MetricsStrip', () => {
     expect(lunch()).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('rebuilds the day with the chosen workload level and the lunch of the session', async () => {
+  it('rebuilds the day with the chosen workload level and the lunch of the session only on «Применить»', async () => {
     vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 2, lunch_enabled: true, version: 5 }));
     vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ workload_level: 2, lunch_enabled: true, version: 6, cursor: '09:00' }));
     render(<MetricsStrip />);
+    expect(queryApply()).not.toBeInTheDocument();
 
     fireEvent.change(workload(), { target: { value: '2' } });
+    expect(api.buildPlan).not.toHaveBeenCalled();
+    expect(workload().value).toBe('2');
+
+    fireEvent.click(apply());
     await waitFor(() => expect(useAppStore.getState().state?.version).toBe(6));
     expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 2, lunch: true });
     expect(useAppStore.getState().workloadLevel).toBe(2);
@@ -88,9 +96,55 @@ describe('MetricsStrip', () => {
     render(<MetricsStrip />);
 
     fireEvent.click(lunch());
+    expect(api.buildPlan).not.toHaveBeenCalled();
+    expect(lunch()).toHaveTextContent('без обеда');
+
+    fireEvent.click(apply());
     await waitFor(() => expect(useAppStore.getState().state?.version).toBe(6));
     expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 0, lunch: false });
     expect(lunch()).toHaveTextContent('без обеда');
+    expect(queryApply()).not.toBeInTheDocument();
+  });
+
+  it('changes the workload level and the lunch together with one rebuild', async () => {
+    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false, version: 5 }));
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false, version: 6, cursor: '09:00' }));
+    render(<MetricsStrip />);
+
+    fireEvent.change(workload(), { target: { value: '0' } });
+    fireEvent.click(lunch());
+    expect(api.buildPlan).not.toHaveBeenCalled();
+
+    fireEvent.click(apply());
+    await waitFor(() => expect(useAppStore.getState().state?.version).toBe(6));
+    expect(vi.mocked(api.buildPlan).mock.calls).toEqual([['d_test', { workload_level: 0, lunch: false }]]);
+    expect(workload().value).toBe('0');
+    expect(lunch()).toHaveTextContent('без обеда');
+  });
+
+  it('«Отмена» returns the switches to the day on screen without a rebuild', () => {
+    render(<MetricsStrip />);
+    fireEvent.change(workload(), { target: { value: '2' } });
+    fireEvent.click(lunch());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+
+    expect(workload().value).toBe('1');
+    expect(lunch()).toHaveTextContent('с обедом');
+    expect(queryApply()).not.toBeInTheDocument();
+    expect(api.buildPlan).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds from scratch with the choice shown in the header', async () => {
+    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 2, version: 5 }));
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ workload_level: 2, version: 6, cursor: '09:00' }));
+    render(<MetricsStrip />);
+    fireEvent.change(workload(), { target: { value: '2' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Пересчитать с нуля' }));
+
+    await waitFor(() => expect(useAppStore.getState().state?.version).toBe(6));
+    expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 2, lunch: true });
   });
 
   it('does nothing when the level already on screen is chosen again', () => {
@@ -99,6 +153,11 @@ describe('MetricsStrip', () => {
     render(<MetricsStrip />);
 
     fireEvent.change(workload(), { target: { value: '2' } });
+    expect(queryApply()).not.toBeInTheDocument();
+    // Выбор вернули к плану на экране: применять нечего.
+    fireEvent.change(workload(), { target: { value: '0' } });
+    fireEvent.change(workload(), { target: { value: '2' } });
+    expect(queryApply()).not.toBeInTheDocument();
     expect(api.buildPlan).not.toHaveBeenCalled();
     expect(api.moveCursor).not.toHaveBeenCalled();
     expect(useAppStore.getState().workloadLevel).toBe(0);

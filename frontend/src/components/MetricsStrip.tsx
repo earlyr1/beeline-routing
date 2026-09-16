@@ -1,10 +1,18 @@
+import { useState } from 'react';
 import { formatKm, formatSigned } from '../lib/format';
 import { displayedPlan } from '../lib/planView';
 import { WORKLOAD_LEVELS, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
 
-/** Смена нагрузки и обеда пересчитывает день с нуля, поэтому оба переключателя предупреждают об этом одинаково. */
-const DAY_MODE_TITLE = 'Смена нагрузки или обеда пересчитывает день заново: события дня сбрасываются, часы встают на начало дня';
+/** Нагрузка и обед меняются вместе и применяются одним пересчётом дня с нуля. */
+const DAY_MODE_TITLE =
+  'Нагрузка и обед применяются кнопкой «Применить»: день пересчитывается заново, события дня сбрасываются, часы встают на начало дня';
+
+/** Нагрузка и обед дня: выбор в шапке, который ещё не применён, и то, с чем посчитан план на экране. */
+interface DayMode {
+  level: number;
+  lunch: boolean;
+}
 
 interface MetricProps {
   label: string;
@@ -39,24 +47,26 @@ export function MetricsStrip() {
   const setWorkloadLevel = useAppStore((s) => s.setWorkloadLevel);
   const setLunchEnabled = useAppStore((s) => s.setLunchEnabled);
   const reset = useAppStore((s) => s.reset);
+  // Выбор нагрузки и обеда до «Применить»: так оба меняются одним пересчётом, а не двумя подряд.
+  const [draft, setDraft] = useState<DayMode | null>(null);
   if (!state) return null;
 
   const current = displayedPlan(state, showPrevious).metrics;
   const base = state.baseline.metrics;
-  // Нагрузка и обед сессии, а не выбор в сторе: переключатели не расходятся с планом на экране.
-  const level = clampWorkloadLevel(state.workload_level);
-  const lunch = lunchEnabledOf(state.lunch_enabled);
+  // План на экране посчитан с нагрузкой и обедом сессии, а не с выбором в сторе.
+  const session: DayMode = { level: clampWorkloadLevel(state.workload_level), lunch: lunchEnabledOf(state.lunch_enabled) };
+  // Выбор, совпавший с сессией, применять нечего: переключатели снова показывают план на экране.
+  const pending = draft !== null && (draft.level !== session.level || draft.lunch !== session.lunch) ? draft : null;
+  const shown = pending ?? session;
   const locked = busy || clockBusy;
 
-  /** Выбор того же уровня ничего не меняет: ни выбора в сторе, ни запроса к серверу. */
-  const chooseLevel = (next: number) => {
-    if (next === level) return;
-    setWorkloadLevel(next);
-    void plan();
-  };
+  const choose = (next: DayMode) => setDraft(next);
 
-  const toggleLunch = () => {
-    setLunchEnabled(!lunch);
+  /** Пересчёт с нуля с тем, что показано в шапке: с новым выбором, если он есть, иначе с нагрузкой и обедом сессии. */
+  const rebuild = () => {
+    setWorkloadLevel(shown.level);
+    setLunchEnabled(shown.lunch);
+    setDraft(null);
     void plan();
   };
 
@@ -89,9 +99,9 @@ export function MetricsStrip() {
             className="metric__select"
             aria-label="Нагрузка инженеров"
             title={DAY_MODE_TITLE}
-            value={level}
+            value={shown.level}
             disabled={locked}
-            onChange={(event) => chooseLevel(Number(event.target.value))}
+            onChange={(event) => choose({ ...shown, level: Number(event.target.value) })}
           >
             {WORKLOAD_LEVELS.map((item) => (
               <option key={item.level} value={item.level}>
@@ -103,17 +113,27 @@ export function MetricsStrip() {
             type="button"
             className="btn btn-small metric__lunch"
             aria-label="Обед по плану"
-            aria-pressed={lunch}
+            aria-pressed={shown.lunch}
             title={DAY_MODE_TITLE}
             disabled={locked}
-            onClick={toggleLunch}
+            onClick={() => choose({ ...shown, lunch: !shown.lunch })}
           >
-            {lunch ? 'с обедом' : 'без обеда'}
+            {shown.lunch ? 'с обедом' : 'без обеда'}
           </button>
+          {pending && (
+            <>
+              <button type="button" className="btn btn-small btn-primary" title={DAY_MODE_TITLE} disabled={locked} onClick={rebuild}>
+                Применить
+              </button>
+              <button type="button" className="btn btn-small btn-ghost" disabled={locked} onClick={() => setDraft(null)}>
+                Отмена
+              </button>
+            </>
+          )}
         </div>
       </div>
       <div className="metrics-strip__actions">
-        <button type="button" className="btn" onClick={() => void plan()} disabled={locked}>
+        <button type="button" className="btn" onClick={rebuild} disabled={locked}>
           Пересчитать с нуля
         </button>
         <button
