@@ -24,6 +24,9 @@ services:
       OSRM_URL: http://osrm:5000
     volumes:
       - backend-cache:/cache
+      # Матрицы общественного транспорта от 2ГИС: считаются на хосте (backend/scripts/transit_matrix.py),
+      # в образ и в репозиторий не попадают, сервис только читает их при старте.
+      - ./data/transit:/app/data/transit:ro
     expose:
       - "8001"
     healthcheck:
