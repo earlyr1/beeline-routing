@@ -99,9 +99,10 @@ def dataset_status(dataset_id: str, deps: Deps) -> DatasetStatus:
 def build_plan(dataset_id: str, deps: Deps, body: PlanRequest | None = None) -> PlanningState:
     """План дня. С событиями на шкале, со сменой уровня нагрузки или обеда день пересчитывается с нуля.
 
-    Поле workload_level или lunch, которого нет в теле, остаётся значением сессии. Пересборка очищает таймлайн и
-    ставит текущее время на 00:00. Если событий на шкале нет и значения те же, возвращается предподсчитанный план без
-    изменений, текущее время остаётся прежним.
+    Поле workload_level или lunch, которого нет в теле, остаётся значением сессии. Пересборка очищает таймлайн,
+    заново ставит на него отмены дня и ставит текущее время на 00:00. Если шкала не менялась со сборки дня (на ней
+    только его отмены) и значения те же, возвращается предподсчитанный план без изменений, текущее время остаётся
+    прежним.
     """
     record = _record(deps, dataset_id)
     with record.timeline_lock:
@@ -111,7 +112,7 @@ def build_plan(dataset_id: str, deps: Deps, body: PlanRequest | None = None) -> 
                 session.workload_level if body is None or body.workload_level is None else body.workload_level
             )
             lunch = session.lunch_enabled if body is None or body.lunch is None else body.lunch
-            if not record.timeline.entries and (level, lunch) == (
+            if record.day_unchanged() and (level, lunch) == (
                 session.workload_level,
                 session.lunch_enabled,
             ):
@@ -130,16 +131,22 @@ def build_plan(dataset_id: str, deps: Deps, body: PlanRequest | None = None) -> 
             workload_level=level,
             lunch_enabled=lunch,
         )
-        record.start_day(replace(fresh, version=version))
-        return planning_state(record)
+        record.start_day(replace(fresh, version=version), day.cancellations)
+        state = planning_state(record)
+    # Планы после отмен дня считаются в фоне, как и после любого события на шкале.
+    ensure_precompute(record, deps.ingest.planning, deps.run_background)
+    return state
 
 
 @router.get("/datasets/{dataset_id}/state", response_model=PlanningState)
 def get_state(dataset_id: str, deps: Deps) -> PlanningState:
+    """Состояние на текущее время плана. Непосчитанные шаги шкалы (например, отмены дня) считаются в фоне."""
     record = _record(deps, dataset_id)
     with record.lock:
         _session(record)
-        return planning_state(record)
+        state = planning_state(record)
+    ensure_precompute(record, deps.ingest.planning, deps.run_background)
+    return state
 
 
 @router.post("/datasets/{dataset_id}/events", response_model=PlanningState)

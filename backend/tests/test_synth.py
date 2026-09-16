@@ -6,6 +6,13 @@ from app.domain.enums import EventType, Priority, Skill, Transport
 from app.domain.models import Metrics, Office, Plan, Route, Visit
 from app.ingest.beeline_csv import RawFile, RawRequestRow
 from app.ingest.geocode import GeoResult
+from app.synth.cancellations import (
+    CANCELLATION_EARLIEST,
+    CANCELLATION_MAX_AHEAD,
+    CANCELLATION_MIN_AHEAD,
+    build_cancellations,
+    cancellation_time,
+)
 from app.synth.config import ShiftTemplate, SynthConfig
 from app.synth.engineers import (
     assign_transports,
@@ -17,7 +24,13 @@ from app.synth.engineers import (
     largest_remainder,
 )
 from app.synth.events import build_demo_events
-from app.synth.requests import build_requests, check_alignment, synth_duration, synth_transport_required
+from app.synth.requests import (
+    build_requests,
+    check_alignment,
+    synth_duration,
+    synth_needs_equipment,
+    synth_transport_required,
+)
 
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "synth_config.yaml"
 
@@ -37,6 +50,7 @@ def row(
     crew="",
     status="",
     address="Город Москва, ул.Тестовая, д. 1",
+    connection="",
 ):
     return RawRequestRow(
         row_index=index,
@@ -49,6 +63,7 @@ def row(
         address=address,
         status_bk=status,
         crew=crew,
+        connection=connection,
     )
 
 
@@ -81,6 +96,35 @@ def test_transport_rules(cfg):
         == Transport.CAR
     )
     assert synth_transport_required(cfg, Skill.LOCAL, "Нет линка") is None
+
+
+def test_needs_equipment_by_hd_type_and_by_connection(cfg):
+    assert synth_needs_equipment(cfg, "Дозаказ оборудования", "")
+    assert synth_needs_equipment(cfg, "Заказ подключения/Дозаказ оборудования", "")
+    assert synth_needs_equipment(cfg, "Заявка на подключение", "")
+    assert synth_needs_equipment(cfg, "Роутер. Замена техническим специалистом", "")
+    assert synth_needs_equipment(cfg, "TVE/ENT. Замена приставки техником", "")
+    assert synth_needs_equipment(cfg, "ТВ. Замена приставки техником", "")
+    # Тип работ не из списка: оборудование нужно только при непустой колонке «Подключение».
+    assert not synth_needs_equipment(cfg, "Нет линка", "")
+    assert not synth_needs_equipment(cfg, "Низкая скорость", "")
+    assert synth_needs_equipment(cfg, "Нет линка", "FMC")
+    assert synth_needs_equipment(cfg, "Низкая скорость", "FTTB")
+
+
+def test_build_requests_marks_equipment_from_hd_type_and_connection(cfg):
+    synthetic = RawFile(
+        rows=[
+            row(0, "1"),
+            row(1, "2", type_hd="Роутер. Замена техническим специалистом"),
+            row(2, "3", connection="FMC"),
+        ],
+        office_address="x",
+        is_control=False,
+    )
+    requests = build_requests(cfg, synthetic, None, _fake_geo)
+    assert [r.needs_equipment for r in requests] == [False, True, True]
+    assert build_requests(cfg, synthetic, None, _fake_geo) == requests
 
 
 def test_largest_remainder_sums_to_total(cfg):
@@ -260,6 +304,53 @@ def test_demo_events_follow_the_optimized_plan(cfg):
     events = build_demo_events(cfg, "east", requests, control, synthetic, {"Бригада А": "E01"}, plan)
     assert events[0].request_id == "2"
     assert events[1].engineer_id == "E02"
+
+
+def test_cancellation_time_is_deterministic_and_lands_before_the_window(cfg):
+    first = cancellation_time(cfg, "74198", 840)
+    assert first == cancellation_time(cfg, "74198", 840)
+    assert 840 - CANCELLATION_MAX_AHEAD <= first <= 840 - CANCELLATION_MIN_AHEAD
+    # Время зависит от номера заявки: у разных заявок оно разное.
+    assert len({cancellation_time(cfg, str(number), 840) for number in range(20)}) > 1
+
+
+def test_cancellation_time_never_starts_before_nine(cfg):
+    # Окно аварии 0:01–23:59 и любое окно до 09:00: отмена приходит ровно в 09:00.
+    assert cancellation_time(cfg, "50104", 1) == CANCELLATION_EARLIEST
+    assert cancellation_time(cfg, "50104", CANCELLATION_EARLIEST) == CANCELLATION_EARLIEST
+    early = {cancellation_time(cfg, str(number), 600) for number in range(20)}
+    assert min(early) == CANCELLATION_EARLIEST and max(early) <= 600 - CANCELLATION_MIN_AHEAD
+
+
+def test_build_cancellations_lists_cancelled_requests_of_the_day_in_time_order(cfg):
+    synthetic = RawFile(
+        rows=[row(0, "1", ws=780, we=900), row(1, "2", ws=600, we=720), row(2, "3")],
+        office_address="x",
+        is_control=False,
+    )
+    control = RawFile(
+        rows=[
+            row(0, "305", status="Отменена", ws=780, we=900),
+            row(1, "306", status="Отменена", ws=600, we=720),
+            row(2, "307", status="Выполнена"),
+        ],
+        office_address=None,
+        is_control=True,
+    )
+    requests = build_requests(cfg, synthetic, control, _fake_geo)
+    by_id = {request.id: request for request in requests}
+
+    cancellations = build_cancellations(cfg, requests, control, synthetic)
+
+    assert {item.request_id for item in cancellations} == {"1", "2"}
+    assert [item.time for item in cancellations] == sorted(item.time for item in cancellations)
+    for item in cancellations:
+        window_start = by_id[item.request_id].window_start
+        latest = max(CANCELLATION_EARLIEST, window_start - CANCELLATION_MIN_AHEAD)
+        assert CANCELLATION_EARLIEST <= item.time <= latest
+    # Заявки, которой нет в дне, нет и среди отмен.
+    without_first = build_cancellations(cfg, [by_id["2"]], control, synthetic)
+    assert [item.request_id for item in without_first] == ["2"]
 
 
 def test_demo_cancel_prefers_window_starting_after_event_time(cfg):

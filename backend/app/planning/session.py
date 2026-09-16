@@ -39,6 +39,7 @@ EDITABLE_REQUEST_FIELDS = frozenset(
         "asap",
         "skill",
         "transport_required",
+        "needs_equipment",
     }
 )
 _NOT_FOUND = GeoResult(None, None, "none", None)

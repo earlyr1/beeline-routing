@@ -30,6 +30,9 @@ class Request(BaseModel):
     status: RequestStatus = RequestStatus.ACTIVE
     source_type_bk: str = ""
     source_type_hd: str = ""
+    # Нужно привезти единицу оборудования: роутер, приставку или колонку. Подсказка инженеру, что взять с собой
+    # утром; на план она не влияет. В старых бандлах поля нет — тогда оборудование не нужно.
+    needs_equipment: bool = False
 
     @model_validator(mode="after")
     def _window_order(self) -> Request:
@@ -169,6 +172,16 @@ class Plan(BaseModel):
     violations: list[str] = Field(default_factory=list)
 
 
+class Cancellation(BaseModel):
+    """Отмена заявки клиентом в течение дня: факт дня со своим временем на шкале.
+
+    Утренний план заявку содержит: отмена приходит позже, когда часы дня доходят до её времени.
+    """
+
+    request_id: str
+    time: HHMM
+
+
 class Bundle(BaseModel):
     region: str
     office: Office
@@ -176,6 +189,8 @@ class Bundle(BaseModel):
     engineers: list[Engineer]
     events: list[Event] = Field(default_factory=list)
     control_plan: Plan | None = None
+    # Отмены дня: в старых бандлах поля нет — тогда день собирается без них.
+    cancellations: list[Cancellation] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Bundle:

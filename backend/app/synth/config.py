@@ -50,6 +50,7 @@ class SynthConfig(BaseModel):
     urgent_bk_types: list[str]
     urgent_control_statuses: list[str]
     cancelled_control_statuses: list[str]
+    equipment_hd_types: list[str]
     transport_required_rules: list[TransportRule]
     transport_mix: dict[Transport, float]
     force_car_for_skills: list[Skill]

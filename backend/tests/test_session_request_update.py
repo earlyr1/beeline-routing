@@ -106,6 +106,18 @@ def test_non_editable_fields_come_from_the_stored_request():
     assert updated.events[0].event.previous_request == session.request("R2")
 
 
+def test_equipment_flag_is_editable():
+    """«Нужно оборудование» в диалоге изменения заявки: флаг информационный, но он меняется и сохраняется."""
+    ctx = context()
+    session = new_session(ctx=ctx)
+    assert session.request("R2").needs_equipment is False
+
+    updated = apply_event(session, update(edited(session, "R2", needs_equipment=True)), ctx)
+
+    assert updated.request("R2").needs_equipment is True
+    assert updated.events[0].event.previous_request.needs_equipment is False
+
+
 def street_level_session(ctx):
     requests = day_requests()
     requests[1] = requests[1].model_copy(update={"district": "Таганский", "geocode_precision": "street"})

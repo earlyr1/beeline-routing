@@ -24,6 +24,8 @@ class RawRequestRow:
     address: str
     status_bk: str = ""
     crew: str = ""
+    # Колонка «Подключение»: FMC, FTTB или пусто. Непустое значение — у клиента настраивают подключение.
+    connection: str = ""
     line_no: int = 0  # номер строки в файле, для отчёта о пропущенных строках
 
 
@@ -87,6 +89,7 @@ def parse_beeline_csv(data: bytes) -> RawFile:
                 address=_cell(record, "Адрес"),
                 status_bk=_cell(record, "Статус BK"),
                 crew=_cell(record, "Бригада"),
+                connection=_cell(record, "Подключение"),
                 line_no=line_no,
             )
         )
