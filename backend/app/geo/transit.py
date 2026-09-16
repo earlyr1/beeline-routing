@@ -19,6 +19,7 @@ import math
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
@@ -49,8 +50,7 @@ TRANSIT_REQUEST = {
     "targets": "targets",  # тело запроса: индексы точек-назначений в points
     "mode": "type",  # тело запроса: режим расчёта
     "public_transport": "public_transport",  # значение режима: общественный транспорт
-    "departure": "start_time",  # тело запроса: время выезда
-    "departure_date": "2026-08-17",  # дата к времени выезда: данные сервиса за один день
+    "departure": "start_time",  # тело запроса: время выезда, RFC 3339 со смещением часового пояса
     "routes": "routes",  # ответ: список элементов матрицы
     "source_id": "source_id",  # элемент ответа: индекс точки-источника в points
     "target_id": "target_id",  # элемент ответа: индекс точки-назначения в points
@@ -85,8 +85,25 @@ def request_body(
         TRANSIT_REQUEST["sources"]: list(sources),
         TRANSIT_REQUEST["targets"]: list(targets),
         TRANSIT_REQUEST["mode"]: TRANSIT_REQUEST["public_transport"],
-        TRANSIT_REQUEST["departure"]: f"{TRANSIT_REQUEST['departure_date']}T{departure}:00",
+        TRANSIT_REQUEST["departure"]: departure_timestamp(departure),
     }
+
+
+# Часовой пояс Москвы: 2ГИС требует время выезда в RFC 3339 со смещением, иначе отвечает 400.
+MOSCOW_OFFSET = "+03:00"
+# День недели выгрузки: 17.08.2026 — понедельник. Прошлую дату брать нельзя, у расписаний её нет.
+DEPARTURE_WEEKDAY = 0
+
+
+def departure_timestamp(departure: str, today: date | None = None) -> str:
+    """Время выезда «HH:MM» в RFC 3339 на ближайший будущий понедельник: «2026-09-21T13:00:00+03:00».
+
+    Данные сервиса — будний понедельник, а 2ГИС считает по расписаниям, которых на прошедшие даты нет. Сегодняшний
+    понедельник не берётся: расписание на уже идущий день может быть неполным.
+    """
+    today = today or date.today()
+    ahead = (DEPARTURE_WEEKDAY - today.weekday()) % 7 or 7
+    return f"{today + timedelta(days=ahead):%Y-%m-%d}T{departure}:00{MOSCOW_OFFSET}"
 
 
 def _failure(response: httpx.Response) -> str:

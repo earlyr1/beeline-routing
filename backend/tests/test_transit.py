@@ -1,6 +1,7 @@
 """Время на общественном транспорте от 2ГИС: клиент, файл матрицы и подстановка в планировщик. Всё без сети."""
 
 import json
+from datetime import date, datetime, timedelta
 
 import httpx
 import pytest
@@ -16,6 +17,7 @@ from app.geo.transit import (
     TransitClient,
     TransitError,
     build_transit_matrix,
+    departure_timestamp,
     load_transit_matrices,
     load_transit_matrix,
     save_transit_matrix,
@@ -78,8 +80,19 @@ def test_request_body_and_url_follow_the_documented_shape():
     assert body[TRANSIT_REQUEST["sources"]] == [0, 1, 2]
     assert body[TRANSIT_REQUEST["targets"]] == [0, 1, 2]
     assert body[TRANSIT_REQUEST["mode"]] == TRANSIT_REQUEST["public_transport"]
-    assert body[TRANSIT_REQUEST["departure"]].endswith("T13:00:00")
+    # RFC 3339 со смещением Москвы: без смещения 2ГИС отвечает 400 «'start_time' has non-RFC3339 form».
+    stamp = datetime.fromisoformat(body[TRANSIT_REQUEST["departure"]])
+    assert body[TRANSIT_REQUEST["departure"]].endswith("T13:00:00+03:00")
+    assert stamp.utcoffset() == timedelta(hours=3)
     assert minutes[0][1] == 10 and minutes[0][0] == 0
+
+
+def test_departure_is_the_next_monday_in_the_future_with_the_moscow_offset():
+    # 16.09.2026 — среда: ближайший понедельник 21.09, день выгрузки 17.08.2026 тоже понедельник.
+    assert departure_timestamp("13:00", today=date(2026, 9, 16)) == "2026-09-21T13:00:00+03:00"
+    # В сам понедельник берётся следующий: расписание на уже идущий день может быть неполным.
+    assert departure_timestamp("09:30", today=date(2026, 9, 21)) == "2026-09-28T09:30:00+03:00"
+    assert datetime.fromisoformat(departure_timestamp("13:00")).date() > date.today()
 
 
 def test_points_are_split_into_blocks_of_25_with_a_call_per_block_pair():
