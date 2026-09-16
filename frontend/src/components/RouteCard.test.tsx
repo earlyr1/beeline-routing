@@ -27,7 +27,9 @@ describe('RouteCard', () => {
       within(card()).getByText('Локальные работы, Работы на подключение и дозаказы · Автомобиль · смена 10:00–22:00'),
     ).toBeInTheDocument();
     expect(
-      within(card()).getByText('Визитов: 4 · пробег 23,7 км · в пути 2 ч 15 мин · окончание работ 15:55, конец смены 22:00'),
+      within(card()).getByText(
+        'Визитов: 4 · оборудование 2 единицы · пробег 23,7 км · в пути 2 ч 15 мин · окончание работ 15:55, конец смены 22:00',
+      ),
     ).toBeInTheDocument();
 
     const rows = bodyRows();
@@ -59,6 +61,27 @@ describe('RouteCard', () => {
     expect(bodyRows()).toHaveLength(4);
     expect(within(card()).queryByText('Обед')).not.toBeInTheDocument();
     expect(timeline().querySelector('.timeline__lunch')).toBeNull();
+  });
+
+  it('считает оборудование по визитам показанного плана и молчит, когда его везти не надо', () => {
+    useAppStore.setState({ selectedEngineerId: 'E02' });
+    const view = render(<RouteCard />);
+    expect(within(card()).getByText(/^Визитов: 2 · пробег/)).toBeInTheDocument();
+    expect(within(card()).queryByText(/оборудование/)).not.toBeInTheDocument();
+    view.unmount();
+
+    // Одна заявка с оборудованием у Белузина: единица в единственном числе.
+    const state = makePlanningState();
+    const requests = state.requests.map((request) => (request.id === '84627' ? { ...request, needs_equipment: true } : request));
+    resetStore({ datasetId: 'd_test', state: { ...state, requests }, selectedEngineerId: 'E02' });
+    const single = render(<RouteCard />);
+    expect(within(card()).getByText(/^Визитов: 2 · оборудование 1 единица · пробег/)).toBeInTheDocument();
+    single.unmount();
+
+    // В плане до события у Арташкина нет визита 50104, но обе заявки с оборудованием остаются.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', showPrevious: true });
+    render(<RouteCard />);
+    expect(within(card()).getByText(/^Визитов: 3 · оборудование 2 единицы · пробег/)).toBeInTheDocument();
   });
 
   it('explains the route in dispatcher language', () => {

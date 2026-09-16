@@ -1,6 +1,15 @@
 import { engineerColor } from '../lib/colors';
 import { describeEvent } from '../lib/events';
-import { formatDuration, formatKm, formatWindow, requestWindowText, SKILL_LABELS, toMinutes, TRANSPORT_LABELS } from '../lib/format';
+import {
+  formatDuration,
+  formatKm,
+  formatWindow,
+  plural,
+  requestWindowText,
+  SKILL_LABELS,
+  toMinutes,
+  TRANSPORT_LABELS,
+} from '../lib/format';
 import { byId, displayedPlan, engineerIdsOf, routeRows, routeSummary, type RouteStop } from '../lib/planView';
 import { timelineStatusText } from '../lib/timeBar';
 import { dayScale, percent, timelineRow } from '../lib/timeline';
@@ -10,6 +19,11 @@ import { TimelineTicks, TimelineTrack } from './panel/TimelineTrack';
 function slackText(stop: RouteStop): string {
   if (stop.slackMin === null) return '—';
   return stop.slackMin < 0 ? `опоздание ${-stop.slackMin} мин` : `${stop.slackMin} мин`;
+}
+
+/** Сколько единиц оборудования брать с собой; без оборудования в итогах об этом ничего нет. */
+function equipmentText(count: number): string {
+  return count === 0 ? '' : ` · оборудование ${count} ${plural(count, 'единица', 'единицы', 'единиц')}`;
 }
 
 /**
@@ -33,6 +47,7 @@ export function RouteCard() {
   if (!summary) return null;
 
   const { engineer, stops } = summary;
+  const equipment = equipmentText(summary.equipmentCount);
   const availability = engineer.available ? null : engineer.unavailable_from ? `недоступен с ${engineer.unavailable_from}` : 'недоступен';
   const profile = [
     engineer.skills.map((skill) => SKILL_LABELS[skill]).join(', '),
@@ -112,7 +127,7 @@ export function RouteCard() {
       </div>
       {stops.length > 0 && (
         <p className="muted">
-          {`Визитов: ${stops.length} · пробег ${formatKm(summary.totalKm)} · в пути ${formatDuration(summary.travelMin)} · окончание работ ${summary.endOfWork}, конец смены ${engineer.shift_end}`}
+          {`Визитов: ${stops.length}${equipment} · пробег ${formatKm(summary.totalKm)} · в пути ${formatDuration(summary.travelMin)} · окончание работ ${summary.endOfWork}, конец смены ${engineer.shift_end}`}
         </p>
       )}
       <h4>Почему такой маршрут</h4>

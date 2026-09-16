@@ -12,6 +12,7 @@ import {
 import { isValidTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { AsapToggle } from './AsapToggle';
+import { EquipmentToggle } from './EquipmentToggle';
 
 const SKILLS: Skill[] = ['emergency', 'connection', 'local'];
 const TRANSPORTS: Transport[] = ['car', 'foot', 'bike', 'public'];
@@ -42,6 +43,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
       transport: 'car',
       time,
       asap: false,
+      needsEquipment: false,
     };
   });
   // Пока диспетчер не правил окно руками, окно следует за временем события.
@@ -175,6 +177,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
             </select>
           </label>
         </div>
+        <EquipmentToggle checked={form.needsEquipment} onChange={(checked) => update('needsEquipment', checked)} />
         <label className="field">
           <span>Время события</span>
           <input type="time" value={form.time} onChange={(event) => updateTime(event.target.value)} />

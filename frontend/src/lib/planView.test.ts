@@ -70,7 +70,9 @@ describe('planView', () => {
 
   it('summarises a route for the dispatcher', () => {
     const summary = routeSummary(state, state.plan, 'E02');
-    expect(summary).toMatchObject({ totalKm: 11.2, travelMin: 50, endOfWork: '14:05' });
+    expect(summary).toMatchObject({ totalKm: 11.2, travelMin: 50, endOfWork: '14:05', equipmentCount: 0 });
+    // Оборудование считаем по визитам маршрута: у Арташкина это 74198 и 86160.
+    expect(routeSummary(state, state.plan, 'E01')?.equipmentCount).toBe(2);
     expect(summary?.stops.map((stop) => [stop.visit.request_id, stop.slackMin])).toEqual([
       ['84627', 120],
       ['URG-001', 115],

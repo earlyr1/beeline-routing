@@ -31,6 +31,8 @@ export interface UrgentForm {
   time: HHMM;
   /** Как можно скорее: окно задаёт сервер, от времени события до конца смен; поля окна скрыты. */
   asap: boolean;
+  /** Инженер везёт с собой единицу оборудования: роутер, приставку или колонку. */
+  needsEquipment: boolean;
 }
 
 /** Форма изменения заявки. Время события хранится отдельно: оно не часть заявки. */
@@ -46,6 +48,8 @@ export interface RequestEditForm {
   transport: Transport | '';
   /** Как можно скорее: поля окна скрыты, окно задаёт сервер. */
   asap: boolean;
+  /** Инженер везёт с собой единицу оборудования: роутер, приставку или колонку. */
+  needsEquipment: boolean;
 }
 
 type VisitFields = Pick<UrgentForm, 'address' | 'point' | 'windowStart' | 'windowEnd' | 'durationMin' | 'asap'>;
@@ -229,6 +233,7 @@ export function buildUrgentEvent(form: UrgentForm, requestId: string, engineers:
     status: 'active',
     source_type_bk: 'Срочная заявка диспетчера',
     source_type_hd: '',
+    needs_equipment: form.needsEquipment,
   };
   return { type: 'urgent', time: form.time, request, request_id: null, engineer_id: null };
 }
@@ -245,6 +250,7 @@ export function requestEditForm(request: ServiceRequest): RequestEditForm {
     priority: request.priority,
     transport: request.transport_required ?? '',
     asap: request.asap,
+    needsEquipment: request.needs_equipment,
   };
 }
 
@@ -275,6 +281,7 @@ export function updatedRequest(original: ServiceRequest, form: RequestEditForm):
     priority: form.priority,
     skill: form.skill,
     transport_required: form.transport === '' ? null : form.transport,
+    needs_equipment: form.needsEquipment,
   };
 }
 
@@ -312,6 +319,7 @@ export function requestChanges(prev: ServiceRequest, next: ServiceRequest): stri
   if (next.transport_required !== prev.transport_required) {
     changes.push(`транспорт ${transportRequirement(prev.transport_required)} → ${transportRequirement(next.transport_required)}`);
   }
+  if (next.needs_equipment !== prev.needs_equipment) changes.push(next.needs_equipment ? 'оборудование нужно' : 'оборудование не нужно');
   return changes;
 }
 

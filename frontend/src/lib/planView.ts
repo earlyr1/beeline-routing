@@ -113,6 +113,8 @@ export interface RouteSummary {
   totalKm: number;
   travelMin: number;
   endOfWork: HHMM | null;
+  /** Сколько единиц оборудования бригада берёт с собой: по единице на визит, которому оно нужно. */
+  equipmentCount: number;
   sentences: string[];
   /** Обед по плану; null, если обеда в маршруте нет. */
   lunch: RouteLunch | null;
@@ -207,7 +209,8 @@ export function routeSummary(state: PlanningState, plan: Plan, engineerId: strin
     const pinned = pinnedSentence(stops);
     if (pinned) sentences.push(pinned);
   }
-  return { engineer, stops, totalKm, travelMin, endOfWork, sentences, lunch: route?.lunch ?? null };
+  const equipmentCount = stops.filter((stop) => stop.request?.needs_equipment).length;
+  return { engineer, stops, totalKm, travelMin, endOfWork, equipmentCount, sentences, lunch: route?.lunch ?? null };
 }
 
 /** Прямые отрезки от старта инженера через заявки: запасной вариант, пока нет геометрии OSRM. */

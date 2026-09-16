@@ -46,6 +46,7 @@ const form: UrgentForm = {
   transport: 'car',
   time: '13:00',
   asap: false,
+  needsEquipment: false,
 };
 
 describe('events', () => {
@@ -89,8 +90,14 @@ describe('events', () => {
       window_start: '13:00',
       window_end: '15:00',
       asap: false,
+      needs_equipment: false,
     });
     expect(event.request?.address).toBe('Точка на карте 55.71000, 37.80000');
+  });
+
+  it('несёт в срочной заявке отметку об оборудовании', () => {
+    const { engineers } = makePlanningState();
+    expect(buildUrgentEvent({ ...form, needsEquipment: true }, 'URG-EQ', engineers).request).toMatchObject({ needs_equipment: true });
   });
 
   it('sends an urgent request as soon as possible from the event time to the latest shift end', () => {
@@ -220,7 +227,9 @@ describe('request update', () => {
       priority: 'normal',
       transport: 'car',
       asap: false,
+      needsEquipment: false,
     });
+    expect(requestEditForm(requestOf('74198')).needsEquipment).toBe(true);
     expect(requestEditForm(requestOf('50104')).transport).toBe('');
     expect(requestEditForm(makeAsapRequest()).asap).toBe(true);
   });
@@ -306,6 +315,16 @@ describe('request update', () => {
     expect(requestChanges(original, original)).toEqual([]);
     expect(requestChanges(original, { ...original, window_end: '18:00' })).toEqual(['окно 15:00–17:00 → 15:00–18:00']);
     expect(requestChanges({ ...original, transport_required: null }, original)).toEqual(['транспорт не требуется → Автомобиль']);
+  });
+
+  it('называет отметку об оборудовании после остальных изменений', () => {
+    expect(requestChanges(original, { ...original, needs_equipment: true })).toEqual(['оборудование нужно']);
+    const carried = { ...original, needs_equipment: true };
+    expect(requestChanges(carried, { ...carried, needs_equipment: false, duration_min: 60 })).toEqual([
+      'длительность 45 → 60 мин',
+      'оборудование не нужно',
+    ]);
+    expect(updatedRequest(original, { ...form, needsEquipment: true })).toMatchObject({ needs_equipment: true });
   });
 
   it('names a new map point when only the coordinates changed', () => {
