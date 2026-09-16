@@ -74,7 +74,7 @@ def test_transport_change_by_surname_becomes_pending_draft():
             ),
             ToolCall(
                 "propose_engineer_transport_change",
-                {"engineer_id": "белузин", "transport": "foot", "rationale": "Дальше пешком"},
+                {"engineer_id": "белузин", "transport": "public", "rationale": "Дальше пешком"},
             ),
         ]
     )
@@ -91,7 +91,7 @@ def test_transport_change_by_surname_becomes_pending_draft():
         for d in out.drafts
     ] == [
         (EventType.ENGINEER_TRANSPORT_CHANGED, "E1", Transport.CAR, Transport.BIKE, 780, None),
-        (EventType.ENGINEER_TRANSPORT_CHANGED, "E2", Transport.CAR, Transport.FOOT, 0, None),
+        (EventType.ENGINEER_TRANSPORT_CHANGED, "E2", Transport.CAR, Transport.PUBLIC, 0, None),
     ]
     assert out.drafts[0].rationale == "Сломалась машина, пересел на велосипед"
 
@@ -101,11 +101,33 @@ def test_transport_change_for_same_engineer_and_time_keeps_different_transports(
     out = run(
         [
             ToolCall("propose_engineer_transport_change", {**arguments, "transport": "bike"}),
-            ToolCall("propose_engineer_transport_change", {**arguments, "transport": "foot"}),
+            ToolCall("propose_engineer_transport_change", {**arguments, "transport": "public"}),
             ToolCall("propose_engineer_transport_change", {**arguments, "transport": "bike"}),
         ]
     )
-    assert [d.event.transport for d in out.drafts] == [Transport.BIKE, Transport.FOOT]
+    assert [d.event.transport for d in out.drafts] == [Transport.BIKE, Transport.PUBLIC]
+
+
+def test_old_foot_and_old_names_from_the_model_mean_public_transport():
+    arguments = {"time": "13:00", "rationale": "Дальше пешком"}
+    names = [
+        "foot",
+        "Пешеход",
+        "пешком",
+        "Общественный транспорт",
+        "общественный транспорт и пешком",
+        "public",
+    ]
+    for name in names:
+        out = run(
+            [
+                ToolCall(
+                    "propose_engineer_transport_change", {**arguments, "engineer_id": "E1", "transport": name}
+                )
+            ]
+        )
+        assert out.clarifications == [], name
+        assert [d.event.transport for d in out.drafts] == [Transport.PUBLIC], name
 
 
 def test_transport_change_with_unknown_transport_or_same_transport():
@@ -127,7 +149,7 @@ def test_transport_change_with_unknown_transport_or_same_transport():
     )
     assert out.clarifications == [
         "Не удалось разобрать предложение «propose_engineer_transport_change»: transport: неизвестный тип "
-        "транспорта «plane», допустимы car, foot, bike, public.",
+        "транспорта «plane», допустимы car, bike, public.",
         "Инженер «Кузнецов» не найден.",
     ]
     [draft] = out.drafts
@@ -162,6 +184,9 @@ def test_urgent_request_is_geocoded_and_gets_generated_id():
         [ToolCall("propose_urgent_request", {**arguments, "transport_required": "none"})], ctx=ctx
     )
     assert no_transport.drafts[0].event.request.transport_required is None
+    # Прежний «foot» из ответа модели — общественный транспорт и пешком.
+    foot = run([ToolCall("propose_urgent_request", {**arguments, "transport_required": "foot"})], ctx=ctx)
+    assert foot.drafts[0].event.request.transport_required == Transport.PUBLIC
 
 
 def test_urgent_request_with_unknown_address_is_failed():

@@ -16,18 +16,23 @@ from app.domain.enums import Transport
 from app.geo.haversine import haversine_km
 from app.geo.kvcache import KVCache
 from app.geo.osrm import LatLon, OsrmClient, OsrmError
-from app.geo.transit import TransitMatrix
+from app.geo.transit import TransitLookup
 
 
 @dataclass(frozen=True)
 class TravelModel:
     detour_factor: float = 1.3  # гаверсинус -> дорожное расстояние, если нет OSRM
     car_fallback_speed_kmh: float = 25.0
-    foot_speed_kmh: float = 5.0
-    foot_km_factor: float = 1.2  # пешеходный путь по автомобильному графу
     bike_speed_kmh: float = 20.0  # велосипед: маршрут как у авто, без пробок
-    public_speed_kmh: float = 15.0
-    public_wait_min: float = 10.0
+    # Общественный транспорт и пешком там, где нет минут 2ГИС: быстрее из двух, пешком или поездкой, по расстоянию
+    # d по прямой. Пешком d ×detour_factor при 5 км/ч, то есть 15.6·d минут; поездка 22.5 + 2.8·d минут, в них
+    # дойти до остановки, подождать и пересесть. Пешком быстрее до 1.76 км. Формула подобрана по ~23 тыс. пар
+    # настоящих матриц 2ГИС (scripts/transit_error.py): средняя ошибка 19% против 28% у прежней «×1.3 при 15 км/ч
+    # плюс 10 минут ожидания», в пределах ±25% 73% пар против 62%. Северо-запад медленнее формулы примерно на
+    # 10 минут (реки и железные дороги).
+    walk_speed_kmh: float = 5.0
+    public_ride_base_min: float = 22.5
+    public_ride_min_per_km: float = 2.8
 
 
 @dataclass(frozen=True)
@@ -100,12 +105,13 @@ class TravelTimes:
         base: BaseMatrix,
         model: TravelModel,
         traffic: TrafficProfile,
-        transit: TransitMatrix | None = None,
+        transit: TransitLookup | None = None,
     ) -> None:
         self.base = base
         self.model = model
         self.traffic = traffic
-        # Матрица 2ГИС для общественного транспорта, если диспетчер её посчитал. Километры от неё не зависят.
+        # Минуты 2ГИС по парам узлов для общественного транспорта, если диспетчер посчитал матрицы.
+        # Километры от них не зависят.
         self.transit = transit
 
     def km(self, i: int, j: int, transport: Transport) -> float:
@@ -113,8 +119,6 @@ class TravelTimes:
             return 0.0
         if transport in (Transport.CAR, Transport.BIKE):
             return self.base.road_km[i][j]
-        if transport == Transport.FOOT:
-            return self.base.road_km[i][j] * self.model.foot_km_factor
         return self.base.straight_km[i][j] * self.model.detour_factor
 
     def minutes(self, i: int, j: int, transport: Transport, slot_min: int) -> int:
@@ -125,17 +129,17 @@ class TravelTimes:
             raw = self.base.car_min[i][j] * self.traffic.factor_at(slot_min)
         elif transport == Transport.BIKE:
             raw = self.km(i, j, transport) / self.model.bike_speed_kmh * 60.0
-        elif transport == Transport.FOOT:
-            raw = self.km(i, j, transport) / self.model.foot_speed_kmh * 60.0
         else:
             raw = self._public_minutes(i, j)
         return math.ceil(raw - 1e-9)
 
     def _public_minutes(self, i: int, j: int) -> float:
-        """Минуты 2ГИС, если матрица есть и в ячейке число; иначе наша оценка: по прямой ×1.3 и ожидание."""
-        from_2gis = self.transit.minutes_at(i, j) if self.transit is not None else None
+        """Минуты 2ГИС, если обе точки пары в одной матрице и в ячейке число; иначе быстрее из «пешком» и поездки."""
+        from_2gis = self.transit.minutes(i, j) if self.transit is not None else None
         if from_2gis is not None:
             return from_2gis
-        return (
-            self.km(i, j, Transport.PUBLIC) / self.model.public_speed_kmh * 60.0 + self.model.public_wait_min
+        walk = self.km(i, j, Transport.PUBLIC) / self.model.walk_speed_kmh * 60.0
+        ride = (
+            self.model.public_ride_base_min + self.model.public_ride_min_per_km * self.base.straight_km[i][j]
         )
+        return min(walk, ride)

@@ -32,7 +32,7 @@ describe('proposals view helpers', () => {
     const upgrade = makeProposal({
       event: makeTransportChangeEvent({ engineer_id: 'E03', transport: 'car', previous_transport: null }),
     });
-    expect(proposalDetails(upgrade, state)).toEqual(['Бригада Комарь: Пешеход → Автомобиль с 13:30']);
+    expect(proposalDetails(upgrade, state)).toEqual(['Бригада Комарь: Общественный транспорт и пешком → Автомобиль с 13:30']);
   });
 
   it('keeps the old transport of an applied transport change after the engineer switched', () => {

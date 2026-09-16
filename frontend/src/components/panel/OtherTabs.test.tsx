@@ -35,7 +35,7 @@ describe('panel tabs', () => {
     expect(within(brigadeRow('Бригада Белузин')).getByText('Автомобиль · смена 10:00–22:00 · визитов: 2 · 11,2 км')).toBeInTheDocument();
 
     const komar = brigadeRow('Бригада Комарь');
-    expect(within(komar).getByText('Пешеход · смена 10:00–22:00 · визитов: 0 · 0,0 км')).toBeInTheDocument();
+    expect(within(komar).getByText('Общественный транспорт и пешком · смена 10:00–22:00 · визитов: 0 · 0,0 км')).toBeInTheDocument();
     expect(within(komar).getByText('Недоступен')).toHaveAttribute('title', 'Недоступен с 13:00');
 
     act(() => useAppStore.setState({ showPrevious: true }));

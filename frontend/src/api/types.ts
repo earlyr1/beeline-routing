@@ -3,7 +3,7 @@
 // чтобы не затенять глобальные DOM-типы Request и Event.
 
 export type Skill = 'local' | 'connection' | 'emergency';
-export type Transport = 'car' | 'foot' | 'bike' | 'public';
+export type Transport = 'car' | 'bike' | 'public';
 export type Priority = 'normal' | 'urgent';
 export type RequestStatus = 'active' | 'cancelled';
 export type EventType =

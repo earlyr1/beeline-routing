@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.domain.enums import Transport
+from app.domain.enums import TRANSPORT_RU, Transport
 from app.geo.haversine import haversine_km
 from app.geo.kvcache import KVCache
 from app.geo.matrix import BaseMatrix, TrafficProfile, TravelModel, TravelTimes, build_base_matrix
@@ -79,11 +79,44 @@ def test_travel_times_rules_per_transport():
     assert travel.minutes(0, 1, Transport.CAR, slot_min=17 * 60 + 30) == 36
     assert travel.km(0, 1, Transport.BIKE) == 10.0
     assert travel.minutes(0, 1, Transport.BIKE, slot_min=17 * 60) == 30
-    assert travel.km(0, 1, Transport.FOOT) == pytest.approx(12.0)
-    assert travel.minutes(0, 1, Transport.FOOT, slot_min=0) == 144
     assert travel.km(0, 1, Transport.PUBLIC) == pytest.approx(10.4)
-    assert travel.minutes(0, 1, Transport.PUBLIC, slot_min=0) == 52
+    # 8 км по прямой: пешком 124.8 минуты, поездка 22.5 + 2.8·8 = 44.9, берётся поездка.
+    assert travel.minutes(0, 1, Transport.PUBLIC, slot_min=0) == 45
+    assert travel.minutes(0, 1, Transport.PUBLIC, slot_min=17 * 60) == 45
     assert travel.minutes(1, 1, Transport.PUBLIC, slot_min=0) == 0
+
+
+def _public_minutes(straight_km: float) -> int:
+    base = BaseMatrix(
+        road_km=[[0, straight_km * 2], [straight_km * 2, 0]],
+        car_min=[[0, 1.0], [1.0, 0]],
+        straight_km=[[0, straight_km], [straight_km, 0]],
+        source="osrm",
+    )
+    return TravelTimes(base, TravelModel(), TrafficProfile({})).minutes(0, 1, Transport.PUBLIC, slot_min=0)
+
+
+@pytest.mark.parametrize(
+    ("straight_km", "minutes"),
+    [
+        (0.5, 8),  # пешком 0.5 ×1.3 при 5 км/ч = 7.8 минуты, поездка 23.9
+        (1.0, 16),  # пешком 15.6, поездка 25.3
+        (2.0, 29),  # пешком 31.2, поездка 28.1
+        (5.0, 37),  # пешком 78, поездка 22.5 + 14 = 36.5
+        (20.0, 79),  # поездка 22.5 + 56 = 78.5
+        (0.0, 0),  # разные узлы в одной точке
+    ],
+)
+def test_public_transport_without_2gis_is_the_faster_of_walking_and_riding(straight_km, minutes):
+    assert _public_minutes(straight_km) == minutes
+
+
+def test_foot_is_public_transport():
+    assert Transport("foot") is Transport.PUBLIC
+    assert [transport.value for transport in Transport] == ["car", "bike", "public"]
+    assert TRANSPORT_RU[Transport.PUBLIC] == "Общественный транспорт и пешком"
+    with pytest.raises(ValueError):
+        Transport("plane")
 
 
 def test_traffic_profile_loads_yaml(tmp_path):

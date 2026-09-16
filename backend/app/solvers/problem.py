@@ -20,7 +20,7 @@ from app.domain.models import (
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_matrix
 from app.geo.osrm import OsrmClient
-from app.geo.transit import TransitMatrix
+from app.geo.transit import TransitLookup, TransitMatrix
 
 
 @dataclass(frozen=True)
@@ -152,7 +152,8 @@ def make_problem(
 
     buffer — запас на дорогу по нагрузке дня. Базовая матрица от него не зависит: OSRM берётся из кэша.
     lunch — обед по плану в этот день.
-    transit — матрицы 2ГИС по регионам, посчитанные диспетчером заранее: дню достаётся первая подходящая.
+    transit — матрицы 2ГИС по регионам, посчитанные диспетчером заранее: минуты общественного транспорта берутся
+    из них по парам точек (TransitLookup), остальные пары считает встроенная модель.
     """
     located = [r for r in requests if r.lat is not None and r.lon is not None]
     unplannable = [
@@ -165,11 +166,15 @@ def make_problem(
         if (r.lat is None or r.lon is None) and r.status == RequestStatus.ACTIVE
     ]
     points = [(e.start_lat, e.start_lon) for e in engineers] + [(r.lat, r.lon) for r in located]
-    # Матрица 2ГИС подходит задаче, только если её точки те же и в том же порядке: так файл региона находит свой
-    # день. Не подошла ни одна — день считается без них, встроенной моделью, и это не ошибка.
-    matched = next((matrix for matrix in transit if matrix.matches(points)), None)
+    # Минуты 2ГИС берутся по парам: точка узнаётся по координатам, и пара из одной матрицы идёт из 2ГИС, даже если
+    # в дне появилась срочная заявка или сменился адрес. Пары с новой точкой, как и день, которого нет ни в одной
+    # матрице, считает встроенная модель, и это не ошибка.
+    lookup = TransitLookup(points, transit) if transit else None
     travel = TravelTimes(
-        build_base_matrix(points, model, osrm=osrm, cache=cache), model, traffic, transit=matched
+        build_base_matrix(points, model, osrm=osrm, cache=cache),
+        model,
+        traffic,
+        transit=lookup if lookup is not None and lookup.covered else None,
     )
     states = [initial_state(engineer, k) for k, engineer in enumerate(engineers)]
     open_ids = [r.id for r in located if r.status == RequestStatus.ACTIVE]

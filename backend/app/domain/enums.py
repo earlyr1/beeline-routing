@@ -9,11 +9,20 @@ class Skill(StrEnum):
     EMERGENCY = "emergency"
 
 
+# Прежнее значение типа «Пешеход». С 16.09.2026 пешком и на общественном транспорте — один тип PUBLIC, а «foot»
+# ещё встречается в старых бандлах, CSV и ответах модели: такое значение читается как общественный транспорт.
+LEGACY_FOOT = "foot"
+
+
 class Transport(StrEnum):
     CAR = "car"
-    FOOT = "foot"
     BIKE = "bike"
-    PUBLIC = "public"
+    PUBLIC = "public"  # общественный транспорт и пешком
+
+    @classmethod
+    def _missing_(cls, value: object) -> Transport | None:
+        """Transport("foot") и pydantic-поля с «foot» дают PUBLIC. Наружу «foot» сервис не отдаёт."""
+        return cls.PUBLIC if value == LEGACY_FOOT else None
 
 
 class Priority(StrEnum):
@@ -51,8 +60,7 @@ SKILL_RU = {
 }
 TRANSPORT_RU = {
     Transport.CAR: "Автомобиль",
-    Transport.FOOT: "Пешеход",
     Transport.BIKE: "Велосипед",
-    Transport.PUBLIC: "Общественный транспорт",
+    Transport.PUBLIC: "Общественный транспорт и пешком",
 }
 PRIORITY_RU = {Priority.NORMAL: "Обычная", Priority.URGENT: "Срочная"}

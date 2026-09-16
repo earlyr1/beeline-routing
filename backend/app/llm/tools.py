@@ -35,7 +35,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "skill": {"type": "string", "enum": ["local", "connection", "emergency"]},
                 "transport_required": {
                     "type": "string",
-                    "enum": ["car", "foot", "bike", "public", "none"],
+                    "enum": ["car", "bike", "public", "none"],
                     "description": "none, если требований к транспорту нет",
                 },
                 "time": _TIME,
@@ -91,9 +91,9 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "engineer_id": {"type": "string", "description": "id или фамилия инженера из состояния дня"},
                 "transport": {
                     "type": "string",
-                    "enum": ["car", "foot", "bike", "public"],
-                    "description": "Новый транспорт: car автомобиль, foot пешком, bike велосипед, "
-                    "public общественный транспорт",
+                    "enum": ["car", "bike", "public"],
+                    "description": "Новый транспорт: car автомобиль, bike велосипед, "
+                    "public общественный транспорт и пешком",
                 },
                 "time": _TIME,
                 "rationale": _RATIONALE,
@@ -126,7 +126,7 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
                 "priority": {"type": "string", "enum": ["normal", "urgent"]},
                 "transport_required": {
                     "type": "string",
-                    "enum": ["car", "foot", "bike", "public", "none"],
+                    "enum": ["car", "bike", "public", "none"],
                     "description": "Новое требование к транспорту; none снимает требование",
                 },
                 "asap": {**_ASAP, "description": f"{_ASAP['description']}; false снимает «как можно скорее»"},

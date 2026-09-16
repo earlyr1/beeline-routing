@@ -48,6 +48,7 @@ def route_geometry(
         raise LookupError("Предыдущего плана нет: событий ещё не было.")
     route = next((r for r in plan.routes if r.engineer_id == engineer_id), None)
     visits = route.visits if route is not None else []
+    # Общественный транспорт и пешком рисуются прямыми отрезками: по автомобильным дорогам они не ездят.
     use_osrm = osrm if engineer.transport != Transport.PUBLIC else None
     position: LatLon = (engineer.start_lat, engineer.start_lon)
     legs: list[RouteLeg] = []

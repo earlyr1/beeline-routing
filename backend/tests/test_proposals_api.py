@@ -1,3 +1,5 @@
+import json
+
 import httpx
 
 from tests.api_helpers import HashGeocoder, make_client, sample_bundle, upload
@@ -127,7 +129,8 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
     )
     assert (transport["status"], transport["event"]["previous_transport"]) == ("pending", "car")
 
-    # Пока предложения ждали, диспетчер сам сдвинул окно R2 и пересадил E1 на пешую работу.
+    # Пока предложения ждали, диспетчер сам сдвинул окно R2 и пересадил E1 на пешую работу. Прежнее значение «foot»
+    # (старый клиент) принимается как общественный транспорт и пешком.
     moved = {**before, "window_start": "15:00", "window_end": "17:00"}
     manual = [
         {"type": "request_updated", "time": "13:00", "request_id": "R2", "request": moved},
@@ -135,6 +138,9 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
     ]
     for event in manual:
         assert client.post(f"{base}/events", json=event).status_code == 200
+    state = client.get(f"{base}/state").json()
+    assert state["events"][-1]["event"]["transport"] == "public"
+    assert "foot" not in json.dumps(state)
 
     result = client.post(f"{base}/proposals/approve-all").json()
     by_id = {proposal["id"]: proposal for proposal in result["proposals"]}
@@ -149,7 +155,7 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
     }
     assert approved_edit["event"]["request"] == {**before, "duration_min": 90}
     assert (approved_transport["event"]["previous_transport"], approved_transport["event"]["transport"]) == (
-        "foot",
+        "public",
         "bike",
     )
 

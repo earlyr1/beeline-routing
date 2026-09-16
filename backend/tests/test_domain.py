@@ -173,6 +173,43 @@ def test_bundle_json_roundtrip():
     assert '"window_start":"10:00"' in bundle.model_dump_json()
 
 
+def test_old_bundle_with_foot_loads_as_public_transport_and_is_saved_without_foot():
+    engineer = Engineer(
+        id="E1",
+        name="Пешая бригада",
+        start_lat=55.7,
+        start_lon=37.6,
+        shift_start="10:00",
+        shift_end="22:00",
+        skills=[Skill.LOCAL],
+        transport=Transport.PUBLIC,
+    )
+    bundle = Bundle(
+        region="east",
+        office=Office(region="east", title="Восток", address="Москва", lat=55.7, lon=37.6),
+        requests=[_request(transport_required=Transport.PUBLIC)],
+        engineers=[engineer],
+        events=[
+            Event(
+                type=EventType.ENGINEER_TRANSPORT_CHANGED,
+                time="13:00",
+                engineer_id="E1",
+                transport=Transport.CAR,
+                previous_transport=Transport.PUBLIC,
+            )
+        ],
+    )
+    old = json.loads(bundle.model_dump_json())
+    old["engineers"][0]["transport"] = "foot"
+    old["requests"][0]["transport_required"] = "foot"
+    old["events"][0]["previous_transport"] = "foot"
+
+    restored = Bundle.model_validate_json(json.dumps(old))
+    assert restored == bundle
+    assert "foot" not in restored.model_dump_json()
+    assert "foot" not in json.dumps(Bundle.model_json_schema())
+
+
 def test_bundle_keeps_equipment_flag_and_day_cancellations():
     bundle = Bundle(
         region="east",

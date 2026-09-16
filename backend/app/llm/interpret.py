@@ -11,7 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from app.domain.enums import TRANSPORT_RU, EventType, Priority, Skill, Transport
+from app.domain.enums import LEGACY_FOOT, TRANSPORT_RU, EventType, Priority, Skill, Transport
 from app.domain.models import DELAY_RANGE_TEXT, MAX_DELAY_MIN, MIN_DELAY_MIN, Event, Request
 from app.domain.timeutil import HHMM
 from app.domain.validation_text import validation_text
@@ -49,18 +49,28 @@ class EngineerArgs(_TimedArgs):
     engineer_id: str = Field(min_length=1)
 
 
+# Требование заявки к транспорту в ответе модели: код или none. Прежний «foot» модель ещё может прислать, он читается
+# как общественный транспорт (Transport("foot") == Transport.PUBLIC), но в схеме инструментов его нет.
+TransportRequired = Literal["car", "bike", "public", "foot", "none"]
+# Прежние названия, которыми модель может назвать общественный транспорт и пешком: до 16.09.2026 это были два типа,
+# «Пешеход» (foot) и «Общественный транспорт».
+LEGACY_PUBLIC_NAMES = frozenset({LEGACY_FOOT, "пешеход", "пешком", "общественный транспорт"})
+
+
 class TransportChangeArgs(EngineerArgs):
     transport: Transport
 
     @field_validator("transport", mode="before")
     @classmethod
     def _known_transport(cls, value: object) -> Transport:
-        """Модель иногда пишет транспорт по-русски или заглавными: принимаем код и русское название."""
+        """Модель иногда пишет транспорт по-русски или заглавными: принимаем код, русское и прежнее название."""
         if isinstance(value, str):
             key = _norm(value)
             for transport in Transport:
                 if key in (transport.value, _norm(TRANSPORT_RU[transport])):
                     return transport
+            if key in LEGACY_PUBLIC_NAMES:
+                return Transport.PUBLIC
         allowed = ", ".join(transport.value for transport in Transport)
         raise ValueError(f"неизвестный тип транспорта «{value}», допустимы {allowed}")
 
@@ -83,7 +93,7 @@ class UrgentArgs(_TimedArgs):
     window_end: HHMM | None = None
     duration_min: int = Field(gt=0, le=600)
     skill: Skill
-    transport_required: Literal["car", "foot", "bike", "public", "none"] | None = None
+    transport_required: TransportRequired | None = None
 
     @field_validator("asap", mode="before")
     @classmethod
@@ -99,7 +109,7 @@ class RequestUpdateArgs(RequestArgs):
     duration_min: int | None = Field(default=None, gt=0, le=600)
     skill: Skill | None = None
     priority: Priority | None = None
-    transport_required: Literal["car", "foot", "bike", "public", "none"] | None = None
+    transport_required: TransportRequired | None = None
     asap: bool | None = None
 
 

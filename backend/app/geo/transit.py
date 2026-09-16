@@ -1,11 +1,12 @@
 """Время на общественном транспорте от 2ГИС: клиент Distance Matrix API и локальные файлы матриц.
 
-Наша встроенная модель считает общественный транспорт грубо: расстояние по прямой ×1.3 при 15 км/ч плюс 10 минут
-ожидания, без расписаний, без метро и без зависимости от часа. 2ГИС считает по настоящим маршрутам, поэтому
+Встроенная модель считает общественный транспорт и пешком по расстоянию по прямой (TravelModel): быстрее из двух,
+пешком или поездкой, без расписаний и без зависимости от часа. 2ГИС считает по настоящим маршрутам, поэтому
 диспетчер может один раз посчитать матрицы демо-ключом (scripts/transit_matrix.py) и подложить их сервису.
 
-У каждого региона своя матрица и свой файл <регион>.json в каталоге матриц (Settings.transit_dir): точки в файле
-идут в порядке задачи дня, поэтому матрица подходит только своему региону, и планировщик выбирает её по точкам.
+У каждого региона своя матрица и свой файл <регион>.json в каталоге матриц (Settings.transit_dir). Планировщик
+берёт минуты по парам точек (TransitLookup): точка узнаётся по координатам, поэтому после срочной заявки или смены
+адреса пары прежних точек остаются из 2ГИС, а пары с новой точкой считает встроенная модель.
 
 Условия 2ГИС запрещают хранить результаты: файлы остаются на машине диспетчера, в репозиторий они не попадают
 (data/transit/ в .gitignore) и после демо их можно удалить. Ключ берётся только из переменной окружения
@@ -95,9 +96,14 @@ class TransitError(RuntimeError):
     """Сбой 2ГИС: в сообщении статус HTTP и начало ответа. Ключ в сообщение не попадает."""
 
 
+def point_key(lat: float, lon: float) -> tuple[float, float]:
+    """Точка в том виде, в каком она лежит в файле: округление до 6 знаков, как в build_base_matrix."""
+    return round(lat, 6), round(lon, 6)
+
+
 def points_key(points: Sequence[LatLon]) -> list[list[float]]:
     """Точки в том виде, в каком они лежат в файле: округление до 6 знаков, как в build_base_matrix."""
-    return [[round(lat, 6), round(lon, 6)] for lat, lon in points]
+    return [list(point_key(lat, lon)) for lat, lon in points]
 
 
 def split_blocks(count: int, size: int = MAX_BLOCK) -> list[list[int]]:
@@ -278,7 +284,7 @@ class TransitMatrix:
     region: str = ""  # регион, для которого считали: он же имя файла в каталоге матриц
 
     def matches(self, points: Sequence[LatLon]) -> bool:
-        """Файл подходит задаче, только если точки те же и идут в том же порядке."""
+        """Файл посчитан ровно на этих точках в этом порядке: так скрипт решает, что регион пересчитывать не нужно."""
         return self.points == points_key(points)
 
     def minutes_at(self, i: int, j: int) -> float | None:
@@ -289,6 +295,53 @@ class TransitMatrix:
         if isinstance(value, bool) or not isinstance(value, int | float):
             return None
         return float(value)
+
+
+class TransitLookup:
+    """Минуты 2ГИС между точками задачи, пара за парой: из матрицы, в которой лежат обе точки пары.
+
+    Точка узнаётся по координатам с округлением до 6 знаков, а не по месту в списке, поэтому матрице не нужно
+    совпадать с задачей целиком: после срочной заявки или смены адреса список точек дня другой, а пары прежних точек
+    по-прежнему берутся из 2ГИС. Если хотя бы одной точки пары нет в матрице (новая заявка, новый адрес), точки лежат
+    в матрицах разных регионов или 2ГИС не нашёл маршрут, минут нет, и время считает встроенная модель.
+    """
+
+    def __init__(self, points: Sequence[LatLon], matrices: Sequence[TransitMatrix]) -> None:
+        self._matrices = list(matrices)
+        # Места точки в каждой матрице. Одни координаты бывают в файле несколько раз (старт инженера по адресу
+        # его заявки), а ячейки у повторов не всегда равны: повторы могли попасть в разные группы близких точек,
+        # и у одного из них маршрута нет, или 2ГИС на разных запросах ответил на минуту иначе. Поэтому пара
+        # перебирает все места точки.
+        self._places: list[dict[tuple[float, float], list[int]]] = []
+        for matrix in self._matrices:
+            place: dict[tuple[float, float], list[int]] = {}
+            for index, (lat, lon) in enumerate(matrix.points):
+                place.setdefault(point_key(lat, lon), []).append(index)
+            self._places.append(place)
+        nodes = [point_key(lat, lon) for lat, lon in points]
+        # Минуты считаются сразу на все пары: солверы спрашивают время много раз, а точек в дне сотня-другая.
+        self._minutes = [[self._pair(source, target) for target in nodes] for source in nodes]
+        # Сколько упорядоченных пар разных узлов задачи берут минуты из 2ГИС.
+        self.covered = sum(
+            1
+            for i, row in enumerate(self._minutes)
+            for j, value in enumerate(row)
+            if i != j and value is not None
+        )
+
+    def _pair(self, source: tuple[float, float], target: tuple[float, float]) -> float | None:
+        """Первое число в ячейках пары: матрицы по порядку, внутри матрицы места точек по порядку."""
+        for matrix, place in zip(self._matrices, self._places, strict=True):
+            for i in place.get(source, ()):
+                for j in place.get(target, ()):
+                    value = matrix.minutes_at(i, j)
+                    if value is not None:
+                        return value
+        return None
+
+    def minutes(self, i: int, j: int) -> float | None:
+        """Минуты 2ГИС между узлами задачи i и j или None: пара не из одной матрицы или маршрута нет."""
+        return self._minutes[i][j]
 
 
 def build_transit_matrix(
@@ -326,7 +379,7 @@ def save_transit_matrix(matrix: TransitMatrix, path: Path) -> None:
 def load_transit_matrix(path: Path) -> TransitMatrix | None:
     """Матрица из файла или None: файла нет, он не читается или формат не тот.
 
-    Отсутствие файла — не ошибка: сервис считает общественный транспорт встроенной моделью, как до 2ГИС.
+    Отсутствие файла — не ошибка: сервис считает общественный транспорт встроенной моделью.
     """
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -357,7 +410,7 @@ def load_transit_matrices(directory: Path) -> list[TransitMatrix]:
     """Все матрицы каталога, по файлу на регион, в порядке имён файлов.
 
     Каталога нет, файл не читается или формат не тот — такой файл просто пропускается: сервис посчитает эти
-    регионы встроенной моделью, как до 2ГИС. Ошибкой это не считается.
+    регионы встроенной моделью. Ошибкой это не считается.
     """
     try:
         paths = sorted(Path(directory).glob("*.json"))

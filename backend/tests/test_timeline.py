@@ -47,7 +47,7 @@ def test_entry_keeps_the_event_as_sent_without_backend_fields():
         time="13:00",
         engineer_id="E1",
         transport="bike",
-        previous_transport="foot",
+        previous_transport="public",
     )
     entry = Timeline().create(sent)
     assert entry.event == sent.model_copy(update={"previous_transport": None})

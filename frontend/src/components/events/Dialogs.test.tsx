@@ -654,11 +654,11 @@ describe('TransportChangeDialog', () => {
     ]);
     expect(valueOf('Инженер')).toBe('E01');
     expect(valueOf('Сменить с')).toBe('14:00');
-    expect(optionsOf('Новый транспорт')).toEqual(['Пешеход', 'Велосипед', 'Общественный транспорт']);
+    expect(optionsOf('Новый транспорт')).toEqual(['Велосипед', 'Общественный транспорт и пешком']);
     expect(valueOf('Новый транспорт')).toBe('bike');
     expect(screen.getByText('Заявок с требованием «Автомобиль» после 14:00: 1, их перераспределит оптимизатор')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Новый транспорт'), { target: { value: 'foot' } });
+    fireEvent.change(screen.getByLabelText('Новый транспорт'), { target: { value: 'public' } });
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
     await waitFor(() => expect(useAppStore.getState().engineerDialog).toBeNull());
     expect(applyEvent).toHaveBeenCalledWith({
@@ -667,7 +667,7 @@ describe('TransportChangeDialog', () => {
       request: null,
       request_id: null,
       engineer_id: 'E01',
-      transport: 'foot',
+      transport: 'public',
     });
   });
 
@@ -681,7 +681,7 @@ describe('TransportChangeDialog', () => {
   it('resets the new transport to the default of the chosen engineer until the dispatcher picks one', () => {
     resetStore({
       datasetId: 'd_test',
-      state: withTransport(makePlanningState(), 'E02', 'foot'),
+      state: withTransport(makePlanningState(), 'E02', 'bike'),
       clock: '13:00',
       engineerDialog: { kind: 'transport', engineerId: 'E01' },
     });
@@ -691,7 +691,7 @@ describe('TransportChangeDialog', () => {
 
     fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: 'E02' } });
     expect(valueOf('Новый транспорт')).toBe('car');
-    expect(optionsOf('Новый транспорт')).toEqual(['Автомобиль', 'Велосипед', 'Общественный транспорт']);
+    expect(optionsOf('Новый транспорт')).toEqual(['Автомобиль', 'Общественный транспорт и пешком']);
     expect(screen.getByText('Инженер сможет брать заявки, которым нужен автомобиль')).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: 'E01' } });
@@ -704,7 +704,7 @@ describe('TransportChangeDialog', () => {
   });
 
   it('keeps the engineer of the brigade page and its transport when the time changes', () => {
-    const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'foot');
+    const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'public');
     resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E01' } });
     render(<TransportChangeDialog />);
     expect(valueOf('Инженер')).toBe('E01');
@@ -715,11 +715,11 @@ describe('TransportChangeDialog', () => {
   });
 
   it('falls back to the busiest available engineer when the brigade is already unavailable', () => {
-    const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'foot');
+    const state = withTransport(withBusyBeluzin(makePlanningState()), 'E02', 'public');
     resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'transport', engineerId: 'E03' } });
     render(<TransportChangeDialog />);
     expect(valueOf('Инженер')).toBe('E02');
-    expect(screen.getByRole('option', { name: 'Бригада Белузин · Пешеход (визитов после 13:00: 3)' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Бригада Белузин · Общественный транспорт и пешком (визитов после 13:00: 3)' })).toBeInTheDocument();
     expect(valueOf('Новый транспорт')).toBe('car');
 
     fireEvent.change(screen.getByLabelText('Сменить с'), { target: { value: '16:00' } });
@@ -777,7 +777,7 @@ describe('RequestEditDialog', () => {
       '13:30',
     ]);
     expect(optionsOf('Приоритет')).toEqual(['Обычная', 'Срочная']);
-    expect(optionsOf('Транспорт')).toEqual(['Не требуется', 'Автомобиль', 'Пешеход', 'Велосипед', 'Общественный транспорт']);
+    expect(optionsOf('Транспорт')).toEqual(['Не требуется', 'Автомобиль', 'Велосипед', 'Общественный транспорт и пешком']);
     expect(screen.queryByText(/Изменится/)).not.toBeInTheDocument();
   });
 

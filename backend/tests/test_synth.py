@@ -4,8 +4,9 @@ import pytest
 
 from app.domain.enums import EventType, Priority, Skill, Transport
 from app.domain.models import Metrics, Office, Plan, Route, Visit
-from app.ingest.beeline_csv import RawFile, RawRequestRow
+from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
 from app.ingest.geocode import GeoResult
+from app.settings import REPO_ROOT
 from app.synth.cancellations import (
     CANCELLATION_EARLIEST,
     CANCELLATION_MAX_AHEAD,
@@ -141,6 +142,25 @@ def test_assign_transports_covers_all_types_and_gives_cars_to_emergency(cfg):
     assert set(result.values()) == set(Transport)
     assert all(result[f"E{k:02d}"] == Transport.CAR for k in range(4))
     assert result == assign_transports(cfg, "east", engineers)
+
+
+# Транспорт инженеров регионов до того, как пешеход стал общественным транспортом, с foot, уже заменённым на public.
+# Жеребьёвка идёт по прежним долям вместе с foot, поэтому у каждого инженера транспорт прежний.
+DRAWN_TRANSPORTS = {
+    "east": "public car car bike car public public public car car car car",
+    "south_east": "public car car car bike public car car car car car public",
+    "south_center": "car public car car car car bike public car public public",
+    "north_west": "car car public car car public car public bike public car car",
+}
+
+
+@pytest.mark.parametrize("region", sorted(DRAWN_TRANSPORTS))
+def test_transport_draw_did_not_move_when_foot_became_public_transport(cfg, region):
+    assert "foot" in cfg.transport_mix
+    control = parse_beeline_csv((REPO_ROOT / cfg.regions[region].control).read_bytes())
+    office = Office(region=region, title="Офис", address="x", lat=55.7, lon=37.6)
+    engineers, _ = build_engineers(cfg, region, control, office)
+    assert " ".join(engineer.transport.value for engineer in engineers) == DRAWN_TRANSPORTS[region]
 
 
 def test_choose_shift_prefers_coverage(cfg):

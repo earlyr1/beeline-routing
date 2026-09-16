@@ -19,7 +19,7 @@ def test_no_skill():
 def test_no_transport():
     reason = _reason(
         [req("R1", 1, 0, "10:00", "12:00", transport=Transport.CAR)],
-        [eng("E1", transport=Transport.FOOT)],
+        [eng("E1", transport=Transport.PUBLIC)],
         "R1",
     )
     assert reason.reason_code == ReasonCode.NO_TRANSPORT

@@ -19,7 +19,7 @@ def test_waits_for_window_and_computes_times():
 def test_reports_each_violated_constraint():
     problem = problem_of(
         [req("R1", 1, 0, "09:00", "09:01", skill=Skill.EMERGENCY, transport=Transport.CAR, duration=600)],
-        [eng("E1", skills=[Skill.LOCAL], transport=Transport.FOOT)],
+        [eng("E1", skills=[Skill.LOCAL], transport=Transport.PUBLIC)],
     )
     sim = simulate_route(problem, problem.states[0], ["R1"])
     text = " | ".join(sim.violations)

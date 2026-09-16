@@ -5,9 +5,10 @@
   TWOGIS_API_KEY=... python -m scripts.transit_matrix --region all --departure 13:00
   TWOGIS_API_KEY=... python -m scripts.transit_matrix --region east
 
-Точки берутся из бандла региона ровно в том порядке, в каком их строит make_problem: сначала стартовые точки
+Точки берутся из бандла региона в том порядке, в каком их строит make_problem: сначала стартовые точки
 инженеров, затем заявки с координатами. У каждого региона свой файл data/transit/<регион>.json (каталог
-переопределяется TRANSIT_MATRIX_DIR), и сервис при следующем старте берёт минуты общественного транспорта оттуда.
+переопределяется TRANSIT_MATRIX_DIR), и сервис при следующем старте берёт оттуда минуты общественного транспорта
+для пар точек, которые есть в файле.
 
 Регионы считаются от самого дешёвого к самому дорогому: если ключ упрётся в лимит, потеряно будет меньше.
 Посчитанный регион переживает обрыв — его файл остаётся на диске, и следующий запуск такой регион пропускает
@@ -179,7 +180,7 @@ def dry_run_lines(pause: float) -> list[str]:
 
 
 def model_minutes(points: Sequence[LatLon], pairs: Sequence[tuple[int, int]]) -> list[int]:
-    """Минуты встроенной модели на тех же парах: по прямой ×1.3 при 15 км/ч плюс ожидание, без OSRM."""
+    """Минуты встроенной модели на тех же парах: быстрее из «пешком» и поездки по расстоянию по прямой, без OSRM."""
     model = TravelModel()
     travel = TravelTimes(build_base_matrix(points, model), model, TrafficProfile({}))
     return [travel.minutes(i, j, Transport.PUBLIC, 0) for i, j in pairs]
@@ -200,7 +201,10 @@ def summary_lines(points: Sequence[LatLon], minutes: Sequence[Sequence[int | Non
     apart = f", дальше {DEMO_MAX_DISTANCE_KM:.0f} км (не считали): {far}" if far else ""
     lines = [f"точек: {size}, пар: {len(pairs)}, без маршрута: {len(near) - len(known)}{apart}"]
     if not known:
-        return [*lines, "2ГИС не нашёл ни одного маршрута: матрица пустая, сервис будет считать по-старому"]
+        return [
+            *lines,
+            "2ГИС не нашёл ни одного маршрута: матрица пустая, сервис будет считать встроенной моделью",
+        ]
     return [
         *lines,
         f"2ГИС, минуты: {_spread([int(minutes[i][j]) for i, j in known])}",

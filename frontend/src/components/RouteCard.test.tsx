@@ -119,7 +119,7 @@ describe('RouteCard', () => {
   it('explains an unavailable engineer without visits', () => {
     useAppStore.setState({ selectedEngineerId: 'E03' });
     render(<RouteCard />);
-    expect(within(card()).getByText('Локальные работы · Пешеход · смена 10:00–22:00 · недоступен с 13:00')).toBeInTheDocument();
+    expect(within(card()).getByText('Локальные работы · Общественный транспорт и пешком · смена 10:00–22:00 · недоступен с 13:00')).toBeInTheDocument();
     expect(listItems('Почему такой маршрут')).toEqual(['В этом плане у инженера нет визитов.', 'Инженер недоступен с 13:00.']);
     expect(within(card()).queryByRole('table')).not.toBeInTheDocument();
   });

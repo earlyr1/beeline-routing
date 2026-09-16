@@ -15,7 +15,7 @@ import { AsapToggle } from './AsapToggle';
 import { EquipmentToggle } from './EquipmentToggle';
 
 const SKILLS: Skill[] = ['emergency', 'connection', 'local'];
-const TRANSPORTS: Transport[] = ['car', 'foot', 'bike', 'public'];
+const TRANSPORTS: Transport[] = ['car', 'bike', 'public'];
 
 const samePoint = (a: PickedPoint | null, b: PickedPoint | null) => a?.lat === b?.lat && a?.lon === b?.lon;
 

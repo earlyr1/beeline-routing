@@ -57,7 +57,7 @@ def test_downgrade_to_bike_moves_car_only_work_and_recomputes_later_legs():
     assert routes(session.plan) == {"E1": ["R1", "R2", "R3"], "E2": []}
     morning = visit_of(session.plan, "E1", "R1")
 
-    updated = apply_event(session, change("E1", "bike", previous_transport="foot"), ctx)
+    updated = apply_event(session, change("E1", "bike", previous_transport="public"), ctx)
 
     assert routes(updated.plan) == {"E1": ["R1", "R3"], "E2": ["R2"]}
     assert "R2" not in routes(updated.baseline)["E1"]
@@ -106,7 +106,7 @@ def test_downgrade_without_other_car_engineer_leaves_car_work_unassigned():
 def test_upgrade_to_car_lets_idle_engineer_take_car_only_request():
     ctx = context()
     requests = [req("CR", 2, 0, "14:00", "16:00", transport=Transport.CAR)]
-    engineers = [eng("E1", shift=("09:00", "12:00")), eng("E2", transport=Transport.FOOT)]
+    engineers = [eng("E1", shift=("09:00", "12:00")), eng("E2", transport=Transport.PUBLIC)]
     session = new_session(ctx=ctx, requests=requests, engineers=engineers, workload_level=EXACT_TRAVEL_LEVEL)
     [waiting] = session.plan.unassigned
     assert (waiting.request_id, waiting.reason_code) == ("CR", ReasonCode.DOES_NOT_FIT)
@@ -124,7 +124,7 @@ def test_upgrade_to_car_lets_idle_engineer_take_car_only_request():
         travel.minutes(home, node, Transport.CAR, 840),
     )
     stored = updated.events[0].event
-    assert (stored.previous_transport, stored.transport) == (Transport.FOOT, Transport.CAR)
+    assert (stored.previous_transport, stored.transport) == (Transport.PUBLIC, Transport.CAR)
     assert updated.engineer("E2").transport == Transport.CAR
 
 
@@ -134,7 +134,7 @@ def test_visit_on_the_way_is_kept_after_transport_change():
     busy = busy_engineer(session.plan)
     before = route_of(session.plan, busy).visits
 
-    updated = apply_event(session, change(busy, "foot", time=IN_TRANSIT_TO_B), ctx)
+    updated = apply_event(session, change(busy, "public", time=IN_TRANSIT_TO_B), ctx)
 
     held = [visit.request_id for visit in updated.problem.pinned[busy]]
     assert held == ["A", "B"]
@@ -143,13 +143,13 @@ def test_visit_on_the_way_is_kept_after_transport_change():
         assert new.model_dump(exclude={"pinned"}) == old.model_dump(exclude={"pinned"})
     assert visit_times(updated.plan, busy)[:2] == visit_times(session.plan, busy)[:2]
     assert [visit.pinned for visit in after[:2]] == [True, False]
-    # C остаётся у того же инженера (второго задействовать дороже), но к нему он уже идёт пешком.
+    # C остаётся у того же инженера (второго задействовать дороже), но к нему он уже едет общественным транспортом.
     assert routes(updated.plan) == {busy: ["A", "B", "C"], other_engineer(busy): []}
     travel = updated.problem.travel
     b, c = updated.problem.request_node("B"), updated.problem.request_node("C")
     assert (after[2].leg_km, after[2].leg_min) == (
-        round(travel.km(b, c, Transport.FOOT), 2),
-        travel.minutes(b, c, Transport.FOOT, 630),
+        round(travel.km(b, c, Transport.PUBLIC), 2),
+        travel.minutes(b, c, Transport.PUBLIC, 630),
     )
     assert after[2].arrival == before[1].end + after[2].leg_min
 
@@ -191,3 +191,16 @@ def test_check_event_fills_previous_transport_without_replanning():
     stored = check_event(session, change("E1", "public", previous_transport="bike"), ctx)
     assert (stored.previous_transport, stored.transport) == (Transport.CAR, Transport.PUBLIC)
     assert session.engineer("E1").transport == Transport.CAR and session.version == 1
+
+
+def test_old_foot_value_is_accepted_as_public_transport():
+    ctx = context()
+    session = new_session(ctx=ctx, engineers=[eng("E1"), eng("E2", transport="foot")])
+    assert session.engineer("E2").transport == Transport.PUBLIC
+
+    stored = check_event(session, change("E1", "foot", previous_transport="foot"), ctx)
+    assert (stored.previous_transport, stored.transport) == (Transport.CAR, Transport.PUBLIC)
+    assert stored.model_dump(mode="json")["transport"] == "public"
+    with pytest.raises(EventRejected) as rejected:
+        check_event(session, change("E2", "foot"), ctx)
+    assert str(rejected.value) == "У Инженер E2 уже транспорт «Общественный транспорт и пешком»."

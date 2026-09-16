@@ -23,7 +23,7 @@ def test_resolves_tz_conflict_with_one_engineer():
 def test_respects_transport_and_skill_constraints():
     problem = problem_of(
         [req("R1", 2, 0, "10:00", "12:00", transport=Transport.CAR), req("R2", 0.5, 0, "10:00", "12:00")],
-        [eng("E1", transport=Transport.FOOT), eng("E2", transport=Transport.CAR)],
+        [eng("E1", transport=Transport.PUBLIC), eng("E2", transport=Transport.CAR)],
     )
     plan = OrToolsSolver(time_limit_s=1).solve(problem)
     assert "R1" in _routes(plan)["E2"]

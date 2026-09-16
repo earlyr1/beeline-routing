@@ -4,7 +4,7 @@ from app.domain.models import Bundle
 from app.geo.transit import TransitError, load_transit_matrix, transit_matrix_path
 from app.ingest.bundle import save_bundle
 from scripts import transit_matrix as cli
-from tests.helpers import req
+from tests.helpers import at, req
 from tests.planning_helpers import OFFICE, day_engineers, day_requests
 
 KEY = {"TWOGIS_API_KEY": "ключ-из-кабинета"}
@@ -148,6 +148,21 @@ def test_run_writes_the_matrix_of_the_region_and_compares_it_with_the_built_in_m
     assert "посчитано регионов: 1" in out
     assert "коммит" in out and ".gitignore" in out
     assert "ключ-из-кабинета" not in out
+
+
+def test_summary_compares_2gis_with_the_built_in_model_on_the_same_pairs():
+    # 5 км по прямой: поездка 22.5 + 2.8·5 = 36.5, то есть 37 минут; 0.5 км пешком: 0.5 ×1.3 при 5 км/ч = 7.8, то есть 8.
+    points = [at(0, 0), at(5, 0), at(0, 0.5)]
+    minutes = [[0, 40, None], [40, 0, 30], [9, 30, 0]]
+
+    lines = cli.summary_lines(points, minutes)
+
+    assert lines == [
+        "точек: 3, пар: 6, без маршрута: 1",
+        "2ГИС, минуты: мин 9, медиана 30, макс 40",
+        "встроенная модель на тех же парах: мин 8, медиана 37, макс 37",
+    ]
+    assert cli.model_minutes(points, [(0, 1), (0, 2), (2, 2)]) == [37, 8, 0]
 
 
 def test_bad_departure_is_reported_in_russian(tmp_path, monkeypatch, capsys):

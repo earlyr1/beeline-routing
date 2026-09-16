@@ -9,6 +9,12 @@ from pydantic import BaseModel, model_validator
 from app.domain.enums import Skill, Transport
 from app.domain.timeutil import HHMM
 
+# Доли жеребьёвки транспорта инженеров (app/synth/engineers.py) по прежним четырём типам и в прежнем порядке.
+# «foot» — бывший тип «Пешеход»: теперь он часть общественного транспорта, но в жеребьёвке остаётся отдельной долей,
+# иначе сдвинулись бы округление долей и перемешивание, и синтетические инженеры получили бы другой транспорт.
+TransportDraw = Literal["car", "foot", "bike", "public"]
+TRANSPORT_DRAW_ORDER: tuple[TransportDraw, ...] = ("car", "foot", "bike", "public")
+
 
 class RegionConfig(BaseModel):
     title: str
@@ -52,7 +58,7 @@ class SynthConfig(BaseModel):
     cancelled_control_statuses: list[str]
     equipment_hd_types: list[str]
     transport_required_rules: list[TransportRule]
-    transport_mix: dict[Transport, float]
+    transport_mix: dict[TransportDraw, float]
     force_car_for_skills: list[Skill]
     transport_from_history: bool = False
     engineer_start: Literal["office", "history_medoid"] = "office"

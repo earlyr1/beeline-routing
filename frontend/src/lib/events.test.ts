@@ -187,14 +187,12 @@ describe('events', () => {
     const engineers = byId(makePlanningState().engineers);
     const applied = { ...transportChangeEvent('E01', 'bike', '13:30'), previous_transport: 'car' as const };
     expect(describeEvent(applied, engineers)).toBe('Смена транспорта: Бригада Арташкин, Автомобиль → Велосипед с 13:30');
-    expect(describeEvent(transportChangeEvent('E03', 'public', '14:00'), engineers)).toBe(
-      'Смена транспорта: Бригада Комарь на Общественный транспорт с 14:00',
-    );
+    expect(describeEvent(transportChangeEvent('E03', 'bike', '14:00'), engineers)).toBe('Смена транспорта: Бригада Комарь на Велосипед с 14:00');
   });
 
   it('suggests a bike instead of a car and a car instead of anything else', () => {
     expect(defaultNewTransport('car')).toBe('bike');
-    expect((['foot', 'bike', 'public'] as const).map(defaultNewTransport)).toEqual(['car', 'car', 'car']);
+    expect((['bike', 'public'] as const).map(defaultNewTransport)).toEqual(['car', 'car']);
   });
 
   it('counts the visits of an engineer from a time that require a car', () => {

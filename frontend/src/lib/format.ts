@@ -19,9 +19,8 @@ export const SKILL_LABELS: Record<Skill, string> = {
 
 export const TRANSPORT_LABELS: Record<Transport, string> = {
   car: 'Автомобиль',
-  foot: 'Пешеход',
   bike: 'Велосипед',
-  public: 'Общественный транспорт',
+  public: 'Общественный транспорт и пешком',
 };
 
 export const PRIORITY_LABELS: Record<Priority, string> = { normal: 'Обычная', urgent: 'Срочная' };

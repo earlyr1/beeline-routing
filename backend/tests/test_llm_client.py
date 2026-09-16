@@ -27,12 +27,11 @@ def test_transport_change_tool_spec():
     )
     properties = spec["parameters"]["properties"]
     assert set(properties) == {"engineer_id", "transport", "time", "rationale"}
-    assert properties["transport"]["enum"] == ["car", "foot", "bike", "public"]
+    assert properties["transport"]["enum"] == ["car", "bike", "public"]
     assert spec["parameters"]["required"] == ["engineer_id", "transport", "rationale"]
     schemas = json.loads(json_mode_instruction().split("\n", 1)[1])
     assert schemas["propose_engineer_transport_change"]["properties"]["transport"]["enum"] == [
         "car",
-        "foot",
         "bike",
         "public",
     ]
@@ -105,7 +104,7 @@ def test_request_update_tool_spec():
     }
     assert properties["skill"]["enum"] == ["local", "connection", "emergency"]
     assert properties["priority"]["enum"] == ["normal", "urgent"]
-    assert properties["transport_required"]["enum"] == ["car", "foot", "bike", "public", "none"]
+    assert properties["transport_required"]["enum"] == ["car", "bike", "public", "none"]
     assert spec["parameters"]["required"] == ["request_id", "rationale"]
     schemas = json.loads(json_mode_instruction().split("\n", 1)[1])
     assert schemas["propose_request_update"]["required"] == ["request_id", "rationale"]

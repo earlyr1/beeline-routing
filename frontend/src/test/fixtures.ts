@@ -82,7 +82,7 @@ function engineers(): Engineer[] {
   return [
     { id: 'E01', name: 'Бригада Арташкин', start_lat: 55.7005, start_lon: 37.781, shift_start: '10:00', shift_end: '22:00', skills: ['local', 'connection'], transport: 'car', available: true, unavailable_from: null },
     { id: 'E02', name: 'Бригада Белузин', start_lat: 55.745, start_lon: 37.802, shift_start: '10:00', shift_end: '22:00', skills: ['local', 'connection', 'emergency'], transport: 'car', available: true, unavailable_from: null },
-    { id: 'E03', name: 'Бригада Комарь', start_lat: 55.73, start_lon: 37.74, shift_start: '10:00', shift_end: '22:00', skills: ['local'], transport: 'foot', available: false, unavailable_from: '13:00' },
+    { id: 'E03', name: 'Бригада Комарь', start_lat: 55.73, start_lon: 37.74, shift_start: '10:00', shift_end: '22:00', skills: ['local'], transport: 'public', available: false, unavailable_from: '13:00' },
   ];
 }
 

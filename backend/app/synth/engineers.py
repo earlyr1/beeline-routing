@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import random
 from collections import defaultdict
+from collections.abc import Mapping
 
 from app.domain.enums import Skill, Transport
 from app.domain.models import Engineer, Office
 from app.geo.haversine import haversine_km
 from app.ingest.beeline_csv import RawFile, RawRequestRow
-from app.synth.config import ShiftTemplate, SynthConfig
+from app.synth.config import TRANSPORT_DRAW_ORDER, ShiftTemplate, SynthConfig, TransportDraw
 from app.synth.requests import synth_transport_required
 
 SHIFT_TAIL_MIN = 30  # заявка «покрыта» сменой, если в окне остаётся хотя бы полчаса смены
@@ -34,12 +35,12 @@ def choose_shift(cfg: SynthConfig, rows: list[RawRequestRow]) -> ShiftTemplate:
     return max(cfg.shifts, key=covered)  # max возвращает первый из равных
 
 
-def largest_remainder(shares: dict[Transport, float], total: int) -> dict[Transport, int]:
+def largest_remainder(shares: Mapping[str, float], total: int) -> dict[TransportDraw, int]:
     weight = sum(shares.values())
-    raw = {t: shares.get(t, 0.0) / weight * total for t in Transport}
-    counts = {t: int(raw[t]) for t in Transport}
+    raw = {t: shares.get(t, 0.0) / weight * total for t in TRANSPORT_DRAW_ORDER}
+    counts = {t: int(raw[t]) for t in TRANSPORT_DRAW_ORDER}
     left = total - sum(counts.values())
-    for t in sorted(Transport, key=lambda item: raw[item] - counts[item], reverse=True)[:left]:
+    for t in sorted(TRANSPORT_DRAW_ORDER, key=lambda item: raw[item] - counts[item], reverse=True)[:left]:
         counts[t] += 1
     return counts
 
@@ -62,10 +63,16 @@ def assign_transports(
     engineers: list[tuple[str, set[Skill]]],
     forced_car_ids: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, Transport]:
+    """Транспорт инженеров: жеребьёвка по долям transport_mix, аварийным бригадам и forced_car_ids — автомобиль.
+
+    Жеребьёвка идёт по прежним четырём долям вместе с «foot», и только выпавший результат переводится в Transport,
+    где «foot» — общественный транспорт. Так у каждого инженера тот же транспорт, что и до объединения пешехода
+    с общественным транспортом, только прежние пешеходы теперь с общественным транспортом.
+    """
     total = len(engineers)
     counts = largest_remainder(cfg.transport_mix, total)
-    if total >= len(Transport):
-        for t in Transport:
+    if total >= len(TRANSPORT_DRAW_ORDER):
+        for t in TRANSPORT_DRAW_ORDER:
             while counts[t] == 0:
                 donor = max(counts, key=counts.get)
                 counts[donor] -= 1
@@ -73,21 +80,22 @@ def assign_transports(
     forced = [
         eid for eid, skills in engineers if skills & set(cfg.force_car_for_skills) or eid in forced_car_ids
     ]
-    deficit = len(forced) - counts[Transport.CAR]
-    for t in sorted((t for t in Transport if t != Transport.CAR), key=counts.get, reverse=True):
+    deficit = len(forced) - counts["car"]
+    for t in sorted((t for t in TRANSPORT_DRAW_ORDER if t != "car"), key=counts.get, reverse=True):
         while deficit > 0 and counts[t] > 1:
             counts[t] -= 1
-            counts[Transport.CAR] += 1
+            counts["car"] += 1
             deficit -= 1
     if deficit > 0:
         raise ValueError(f"Регион {region}: не хватает автомобилей для бригад, которым он обязателен")
-    pool = [t for t in Transport for _ in range(counts[t])]
+    pool = [t for t in TRANSPORT_DRAW_ORDER for _ in range(counts[t])]
     for _ in forced:
-        pool.remove(Transport.CAR)
+        pool.remove("car")
     random.Random(f"{cfg.seed}:transport:{region}").shuffle(pool)
     rest = [eid for eid, _ in engineers if eid not in forced]
     result = {eid: Transport.CAR for eid in forced}
-    result.update(zip(rest, pool, strict=True))
+    # Transport("foot") даёт Transport.PUBLIC: выпавший пешеход получает общественный транспорт.
+    result.update((eid, Transport(t)) for eid, t in zip(rest, pool, strict=True))
     return result
 
 

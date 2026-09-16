@@ -7,7 +7,8 @@ import httpx
 import pytest
 
 from app.api.deps import build_deps
-from app.domain.enums import Transport
+from app.domain.enums import EventType, Transport
+from app.domain.models import Event
 from app.geo.haversine import haversine_km
 from app.geo.matrix import BaseMatrix, TrafficProfile, TravelModel, TravelTimes
 from app.geo.transit import (
@@ -23,6 +24,7 @@ from app.geo.transit import (
     TRANSIT_REQUEST,
     TransitClient,
     TransitError,
+    TransitLookup,
     build_transit_matrix,
     departure_timestamp,
     distance_groups,
@@ -31,6 +33,7 @@ from app.geo.transit import (
     save_transit_matrix,
     transit_matrix_path,
 )
+from app.planning.session import apply_event
 from app.settings import Settings
 from app.solvers.problem import make_problem
 from tests.helpers import at, eng, req
@@ -320,54 +323,140 @@ def _base(straight_km: float = 8.0) -> BaseMatrix:
 
 def test_travel_times_take_public_minutes_from_transit_and_fall_back_otherwise():
     matrix = build_transit_matrix(POINTS, [[0, 42, None], [42, 0, 15], [None, 15, 0]], "13:00")
-    travel = TravelTimes(_base(), TravelModel(), TrafficProfile({17: 1.8}), transit=matrix)
+    travel = TravelTimes(
+        _base(), TravelModel(), TrafficProfile({17: 1.8}), transit=TransitLookup(POINTS, [matrix])
+    )
 
     assert travel.minutes(0, 1, Transport.PUBLIC, slot_min=0) == 42
-    # 2ГИС не нашёл маршрут: считаем по-старому, 8 км по прямой ×1.3 при 15 км/ч плюс 10 минут ожидания.
-    assert travel.minutes(0, 2, Transport.PUBLIC, slot_min=0) == 52
-    assert TravelTimes(_base(), TravelModel(), TrafficProfile({})).minutes(0, 1, Transport.PUBLIC, 0) == 52
+    # 2ГИС не нашёл маршрут: встроенная модель, 8 км по прямой — поездка 22.5 + 2.8·8 = 44.9 минуты.
+    assert travel.minutes(0, 2, Transport.PUBLIC, slot_min=0) == 45
+    assert TravelTimes(_base(), TravelModel(), TrafficProfile({})).minutes(0, 1, Transport.PUBLIC, 0) == 45
     # Километры остаются нашей оценкой по прямой, 2ГИС даёт только время.
     assert travel.km(0, 1, Transport.PUBLIC) == pytest.approx(10.4)
     assert travel.minutes(1, 1, Transport.PUBLIC, slot_min=0) == 0
     # Остальной транспорт матрица 2ГИС не трогает.
     assert travel.minutes(0, 1, Transport.CAR, slot_min=17 * 60) == 36
-    assert travel.minutes(0, 1, Transport.FOOT, slot_min=0) == 150
+    assert travel.minutes(0, 1, Transport.BIKE, slot_min=0) == 32
 
 
-def test_make_problem_picks_the_matrix_of_the_day_among_several_and_ignores_the_rest():
-    requests = [req("R1", 5, 0, "10:00", "12:00")]
+EAST = [[0, 12, 20], [13, 0, 30], [21, 31, 0]]
+
+
+def test_lookup_finds_points_by_coordinates_so_a_new_point_does_not_hide_the_known_pairs():
+    matrix = build_transit_matrix(POINTS, EAST, "13:00", region="east")
+    new = at(9, 9)
+
+    lookup = TransitLookup([*POINTS, new], [matrix])
+    assert [lookup.minutes(0, 1), lookup.minutes(1, 0), lookup.minutes(2, 1)] == [12, 13, 31]
+    assert lookup.minutes(0, 3) is None and lookup.minutes(3, 0) is None and lookup.minutes(3, 3) is None
+    assert lookup.covered == 6
+
+    # Порядок и состав точек задачи не важны: пара узнаётся по координатам.
+    reordered = TransitLookup([POINTS[2], new, POINTS[0]], [matrix])
+    assert reordered.minutes(0, 2) == 21 and reordered.minutes(2, 0) == 20
+    assert reordered.minutes(0, 1) is None and reordered.covered == 2
+    # Координаты сравниваются с округлением до 6 знаков, как в файле.
+    lat, lon = POINTS[1]
+    assert TransitLookup([POINTS[0], (lat + 3e-8, lon - 3e-8)], [matrix]).minutes(0, 1) == 12
+    assert TransitLookup([new, at(10, 10)], [matrix]).covered == 0
+
+
+def test_lookup_takes_each_pair_from_its_own_matrix_and_leaves_pairs_across_matrices_to_the_model():
+    east = build_transit_matrix(POINTS, EAST, "13:00", region="east")
+    far = [at(20, 0), at(21, 0)]
+    north_west = build_transit_matrix(far, [[0, 5], [6, 0]], "13:00", region="north_west")
+
+    lookup = TransitLookup([POINTS[0], far[1], POINTS[1], far[0]], [east, north_west])
+    assert lookup.minutes(0, 2) == 12 and lookup.minutes(2, 0) == 13
+    assert lookup.minutes(1, 3) == 6 and lookup.minutes(3, 1) == 5
+    assert lookup.minutes(0, 1) is None and lookup.minutes(3, 2) is None
+    assert lookup.covered == 4
+
+
+def test_lookup_tries_every_place_of_a_point_that_repeats_in_the_file():
+    # Старт инженера по адресу его заявки: точка в файле дважды, и у первого места нет маршрута ко второй точке.
+    points = [POINTS[0], POINTS[1], POINTS[0]]
+    matrix = build_transit_matrix(points, [[0, 12, 0], [None, 0, 14], [0, 15, 0]], "13:00")
+
+    lookup = TransitLookup([POINTS[1], POINTS[0]], [matrix])
+    assert lookup.minutes(0, 1) == 14 and lookup.minutes(1, 0) == 12
+    assert lookup.covered == 2
+
+
+def test_lookup_leaves_a_pair_without_a_route_to_the_model():
+    matrix = build_transit_matrix(POINTS, [[0, None, 20], [13, 0, 30], [21, 31, 0]], "13:00")
+    lookup = TransitLookup(POINTS, [matrix])
+    assert lookup.minutes(0, 1) is None and lookup.minutes(1, 0) == 13
+
+    base = BaseMatrix(
+        road_km=[[0.0, 4.0, 4.0], [4.0, 0.0, 4.0], [4.0, 4.0, 0.0]],
+        car_min=[[0.0, 9.0, 9.0], [9.0, 0.0, 9.0], [9.0, 9.0, 0.0]],
+        straight_km=[[0.0, 5.0, 5.0], [5.0, 0.0, 5.0], [5.0, 5.0, 0.0]],
+        source="osrm",
+    )
+    travel = TravelTimes(base, TravelModel(), TrafficProfile({}), transit=lookup)
+    # 5 км по прямой: пешком 78 минут, поездка 22.5 + 14 = 36.5.
+    assert travel.minutes(0, 1, Transport.PUBLIC, slot_min=0) == 37
+    assert travel.minutes(1, 0, Transport.PUBLIC, slot_min=0) == 13
+
+
+def test_make_problem_takes_known_pairs_from_2gis_and_pairs_with_a_new_point_from_the_model():
+    requests = [req("R1", 5, 0, "10:00", "12:00"), req("R2", 0, 5, "10:00", "12:00")]
     engineers = [eng("E1", transport=Transport.PUBLIC)]
-    points = _points(requests, engineers)
-    matrix = build_transit_matrix(points, [[0, 7], [7, 0]], "13:00", region="east")
-    other = build_transit_matrix([at(9, 9), at(8, 8)], [[0, 7], [7, 0]], "13:00", region="north_west")
+    engineer = engineers[0]
+    matrix = build_transit_matrix(
+        _points(requests, engineers), [[0, 7, 9], [7, 0, 11], [9, 11, 0]], "13:00", region="east"
+    )
+    other = build_transit_matrix([at(40, 40), at(41, 41)], [[0, 7], [7, 0]], "13:00", region="north_west")
 
-    def problem_with(transit):
+    def problem_with(day_requests, transit):
         return make_problem(
-            requests, engineers, model=TravelModel(), traffic=TrafficProfile({}), transit=transit
+            day_requests, engineers, model=TravelModel(), traffic=TrafficProfile({}), transit=transit
         )
 
-    problem = problem_with([other, matrix])
-    assert problem.travel.transit is matrix
-    assert problem.travel_min(0, 1, engineers[0]) == 7
+    problem = problem_with(requests, [other, matrix])
+    assert problem.travel_min(0, 1, engineer) == 7 and problem.travel_min(1, 2, engineer) == 11
+    assert problem.travel.transit.covered == 6
 
-    without = problem_with([other])
+    # Срочная заявка в 3 км к западу от офиса: пары прежних точек остаются из 2ГИС, пары с ней считает модель.
+    urgent = problem_with([*requests, req("U1", -3, 0, "10:00", "12:00")], [other, matrix])
+    new, r1, r2 = (urgent.request_node(request_id) for request_id in ("U1", "R1", "R2"))
+    assert urgent.travel_min(0, r1, engineer) == 7 and urgent.travel_min(r1, r2, engineer) == 11
+    # 3 км: поездка 22.5 + 2.8·3 = 30.9 минуты; от R1 8 км: 22.5 + 22.4 = 44.9.
+    assert urgent.travel_min(0, new, engineer) == 31 and urgent.travel_min(new, 0, engineer) == 31
+    assert urgent.travel_min(r1, new, engineer) == 45
+
+    # Ни одной пары дня нет в матрицах — день считается встроенной моделью, как без 2ГИС.
+    without = problem_with(requests, [other])
     assert without.travel.transit is None
-    assert without.travel_min(0, 1, engineers[0]) > 7
-    assert problem_with([]).travel.transit is None
-    assert problem_with(()).travel.transit is None
+    assert without.travel_min(0, 1, engineer) > 7
+    assert problem_with(requests, []).travel.transit is None
+    assert problem_with(requests, ()).travel.transit is None
 
 
-def test_planning_context_passes_the_matrices_into_the_day_problem():
+def test_urgent_event_keeps_2gis_minutes_between_the_points_already_in_the_day():
     requests, engineers = day_requests(), day_engineers()
     points = _points(requests, engineers)
+    size = len(points)
+    minutes = [[0 if i == j else 50 + 10 * i + j for j in range(size)] for i in range(size)]
     other = build_transit_matrix(POINTS, [[0] * 3 for _ in range(3)], "13:00", region="north_west")
-    matrix = build_transit_matrix(points, [[0] * 5 for _ in range(5)], "13:00", region="east")
+    matrix = build_transit_matrix(points, minutes, "13:00", region="east")
 
     ctx = context(transit=[other, matrix])
     session = new_session(ctx=ctx, requests=requests, engineers=engineers)
-    assert session.problem.travel.transit is matrix
+    travel = session.problem.travel
+    assert travel.minutes(2, 4, Transport.PUBLIC, 0) == 74
     assert context().transit == ()
     assert new_session(requests=requests, engineers=engineers).problem.travel.transit is None
+
+    urgent = req("U1", 0, -3, "13:00", "15:00", duration=60)
+    updated = apply_event(session, Event(type=EventType.URGENT, time="13:00", request=urgent), ctx)
+    problem = updated.problem
+    r1, r3, new = (problem.request_node(request_id) for request_id in ("R1", "R3", "U1"))
+    assert problem.travel.minutes(r1, r3, Transport.PUBLIC, 0) == 74
+    assert problem.travel.minutes(0, r1, Transport.PUBLIC, 0) == 52
+    # 3 км к югу от офиса: поездка 22.5 + 2.8·3 = 30.9 минуты.
+    assert problem.travel.minutes(0, new, Transport.PUBLIC, 0) == 31
 
 
 def test_settings_and_build_deps_take_the_matrices_from_the_directory(tmp_path):

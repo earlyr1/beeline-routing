@@ -95,7 +95,7 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         osrm=osrm,
         cache=kv,
         # Матрицы 2ГИС по регионам читаются один раз при старте. Каталога нет или файл не читается — сервис
-        # работает как без него, а нужную матрицу дню выбирает make_problem по точкам.
+        # работает как без него, а минуты по парам точек дня из матриц берёт make_problem.
         transit=load_transit_matrices(settings.transit_dir),
         time_limit_s=settings.solver_time_limit_s,
         time_limit_lunch_s=settings.solver_time_limit_lunch_s,
