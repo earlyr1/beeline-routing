@@ -30,6 +30,15 @@ def synth_transport_required(cfg: SynthConfig, skill: Skill, type_hd: str) -> Tr
     return None
 
 
+def synth_needs_equipment(cfg: SynthConfig, type_hd: str, connection: str) -> bool:
+    """Нужно ли везти единицу оборудования: роутер, приставку или колонку.
+
+    Правило без случайности: тип работ HD из equipment_hd_types или непустая колонка «Подключение» (FMC, FTTB —
+    клиенту настраивают подключение, значит инженер везёт оборудование).
+    """
+    return type_hd in cfg.equipment_hd_types or bool(connection.strip())
+
+
 def check_alignment(synthetic: RawFile, control: RawFile) -> None:
     """Синтетический и контрольный файлы описывают одни и те же заявки построчно."""
     problems: list[str] = []
@@ -85,6 +94,7 @@ def build_requests(
                 transport_required=synth_transport_required(cfg, skill, row.type_hd),
                 source_type_bk=row.type_bk,
                 source_type_hd=row.type_hd,
+                needs_equipment=synth_needs_equipment(cfg, row.type_hd, row.connection),
             )
         )
     return requests

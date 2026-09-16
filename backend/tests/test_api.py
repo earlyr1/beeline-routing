@@ -50,6 +50,24 @@ def test_upload_bundle_then_plan(tmp_path):
     assert client.get(f"/api/datasets/{dataset_id}/state").json()["version"] == 1
 
 
+def test_equipment_flag_from_the_bundle_reaches_the_state(tmp_path):
+    bundle = sample_bundle()
+    bundle = bundle.model_copy(
+        update={"requests": [r.model_copy(update={"needs_equipment": r.id == "R2"}) for r in bundle.requests]}
+    )
+    client, _ = make_client(tmp_path, bundle=bundle)
+    dataset_id = upload(client, "bundle.json", bundle.model_dump_json().encode())
+    assert client.get(f"/api/datasets/{dataset_id}").json()["status"] == "ready"
+
+    state = client.get(f"/api/datasets/{dataset_id}/state").json()
+
+    assert {r["id"]: r["needs_equipment"] for r in state["requests"]} == {
+        "R1": False,
+        "R2": True,
+        "R3": False,
+    }
+
+
 def test_events_explain_geometry_and_replan(tmp_path):
     client, _ = make_client(tmp_path)
     dataset_id = _ready_dataset(client)
