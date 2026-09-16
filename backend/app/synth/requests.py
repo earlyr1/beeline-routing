@@ -12,8 +12,15 @@ from app.ingest.geocode import GeoResult
 from app.synth.config import SynthConfig
 
 
-def synth_duration(cfg: SynthConfig, request_id: str, type_hd: str) -> int:
-    base = cfg.duration_by_hd.get(type_hd, cfg.default_duration_min)
+def synth_duration(cfg: SynthConfig, request_id: str, type_bk: str) -> int:
+    """Плановое время работ на адресе по официальному нормативу типа заявки BK (config/synth_config.yaml).
+
+    Норматив — точное число, поэтому при duration_jitter = 0 возвращаем значение таблицы как есть,
+    без округления: округлять нечего, а округление внесло бы расхождение с нормативом.
+    """
+    base = cfg.duration_by_bk.get(type_bk, cfg.default_duration_min)
+    if not cfg.duration_jitter:
+        return base
     rng = random.Random(f"{cfg.seed}:duration:{request_id}")
     value = base * (1 + rng.uniform(-cfg.duration_jitter, cfg.duration_jitter))
     step = cfg.duration_round_to
@@ -86,7 +93,7 @@ def build_requests(
                 lon=geo.lon,
                 geocode_precision=geo.precision,
                 district=row.district,
-                duration_min=synth_duration(cfg, row.request_id, row.type_hd),
+                duration_min=synth_duration(cfg, row.request_id, row.type_bk),
                 window_start=row.window_start,
                 window_end=row.window_end,
                 priority=Priority.URGENT if urgent else Priority.NORMAL,

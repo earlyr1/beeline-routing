@@ -34,6 +34,10 @@ from app.synth.requests import (
 
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "synth_config.yaml"
 
+# Официальные нормативы организаторов: технические работы + документы, без 20 минут дороги
+# (дорогу сервис считает сам по матрице OSRM).
+NORM_BY_BK = {"Подключение": 70, "Глобальная проблема": 80, "Дозаказ": 20, "Локальная заявка": 30}
+
 
 @pytest.fixture(scope="module")
 def cfg():
@@ -72,21 +76,20 @@ def test_config_loads_all_regions(cfg):
     assert cfg.skill_by_bk["Дозаказ"] == Skill.CONNECTION
 
 
-def test_duration_is_deterministic_rounded_and_within_jitter(cfg):
-    base = cfg.duration_by_hd["Авария"]
-    first = synth_duration(cfg, "74198", "Авария")
-    assert first == synth_duration(cfg, "74198", "Авария")
-    assert first % cfg.duration_round_to == 0
-    assert (
-        base * (1 - cfg.duration_jitter) - cfg.duration_round_to
-        <= first
-        <= base * (1 + cfg.duration_jitter) + cfg.duration_round_to
-    )
-    default = synth_duration(cfg, "1", "Неизвестный тип")
-    assert (
-        abs(default - cfg.default_duration_min)
-        <= cfg.default_duration_min * cfg.duration_jitter + cfg.duration_round_to
-    )
+def test_duration_is_the_official_norm_of_the_bk_type(cfg):
+    """Официальные нормативы («Нормативы.xlsx»): технические работы + документы, без дороги и без разброса."""
+    assert cfg.duration_jitter == 0
+    assert "duration_by_hd" not in type(cfg).model_fields
+    for type_bk, norm in NORM_BY_BK.items():
+        assert cfg.duration_by_bk[type_bk] == norm
+        first = synth_duration(cfg, "74198", type_bk)
+        # Норматив — точное число: без округления в большую сторону и без остатка от старого разброса.
+        assert first == norm
+        # Та же заявка даёт то же число, а разные заявки одного типа BK — одно и то же число.
+        assert first == synth_duration(cfg, "74198", type_bk) == synth_duration(cfg, "50104", type_bk)
+    # Неизвестный тип BK считаем по нормативу локальной заявки.
+    assert cfg.default_duration_min == 50
+    assert synth_duration(cfg, "1", "Неизвестный тип") == 50
 
 
 def test_transport_rules(cfg):
@@ -181,6 +184,22 @@ def test_build_requests_marks_urgent_from_type_and_control_status(cfg):
     requests = build_requests(cfg, synthetic, control, _fake_geo)
     assert [r.priority for r in requests] == [Priority.URGENT, Priority.URGENT]
     assert requests[1].skill == Skill.EMERGENCY and requests[1].transport_required == Transport.CAR
+
+
+def test_build_requests_puts_the_official_norm_into_the_request(cfg):
+    synthetic = RawFile(
+        rows=[
+            row(0, "1"),
+            row(1, "2", type_bk="Подключение", type_hd="Заявка на подключение"),
+            row(2, "3", type_bk="Глобальная проблема", type_hd="Информация"),
+            row(3, "4", type_bk="Дозаказ", type_hd="Дозаказ оборудования"),
+        ],
+        office_address="x",
+        is_control=False,
+    )
+    requests = build_requests(cfg, synthetic, None, _fake_geo)
+    # «Информация» стоила 15 минут по типу HD, теперь делит 80 минут норматива своего типа BK.
+    assert [request.duration_min for request in requests] == [30, 70, 80, 20]
 
 
 def test_build_requests_rejects_unknown_bk_type(cfg):
