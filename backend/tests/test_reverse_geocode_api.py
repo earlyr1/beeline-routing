@@ -111,6 +111,7 @@ def test_cache_only_geocoder_gives_no_address(tmp_path):
     settings = Settings(
         data_dir=tmp_path,
         cache_path=tmp_path / "cache.sqlite",
+        transit_matrix_path=tmp_path / "transit_matrix.json",
         osrm_url=None,
         yandex_maps_api_key=None,
         llm_base_url=None,

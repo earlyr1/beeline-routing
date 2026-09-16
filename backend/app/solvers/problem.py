@@ -19,6 +19,7 @@ from app.domain.models import (
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_matrix
 from app.geo.osrm import OsrmClient
+from app.geo.transit import TransitMatrix
 
 
 @dataclass(frozen=True)
@@ -144,11 +145,13 @@ def make_problem(
     cache: KVCache | None = None,
     buffer: TravelBuffer = NO_BUFFER,
     lunch: bool = True,
+    transit: TransitMatrix | None = None,
 ) -> Problem:
     """Задача на начало дня: все инженеры в стартовых точках, все активные заявки открыты.
 
     buffer — запас на дорогу по нагрузке дня. Базовая матрица от него не зависит: OSRM берётся из кэша.
     lunch — обед по плану в этот день.
+    transit — матрица 2ГИС для общественного транспорта, посчитанная диспетчером заранее.
     """
     located = [r for r in requests if r.lat is not None and r.lon is not None]
     unplannable = [
@@ -161,7 +164,12 @@ def make_problem(
         if (r.lat is None or r.lon is None) and r.status == RequestStatus.ACTIVE
     ]
     points = [(e.start_lat, e.start_lon) for e in engineers] + [(r.lat, r.lon) for r in located]
-    travel = TravelTimes(build_base_matrix(points, model, osrm=osrm, cache=cache), model, traffic)
+    # Матрица 2ГИС подходит задаче, только если её точки те же и в том же порядке: иначе день считается без неё,
+    # встроенной моделью, и это не ошибка.
+    matched = transit if transit is not None and transit.matches(points) else None
+    travel = TravelTimes(
+        build_base_matrix(points, model, osrm=osrm, cache=cache), model, traffic, transit=matched
+    )
     states = [initial_state(engineer, k) for k, engineer in enumerate(engineers)]
     open_ids = [r.id for r in located if r.status == RequestStatus.ACTIVE]
     return Problem(
