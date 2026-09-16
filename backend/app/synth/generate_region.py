@@ -428,7 +428,7 @@ def _dispatch(spec: RegionSpec, cfg: SynthConfig, drafts: list[_Draft], pools: d
     for draft in order:
         skill = cfg.skill_by_bk[draft.type_bk]
         needs_car = synth_transport_required(cfg, skill, draft.type_hd) == Transport.CAR
-        duration = synth_duration(cfg, draft.synthetic_id, draft.type_hd)
+        duration = synth_duration(cfg, draft.synthetic_id, draft.type_bk)
         estimates = {id(c): _estimate(c, draft, duration) for c in crews}
         capable = [c for c in crews if c.spec.car or not needs_car]
         free = [c for c in capable if c.visits < MAX_VISITS_PER_CREW] or capable

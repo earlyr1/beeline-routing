@@ -20,7 +20,7 @@ from app.synth.generate_region import (
     load_empirical,
     pool_from_elements,
 )
-from app.synth.requests import check_alignment, synth_transport_required
+from app.synth.requests import check_alignment, synth_duration, synth_transport_required
 
 CFG = SynthConfig.load(BACKEND_DIR / "config" / "synth_config.yaml")
 EMPIRICAL = load_empirical(
@@ -182,6 +182,19 @@ def test_generated_files_parse_align_and_follow_the_spec():
         needs_car = synth_transport_required(CFG, CFG.skill_by_bk[row.type_bk], row.type_hd) == Transport.CAR
         assert crews[row.crew].car or not needs_car
     assert sum(result.visits_by_crew.values()) == len(control.rows) - 1
+
+
+def test_generated_region_dispatches_crews_by_the_official_norms():
+    """Раздача заявок бригадам считает время на адресе по нормативу типа заявки BK."""
+    spec = _spec()
+    result = generate_region(spec, _pools(), CFG, EMPIRICAL)
+    control = parse_beeline_csv(result.control_csv.encode())
+    synthetic = parse_beeline_csv(result.synthetic_csv.encode())
+    for row in synthetic.rows:
+        assert synth_duration(CFG, row.request_id, row.type_bk) == CFG.duration_by_bk[row.type_bk]
+    sent = [row for row in control.rows if row.status_bk != NOT_SENT]
+    assert all(row.crew for row in sent)
+    assert sum(result.visits_by_crew.values()) == len(sent)
 
 
 def test_generated_region_synthesizes_engineers_with_their_transport():
