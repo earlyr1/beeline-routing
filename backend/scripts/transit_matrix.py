@@ -35,17 +35,18 @@ from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_
 from app.geo.osrm import LatLon
 from app.geo.transit import (
     DEFAULT_PAUSE_S,
+    DEMO_MAX_DISTANCE_KM,
     ELEMENTS_PER_MINUTE,
     KEY_ENV,
-    MAX_BLOCK,
     REQUESTS_PER_MINUTE,
     REQUESTS_PER_MONTH,
     TransitClient,
     TransitError,
     build_transit_matrix,
+    distance_groups,
     load_transit_matrix,
+    request_pairs,
     save_transit_matrix,
-    split_blocks,
     transit_matrix_path,
 )
 from app.ingest.bundle import load_bundle
@@ -73,9 +74,16 @@ def matrix_points(bundle: Bundle) -> list[LatLon]:
     return [(e.start_lat, e.start_lon) for e in bundle.engineers] + [(r.lat, r.lon) for r in located]
 
 
-def cost(count: int) -> tuple[int, int]:
-    """Сколько запросов и элементов матрицы стоит расчёт: блоки не больше 10 точек с каждой стороны."""
-    return len(split_blocks(count, MAX_BLOCK)) ** 2, count * count
+def cost(points: Sequence[LatLon]) -> tuple[int, int]:
+    """Сколько запросов и элементов матрицы стоит расчёт: блоки не больше 10 точек внутри групп близких точек."""
+    pairs = request_pairs(points)
+    return len(pairs), sum(len(sources) * len(targets) for sources, targets in pairs)
+
+
+def far_pairs(points: Sequence[LatLon]) -> int:
+    """Сколько упорядоченных пар точек лежит в разных группах: их демо-ключ не считает."""
+    sizes = [len(group) for group in distance_groups(points)]
+    return len(points) ** 2 - sum(size * size for size in sizes)
 
 
 @dataclass(frozen=True)
@@ -89,11 +97,11 @@ class RegionJob:
 
     @property
     def requests(self) -> int:
-        return cost(len(self.points))[0]
+        return cost(self.points)[0]
 
     @property
     def elements(self) -> int:
-        return cost(len(self.points))[1]
+        return cost(self.points)[1]
 
     def minutes(self, pause: float) -> int:
         """Сколько займёт расчёт: паузы между запросами, перед первым запросом паузы нет."""
@@ -138,9 +146,15 @@ def plan_lines(jobs: Sequence[RegionJob], departure: str, pause: float) -> list[
     lines = [f"выезд {departure}, регионов: {len(jobs)}"]
     for job in jobs:
         already = ", уже посчитан" if job.done else ""
+        far = far_pairs(job.points)
+        apart = (
+            f", пар дальше {DEMO_MAX_DISTANCE_KM:.0f} км без 2ГИС: {far} (там встроенная модель)"
+            if far
+            else ""
+        )
         lines.append(
             f"регион {job.region}: точек: {len(job.points)}, запросов: {job.requests}, "
-            f"элементов: {job.elements}, минут: {job.minutes(pause)}{already}"
+            f"элементов: {job.elements}, минут: {job.minutes(pause)}{apart}{already}"
         )
     todo = [job for job in jobs if not job.done]
     requests = sum(job.requests for job in todo)
@@ -178,9 +192,13 @@ def _spread(values: Sequence[int]) -> str:
 def summary_lines(points: Sequence[LatLon], minutes: Sequence[Sequence[int | None]]) -> list[str]:
     """Что получилось и насколько далека была наша оценка: одни и те же пары у 2ГИС и у встроенной модели."""
     size = len(points)
+    group_of = {point: number for number, group in enumerate(distance_groups(points)) for point in group}
     pairs = [(i, j) for i in range(size) for j in range(size) if i != j]
-    known = [(i, j) for i, j in pairs if isinstance(minutes[i][j], int | float)]
-    lines = [f"точек: {size}, пар: {len(pairs)}, без маршрута: {len(pairs) - len(known)}"]
+    near = [(i, j) for i, j in pairs if group_of[i] == group_of[j]]
+    known = [(i, j) for i, j in near if isinstance(minutes[i][j], int | float)]
+    far = len(pairs) - len(near)
+    apart = f", дальше {DEMO_MAX_DISTANCE_KM:.0f} км (не считали): {far}" if far else ""
+    lines = [f"точек: {size}, пар: {len(pairs)}, без маршрута: {len(near) - len(known)}{apart}"]
     if not known:
         return [*lines, "2ГИС не нашёл ни одного маршрута: матрица пустая, сервис будет считать по-старому"]
     return [

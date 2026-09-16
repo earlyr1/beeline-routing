@@ -24,6 +24,7 @@ from pathlib import Path
 
 import httpx
 
+from app.geo.haversine import haversine_km
 from app.geo.osrm import LatLon
 
 TRANSIT_URL = "https://routing.api.2gis.com/get_dist_matrix"
@@ -38,6 +39,12 @@ REQUESTS_PER_MINUTE = 10
 ELEMENTS_PER_MINUTE = 1000
 REQUESTS_PER_MONTH = 1000
 DEFAULT_PAUSE_S = 7.5
+# Демо-ключ не строит маршруты между точками дальше 50 км друг от друга: на такой запрос он отвечает 403 «excessive
+# distance between points for demo-keys, max (km): 50». Поэтому точки делятся на группы, где любая пара ближе 45 км
+# по прямой (запас на то, что 2ГИС меряет расстояние по-своему), и 2ГИС считает только пары внутри группы. Пар между
+# группами (Москва и Кашира в Юго-востоке, от 60 км) в матрице нет, и в них сервис берёт встроенную модель.
+DEMO_MAX_DISTANCE_KM = 50.0
+GROUP_DISTANCE_KM = 45.0
 # Если ключ всё же упёрся в минутный лимит (ответ 429), ждём минуту и повторяем тот же запрос: иначе сбой
 # на середине большого региона сжёг бы все его уже потраченные запросы.
 RATE_LIMIT_STATUS = 429
@@ -96,6 +103,31 @@ def points_key(points: Sequence[LatLon]) -> list[list[float]]:
 def split_blocks(count: int, size: int = MAX_BLOCK) -> list[list[int]]:
     """Индексы точек блоками не больше size: столько 2ГИС берёт с одной стороны запроса."""
     return [list(range(start, min(start + size, count))) for start in range(0, count, size)]
+
+
+def distance_groups(points: Sequence[LatLon], limit_km: float = GROUP_DISTANCE_KM) -> list[list[int]]:
+    """Индексы точек группами, в которых каждая пара не дальше limit_km по прямой: такие запросы демо-ключ примет.
+
+    Точка идёт в первую группу, где она близка ко всем, иначе открывает новую. Порядок точек внутри группы сохраняется.
+    """
+    groups: list[list[int]] = []
+    for index, (lat, lon) in enumerate(points):
+        for group in groups:
+            if all(haversine_km(lat, lon, *points[other]) <= limit_km for other in group):
+                group.append(index)
+                break
+        else:
+            groups.append([index])
+    return groups
+
+
+def request_pairs(points: Sequence[LatLon], size: int = MAX_BLOCK) -> list[tuple[list[int], list[int]]]:
+    """Запросы расчёта: пары блоков не больше size точек, оба блока из одной группы близких точек."""
+    pairs: list[tuple[list[int], list[int]]] = []
+    for group in distance_groups(points):
+        blocks = [[group[place] for place in block] for block in split_blocks(len(group), size)]
+        pairs.extend((sources, targets) for sources in blocks for targets in blocks)
+    return pairs
 
 
 def request_body(
@@ -168,24 +200,20 @@ class TransitClient:
         departure: str,
         progress: Callable[[int, int], None] | None = None,
     ) -> list[list[int | None]]:
-        """Минуты между всеми парами точек. None в ячейке: 2ГИС не нашёл маршрут.
+        """Минуты между всеми парами точек. None в ячейке: 2ГИС не нашёл маршрут или точки в разных группах.
 
         progress вызывается после каждого блока: номер блока с 1 и всего блоков.
         """
         points = list(points)
         size = len(points)
         minutes: list[list[int | None]] = [[None] * size for _ in range(size)]
-        blocks = split_blocks(size)
-        total = len(blocks) * len(blocks)
-        done = 0
-        for sources in blocks:
-            for targets in blocks:
-                if done:
-                    self._sleep(self.pause_s)
-                self._fill(minutes, points, sources, targets, departure)
-                done += 1
-                if progress is not None:
-                    progress(done, total)
+        pairs = request_pairs(points)
+        for done, (sources, targets) in enumerate(pairs, start=1):
+            if done > 1:
+                self._sleep(self.pause_s)
+            self._fill(minutes, points, sources, targets, departure)
+            if progress is not None:
+                progress(done, len(pairs))
         return minutes
 
     def _fill(

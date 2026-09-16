@@ -87,6 +87,22 @@ def test_dry_run_prints_the_cost_and_does_not_touch_the_network(tmp_path, monkey
     assert not matrix_path(tmp_path, "t").exists()
 
 
+def test_plan_counts_only_requests_inside_groups_and_reports_far_pairs(tmp_path, monkeypatch, capsys):
+    # Заявки офиса плюс 3 заявки в 70 км к югу: демо-ключ 2ГИС пары дальше 50 км не считает.
+    near = day_requests()
+    far = [req(f"K{k}", k, -70, "10:00", "18:00") for k in range(3)]
+    save_region(tmp_path, requests=near + far)
+    monkeypatch.setattr(cli, "TransitClient", NoNetwork)
+
+    code = cli.main(["--region", "t", "--dry-run"], env={"DATA_DIR": str(tmp_path)})
+
+    out = capsys.readouterr().out
+    assert code == 0
+    # 5 точек у офиса и 3 далёких: 2 запроса, 25 + 9 элементов, 8·8 − 34 = 30 пар без 2ГИС.
+    assert "точек: 8" in out and "запросов: 2," in out and "элементов: 34" in out
+    assert "дальше 50 км без 2ГИС: 30" in out
+
+
 def test_run_without_the_key_refuses_in_russian(tmp_path, monkeypatch, capsys):
     save_region(tmp_path)
     monkeypatch.setattr(cli, "TransitClient", NoNetwork)

@@ -8,10 +8,13 @@ import pytest
 
 from app.api.deps import build_deps
 from app.domain.enums import Transport
+from app.geo.haversine import haversine_km
 from app.geo.matrix import BaseMatrix, TrafficProfile, TravelModel, TravelTimes
 from app.geo.transit import (
     DEFAULT_PAUSE_S,
+    DEMO_MAX_DISTANCE_KM,
     ELEMENTS_PER_MINUTE,
+    GROUP_DISTANCE_KM,
     MAX_BLOCK,
     PUBLIC_TRANSPORT_KINDS,
     RATE_LIMIT_RETRIES,
@@ -22,6 +25,7 @@ from app.geo.transit import (
     TransitError,
     build_transit_matrix,
     departure_timestamp,
+    distance_groups,
     load_transit_matrices,
     load_transit_matrix,
     save_transit_matrix,
@@ -34,7 +38,7 @@ from tests.planning_helpers import context, day_engineers, day_requests, new_ses
 
 KEY = "демо-ключ-2гис"
 POINTS = [at(0, 0), at(3, 0), at(0, 4)]
-MANY = [at(k, 0) for k in range(60)]  # 6 блоков по 10 точек
+MANY = [at(k / 2, 0) for k in range(60)]  # 6 блоков по 10 точек в пределах 30 км: одна группа
 
 
 def _rows(body: dict, seconds: int = 600) -> list[dict]:
@@ -120,6 +124,46 @@ def test_points_are_split_into_blocks_of_10_with_a_call_per_block_pair():
     assert sum(sources * targets for sources, targets in calls) == 60 * 60
     assert len(minutes) == 60 and all(len(row) == 60 for row in minutes)
     assert minutes[59][0] == 10 and minutes[0][59] == 10 and minutes[30][31] == 10
+
+
+def test_points_farther_than_the_demo_limit_are_never_in_one_request():
+    # Москва и Кашира: 12 точек рядом с офисом и 3 точки в 70 км к югу, как в Юго-востоке.
+    city = [at(k / 2, 0) for k in range(12)]
+    far = [at(0, -70), at(2, -70), at(0, -72)]
+    points = city + far
+    calls = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        pts = [
+            (p[TRANSIT_REQUEST["lat"]], p[TRANSIT_REQUEST["lon"]]) for p in body[TRANSIT_REQUEST["points"]]
+        ]
+        calls.append(len(pts))
+        # Демо-ключ отвечает 403 «excessive distance between points for demo-keys, max (km): 50».
+        assert all(haversine_km(*a, *b) < DEMO_MAX_DISTANCE_KM for a in pts for b in pts)
+        return _ok(body)
+
+    minutes = _client(handler).matrix(points, "13:00")
+
+    assert distance_groups(points) == [list(range(12)), [12, 13, 14]]
+    # Город — 2 блока, 4 запроса; Кашира — 1 запрос; пар между ними 2ГИС не считает.
+    assert len(calls) == 5
+    assert minutes[0][11] == 10 and minutes[12][14] == 10 and minutes[13][13] == 0
+    assert minutes[0][12] is None and minutes[14][3] is None
+
+
+def test_distance_groups_keep_every_pair_within_the_limit_even_along_a_chain():
+    # Цепочка через каждые 30 км: соседи близко, но первая и третья точки в 60 км, в одну группу им нельзя.
+    chain = [at(0, 0), at(30, 0), at(60, 0)]
+    groups = distance_groups(chain)
+    assert groups == [[0, 1], [2]]
+    assert all(
+        haversine_km(*chain[a], *chain[b]) <= GROUP_DISTANCE_KM
+        for group in groups
+        for a in group
+        for b in group
+    )
+    assert GROUP_DISTANCE_KM < DEMO_MAX_DISTANCE_KM == 50
 
 
 def test_client_sleeps_between_calls_and_reports_progress():
