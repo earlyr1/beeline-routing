@@ -1,14 +1,19 @@
-"""Матрица времени на общественном транспорте от 2ГИС для одного региона.
+"""Матрицы времени на общественном транспорте от 2ГИС: один регион или все за один запуск.
 
 Запуск из каталога backend:
-  python -m scripts.transit_matrix --region east --departure 13:00 --dry-run
-  TWOGIS_API_KEY=... python -m scripts.transit_matrix --region east --departure 13:00
+  python -m scripts.transit_matrix --region all --dry-run
+  TWOGIS_API_KEY=... python -m scripts.transit_matrix --region all --departure 13:00
+  TWOGIS_API_KEY=... python -m scripts.transit_matrix --region east
 
 Точки берутся из бандла региона ровно в том порядке, в каком их строит make_problem: сначала стартовые точки
-инженеров, затем заявки с координатами. Результат ложится в data/transit_matrix.json (путь переопределяется
-TRANSIT_MATRIX_PATH), и сервис при следующем старте берёт минуты общественного транспорта оттуда.
+инженеров, затем заявки с координатами. У каждого региона свой файл data/transit/<регион>.json (каталог
+переопределяется TRANSIT_MATRIX_DIR), и сервис при следующем старте берёт минуты общественного транспорта оттуда.
 
-Условия 2ГИС запрещают хранить результаты: файл локальный, коммитить его нельзя, после демо его можно удалить.
+Регионы считаются от самого дешёвого к самому дорогому: если ключ упрётся в лимит, потеряно будет меньше.
+Посчитанный регион переживает обрыв — его файл остаётся на диске, и следующий запуск такой регион пропускает
+(--force считает заново, --keep-going не останавливается на упавшем регионе).
+
+Условия 2ГИС запрещают хранить результаты: файлы локальные, коммитить их нельзя, после демо их можно удалить.
 Ключ читается только из TWOGIS_API_KEY и никуда не печатается.
 """
 
@@ -20,6 +25,7 @@ import os
 import statistics
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.domain.enums import Transport
@@ -37,21 +43,28 @@ from app.geo.transit import (
     TransitClient,
     TransitError,
     build_transit_matrix,
+    load_transit_matrix,
     save_transit_matrix,
     split_blocks,
+    transit_matrix_path,
 )
 from app.ingest.bundle import load_bundle
 from app.settings import Settings
 
+ALL_REGIONS = "all"
 NO_KEY = (
     f"Нужен ключ 2ГИС в переменной окружения {KEY_ENV}.\n"
     "Демо-ключ на Distance Matrix API запрашивается в кабинете 2ГИС: https://dev.2gis.ru/order\n"
     "Сначала посчитайте расход и время флагом --dry-run: у демо-ключа месячный лимит запросов."
 )
 DO_NOT_COMMIT = (
-    "Файл матрицы коммитить нельзя: условия 2ГИС запрещают хранить результаты. "
-    "Он в .gitignore, после демо удалите его."
+    "Файлы матриц коммитить нельзя: условия 2ГИС запрещают хранить результаты. "
+    "Каталог data/transit/ в .gitignore, после демо удалите его."
 )
+
+
+class RegionsNotFound(LookupError):
+    """Считать нечего: такого региона нет в data/bundles или бандлов нет вовсе."""
 
 
 def matrix_points(bundle: Bundle) -> list[LatLon]:
@@ -63,6 +76,92 @@ def matrix_points(bundle: Bundle) -> list[LatLon]:
 def cost(count: int) -> tuple[int, int]:
     """Сколько запросов и элементов матрицы стоит расчёт: блоки не больше 25 точек с каждой стороны."""
     return len(split_blocks(count, MAX_BLOCK)) ** 2, count * count
+
+
+@dataclass(frozen=True)
+class RegionJob:
+    """Регион запуска: его точки, файл матрицы и признак «уже посчитан»."""
+
+    region: str
+    points: list[LatLon]
+    path: Path
+    done: bool
+
+    @property
+    def requests(self) -> int:
+        return cost(len(self.points))[0]
+
+    @property
+    def elements(self) -> int:
+        return cost(len(self.points))[1]
+
+    def minutes(self, pause: float) -> int:
+        """Сколько займёт расчёт: паузы между запросами, перед первым запросом паузы нет."""
+        return math.ceil(max(self.requests - 1, 0) * pause / 60)
+
+
+def _already_computed(path: Path, points: Sequence[LatLon]) -> bool:
+    """Файл региона уже посчитан на этих же точках: заново считать нечего."""
+    saved = load_transit_matrix(path)
+    return saved is not None and saved.matches(points)
+
+
+def _known_regions(settings: Settings) -> list[str]:
+    return sorted(path.parent.name for path in settings.bundles_dir.glob("*/bundle.json"))
+
+
+def plan_jobs(settings: Settings, region: str, force: bool) -> list[RegionJob]:
+    """Регионы запуска от самого дешёвого к самому дорогому: ранний обрыв обходится дешевле."""
+    known = _known_regions(settings)
+    if region == ALL_REGIONS:
+        if not known:
+            raise RegionsNotFound(f"В {settings.bundles_dir} нет ни одного бандла региона.")
+        names = known
+    else:
+        bundle_path = settings.bundles_dir / region / "bundle.json"
+        if not bundle_path.exists():
+            raise RegionsNotFound(
+                f"Нет бандла региона «{region}»: {bundle_path}. "
+                f"Готовые регионы: {', '.join(known) or 'ни одного'}"
+            )
+        names = [region]
+    jobs = []
+    for name in names:
+        points = matrix_points(load_bundle(settings.bundles_dir / name / "bundle.json"))
+        path = transit_matrix_path(settings.transit_dir, name)
+        jobs.append(RegionJob(name, points, path, done=not force and _already_computed(path, points)))
+    return sorted(jobs, key=lambda job: (len(job.points), job.region))
+
+
+def plan_lines(jobs: Sequence[RegionJob], departure: str, pause: float) -> list[str]:
+    """План расхода до первого запроса: сколько стоит каждый регион и сколько уйдёт всего."""
+    lines = [f"выезд {departure}, регионов: {len(jobs)}"]
+    for job in jobs:
+        already = ", уже посчитан" if job.done else ""
+        lines.append(
+            f"регион {job.region}: точек: {len(job.points)}, запросов: {job.requests}, "
+            f"элементов: {job.elements}, минут: {job.minutes(pause)}{already}"
+        )
+    todo = [job for job in jobs if not job.done]
+    requests = sum(job.requests for job in todo)
+    minutes = sum(job.minutes(pause) for job in todo)
+    skipped = len(jobs) - len(todo)
+    already = f", уже посчитано регионов: {skipped}" if skipped else ""
+    share = 100.0 * requests / REQUESTS_PER_MONTH
+    lines.append(
+        f"итого: запросов: {requests} из {REQUESTS_PER_MONTH} месячного лимита ({share:.1f}%), "
+        f"минут: {minutes}{already}"
+    )
+    return lines
+
+
+def dry_run_lines(pause: float) -> list[str]:
+    return [
+        f"лимиты демо-ключа: {REQUESTS_PER_MINUTE} запросов и {ELEMENTS_PER_MINUTE} элементов в минуту, "
+        f"{REQUESTS_PER_MONTH} запросов в месяц",
+        f"темп: пауза {pause:.0f} с между запросами",
+        "Пробный расчёт: в сеть не ходили, файлы не записаны.",
+    ]
 
 
 def model_minutes(points: Sequence[LatLon], pairs: Sequence[tuple[int, int]]) -> list[int]:
@@ -91,15 +190,25 @@ def summary_lines(points: Sequence[LatLon], minutes: Sequence[Sequence[int | Non
     ]
 
 
+def _progress(done: int, total: int) -> None:
+    print(f"блок {done}/{total}", flush=True)
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Считает матрицу времени на общественном транспорте через Distance Matrix API 2ГИС"
+        description="Считает матрицы времени на общественном транспорте через Distance Matrix API 2ГИС"
     )
-    parser.add_argument("--region", required=True, help="регион из data/bundles, например east")
+    parser.add_argument(
+        "--region", required=True, help=f"регион из data/bundles, например east, или {ALL_REGIONS} — все"
+    )
     parser.add_argument("--departure", default="13:00", help="время выезда HH:MM, по умолчанию 13:00")
     parser.add_argument("--pause", type=float, default=DEFAULT_PAUSE_S, help="пауза между запросами, секунды")
+    parser.add_argument("--force", action="store_true", help="считать заново и те регионы, что уже посчитаны")
     parser.add_argument(
-        "--dry-run", action="store_true", help="напечатать расход запросов и элементов, не выходя в сеть"
+        "--keep-going", action="store_true", help="не останавливаться на регионе, который не посчитался"
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="напечатать план расхода запросов, не выходя в сеть"
     )
     return parser.parse_args(argv)
 
@@ -115,55 +224,59 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         print(f"Время выезда задаётся как HH:MM, получено «{args.departure}»", file=sys.stderr)
         return 2
 
-    bundle_path = settings.bundles_dir / args.region / "bundle.json"
-    if not bundle_path.exists():
-        known = sorted(path.parent.name for path in settings.bundles_dir.glob("*/bundle.json"))
-        print(
-            f"Нет бандла региона «{args.region}»: {bundle_path}. "
-            f"Готовые регионы: {', '.join(known) or 'ни одного'}",
-            file=sys.stderr,
-        )
+    try:
+        jobs = plan_jobs(settings, args.region, args.force)
+    except RegionsNotFound as error:
+        print(str(error), file=sys.stderr)
         return 2
 
-    points = matrix_points(load_bundle(bundle_path))
-    requests, elements = cost(len(points))
-    print(
-        f"регион {args.region}, выезд {departure}: точек: {len(points)}, запросов: {requests}, элементов: {elements}"
-    )
+    for line in plan_lines(jobs, departure, args.pause):
+        print(line)
     if args.dry_run:
-        print(
-            f"лимиты демо-ключа: {REQUESTS_PER_MINUTE} запросов и {ELEMENTS_PER_MINUTE} элементов в минуту, "
-            f"{REQUESTS_PER_MONTH} запросов в месяц"
-        )
-        print(
-            f"темп: пауза {args.pause:.0f} с между запросами, расчёт займёт около "
-            f"{math.ceil((requests - 1) * args.pause / 60)} мин"
-        )
-        print(f"месячный лимит: уйдёт {requests} запросов из {REQUESTS_PER_MONTH}")
-        print("Пробный расчёт: в сеть не ходили, файл не записан.")
+        for line in dry_run_lines(args.pause):
+            print(line)
         return 0
 
-    key = (env.get(KEY_ENV) or "").strip()
-    if not key:
-        print(NO_KEY, file=sys.stderr)
-        return 2
+    client = None
+    if any(not job.done for job in jobs):
+        key = (env.get(KEY_ENV) or "").strip()
+        if not key:
+            print(NO_KEY, file=sys.stderr)
+            return 2
+        client = TransitClient(key, pause_s=args.pause)
 
-    client = TransitClient(key, pause_s=args.pause)
-    try:
-        minutes = client.matrix(
-            points, departure, progress=lambda done, total: print(f"блок {done}/{total}", flush=True)
-        )
-    except TransitError as error:
-        print(f"2ГИС не дал матрицу: {error}", file=sys.stderr)
-        return 1
+    computed, skipped, failed, spent, untouched = 0, 0, 0, 0, 0
+    for index, job in enumerate(jobs):
+        if job.done:
+            skipped += 1
+            print(f"регион {job.region}: уже посчитан, пропущен — {job.path}")
+            continue
+        print(f"регион {job.region}: считаем, запросов: {job.requests}")
+        try:
+            minutes = client.matrix(job.points, departure, progress=_progress)
+        except TransitError as error:
+            failed += 1
+            print(f"регион {job.region}: 2ГИС не дал матрицу: {error}", file=sys.stderr)
+            if not args.keep_going:
+                untouched = len(jobs) - index - 1
+                break
+            continue
+        spent += job.requests
+        save_transit_matrix(build_transit_matrix(job.points, minutes, departure, job.region), job.path)
+        computed += 1
+        for line in summary_lines(job.points, minutes):
+            print(line)
+        print(f"матрица записана: {job.path}")
 
-    path = Path(settings.transit_matrix_path)
-    save_transit_matrix(build_transit_matrix(points, minutes, departure), path)
-    for line in summary_lines(points, minutes):
-        print(line)
-    print(f"матрица записана: {path}")
+    unknown = " (у региона с ошибкой часть запросов тоже ушла)" if failed else ""
+    print(
+        f"посчитано регионов: {computed}, пропущено: {skipped}, с ошибкой: {failed}, "
+        f"запросов потрачено: {spent}{unknown}"
+    )
+    if untouched:
+        print(f"не тронуто регионов: {untouched} — посчитанное осталось на диске, запустите ещё раз")
     print(DO_NOT_COMMIT)
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

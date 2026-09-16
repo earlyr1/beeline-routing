@@ -34,7 +34,7 @@ def make_client(tmp_path, bundle=None, geocoder=None, **limits):
     settings = Settings(
         data_dir=tmp_path,
         cache_path=tmp_path / "cache.sqlite",
-        transit_matrix_path=tmp_path / "transit_matrix.json",
+        transit_dir=tmp_path / "transit",
         osrm_url=None,
         yandex_maps_api_key="test-key",
         llm_base_url=None,

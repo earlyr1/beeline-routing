@@ -1,12 +1,15 @@
-"""Время на общественном транспорте от 2ГИС: клиент Distance Matrix API и локальный файл матрицы.
+"""Время на общественном транспорте от 2ГИС: клиент Distance Matrix API и локальные файлы матриц.
 
 Наша встроенная модель считает общественный транспорт грубо: расстояние по прямой ×1.3 при 15 км/ч плюс 10 минут
 ожидания, без расписаний, без метро и без зависимости от часа. 2ГИС считает по настоящим маршрутам, поэтому
-диспетчер может один раз посчитать матрицу демо-ключом (scripts/transit_matrix.py) и подложить её сервису.
+диспетчер может один раз посчитать матрицы демо-ключом (scripts/transit_matrix.py) и подложить их сервису.
 
-Условия 2ГИС запрещают хранить результаты: файл матрицы остаётся на машине диспетчера, в репозиторий он не
-попадает (data/transit_matrix.json в .gitignore) и после демо его можно удалить. Ключ берётся только из
-переменной окружения TWOGIS_API_KEY: он не пишется в файл, не логируется и не попадает в текст ошибки.
+У каждого региона своя матрица и свой файл <регион>.json в каталоге матриц (Settings.transit_dir): точки в файле
+идут в порядке задачи дня, поэтому матрица подходит только своему региону, и планировщик выбирает её по точкам.
+
+Условия 2ГИС запрещают хранить результаты: файлы остаются на машине диспетчера, в репозиторий они не попадают
+(data/transit/ в .gitignore) и после демо их можно удалить. Ключ берётся только из переменной окружения
+TWOGIS_API_KEY: он не пишется в файл, не логируется и не попадает в текст ошибки.
 """
 
 from __future__ import annotations
@@ -195,6 +198,7 @@ class TransitMatrix:
     points: list[list[float]]  # [[lat, lon], ...] с округлением до 6 знаков, порядок как в задаче
     minutes: list[list[int | None]]
     source: str = "2gis"
+    region: str = ""  # регион, для которого считали: он же имя файла в каталоге матриц
 
     def matches(self, points: Sequence[LatLon]) -> bool:
         """Файл подходит задаче, только если точки те же и идут в том же порядке."""
@@ -211,11 +215,22 @@ class TransitMatrix:
 
 
 def build_transit_matrix(
-    points: Sequence[LatLon], minutes: Sequence[Sequence[int | None]], departure: str
+    points: Sequence[LatLon],
+    minutes: Sequence[Sequence[int | None]],
+    departure: str,
+    region: str = "",
 ) -> TransitMatrix:
     return TransitMatrix(
-        departure=departure, points=points_key(points), minutes=[list(row) for row in minutes]
+        departure=departure,
+        points=points_key(points),
+        minutes=[list(row) for row in minutes],
+        region=region,
     )
+
+
+def transit_matrix_path(directory: Path, region: str) -> Path:
+    """Файл матрицы региона в каталоге матриц: у каждого региона свой, иначе они затирают друг друга."""
+    return Path(directory) / f"{region}.json"
 
 
 def save_transit_matrix(matrix: TransitMatrix, path: Path) -> None:
@@ -223,6 +238,7 @@ def save_transit_matrix(matrix: TransitMatrix, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "source": matrix.source,
+        "region": matrix.region,
         "departure": matrix.departure,
         "points": matrix.points,
         "minutes": matrix.minutes,
@@ -256,4 +272,19 @@ def load_transit_matrix(path: Path) -> TransitMatrix | None:
         points=rows,
         minutes=cells,
         source=str(data.get("source") or "2gis"),
+        region=str(data.get("region") or ""),
     )
+
+
+def load_transit_matrices(directory: Path) -> list[TransitMatrix]:
+    """Все матрицы каталога, по файлу на регион, в порядке имён файлов.
+
+    Каталога нет, файл не читается или формат не тот — такой файл просто пропускается: сервис посчитает эти
+    регионы встроенной моделью, как до 2ГИС. Ошибкой это не считается.
+    """
+    try:
+        paths = sorted(Path(directory).glob("*.json"))
+    except OSError:
+        return []
+    matrices = (load_transit_matrix(path) for path in paths)
+    return [matrix for matrix in matrices if matrix is not None]
