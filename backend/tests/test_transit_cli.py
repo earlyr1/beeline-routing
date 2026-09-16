@@ -154,9 +154,9 @@ def test_plan_for_all_regions_is_ordered_by_size_and_counts_the_total(tmp_path, 
     # Дешёвый регион первым: если ключ упрётся в лимит, потеряно будет меньше.
     assert plan_regions(out) == ["малый", "средний", "большой"]
     assert "точек: 3" in out and "точек: 5" in out and "точек: 26" in out
-    # 3 и 5 точек — один блок и один запрос, 26 точек — четыре блока 25×25.
+    # 3 и 5 точек — один блок и один запрос, 26 точек — три блока 10×10 и девять запросов.
     total = next(line for line in out.splitlines() if line.startswith("итого"))
-    assert "запросов: 6" in total and "1000" in total and "0.6" in total
+    assert "запросов: 11" in total and "1000" in total and "1.1" in total
     assert "минут" in total
     assert not (tmp_path / "transit").exists()
 

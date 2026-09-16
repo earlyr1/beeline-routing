@@ -28,15 +28,21 @@ from app.geo.osrm import LatLon
 
 TRANSIT_URL = "https://routing.api.2gis.com/get_dist_matrix"
 API_VERSION = "2.0"
-# 2ГИС берёт не больше 25 точек с каждой стороны запроса, поэтому матрица считается блоками 25×25.
-MAX_BLOCK = 25
-# Лимиты демо-ключа 2ГИС: 10 запросов и 1000 элементов в минуту останавливают выдачу, 1000 запросов
-# в месяц блокируют ключ. Блок 25×25 — это 625 элементов, поэтому шлём не больше одного запроса
-# в минуту: так минутные лимиты не задеваются, даже если они считаются по календарной минуте.
+# Демо-ключ 2ГИС принимает матрицу не больше 10×10 (источники × назначения): на больший запрос он отвечает
+# «permissible dimension of the matrix is exceeded», поэтому матрица считается блоками 10×10.
+MAX_BLOCK = 10
+# Лимиты демо-ключа: 10 запросов и 1000 элементов в минуту останавливают выдачу, 1000 запросов в месяц
+# блокируют ключ. Запрос 10×10 — до 100 элементов, так что оба минутных лимита означают 10 запросов в минуту.
+# Пауза 7.5 с даёт не больше 9 запросов в любой минуте, в том числе календарной: 900 элементов с запасом.
 REQUESTS_PER_MINUTE = 10
 ELEMENTS_PER_MINUTE = 1000
 REQUESTS_PER_MONTH = 1000
-DEFAULT_PAUSE_S = 61.0
+DEFAULT_PAUSE_S = 7.5
+# Если ключ всё же упёрся в минутный лимит (ответ 429), ждём минуту и повторяем тот же запрос: иначе сбой
+# на середине большого региона сжёг бы все его уже потраченные запросы.
+RATE_LIMIT_STATUS = 429
+RATE_LIMIT_WAIT_S = 61.0
+RATE_LIMIT_RETRIES = 3
 KEY_ENV = "TWOGIS_API_KEY"
 
 # Форма запроса и ответа Distance Matrix API 2ГИС собрана в одном месте. Имена полей тот, кто запускает расчёт,
@@ -122,7 +128,7 @@ def _element_minutes(route: dict) -> int | None:
 
 
 class TransitClient:
-    """Матрица времени на общественном транспорте от 2ГИС блоками 25×25 точек."""
+    """Матрица времени на общественном транспорте от 2ГИС блоками 10×10 точек."""
 
     def __init__(
         self,
@@ -196,6 +202,13 @@ class TransitClient:
         response = self._client.post(
             TRANSIT_URL, params={"key": self._key, "version": API_VERSION}, json=body
         )
+        for _ in range(RATE_LIMIT_RETRIES):
+            if response.status_code != RATE_LIMIT_STATUS:
+                break
+            self._sleep(RATE_LIMIT_WAIT_S)
+            response = self._client.post(
+                TRANSIT_URL, params={"key": self._key, "version": API_VERSION}, json=body
+            )
         if response.status_code != 200:
             raise TransitError(_failure(response))
         try:

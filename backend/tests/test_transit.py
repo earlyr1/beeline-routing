@@ -13,6 +13,9 @@ from app.geo.transit import (
     DEFAULT_PAUSE_S,
     ELEMENTS_PER_MINUTE,
     MAX_BLOCK,
+    RATE_LIMIT_RETRIES,
+    RATE_LIMIT_WAIT_S,
+    REQUESTS_PER_MINUTE,
     TRANSIT_REQUEST,
     TransitClient,
     TransitError,
@@ -30,7 +33,7 @@ from tests.planning_helpers import context, day_engineers, day_requests, new_ses
 
 KEY = "демо-ключ-2гис"
 POINTS = [at(0, 0), at(3, 0), at(0, 4)]
-MANY = [at(k, 0) for k in range(60)]  # 3 блока: 25 + 25 + 10
+MANY = [at(k, 0) for k in range(60)]  # 6 блоков по 10 точек
 
 
 def _rows(body: dict, seconds: int = 600) -> list[dict]:
@@ -95,7 +98,7 @@ def test_departure_is_the_next_monday_in_the_future_with_the_moscow_offset():
     assert datetime.fromisoformat(departure_timestamp("13:00")).date() > date.today()
 
 
-def test_points_are_split_into_blocks_of_25_with_a_call_per_block_pair():
+def test_points_are_split_into_blocks_of_10_with_a_call_per_block_pair():
     calls = []
 
     def handler(request):
@@ -106,9 +109,10 @@ def test_points_are_split_into_blocks_of_25_with_a_call_per_block_pair():
 
     minutes = _client(handler).matrix(MANY, "13:00")
 
-    assert MAX_BLOCK == 25
-    assert len(calls) == 9
-    assert sorted(calls) == sorted([(a, b) for a in (25, 25, 10) for b in (25, 25, 10)])
+    # Демо-ключ 2ГИС принимает матрицу не больше 10×10: «permissible dimension of the matrix is exceeded».
+    assert MAX_BLOCK == 10
+    assert len(calls) == 36
+    assert all(sources <= 10 and targets <= 10 for sources, targets in calls)
     assert sum(sources * targets for sources, targets in calls) == 60 * 60
     assert len(minutes) == 60 and all(len(row) == 60 for row in minutes)
     assert minutes[59][0] == 10 and minutes[0][59] == 10 and minutes[30][31] == 10
@@ -128,12 +132,43 @@ def test_client_sleeps_between_calls_and_reports_progress():
     )
     client.matrix(MANY[:30], "13:00", progress=lambda done, total: steps.append((done, total)))
 
-    # Блок 25×25 — 625 элементов, минутный лимит 1000: один запрос в минуту в него укладывается.
-    assert DEFAULT_PAUSE_S > 60.0 and MAX_BLOCK * MAX_BLOCK <= ELEMENTS_PER_MINUTE
+    # В любой минуте, в том числе календарной, запросов и элементов не больше минутных лимитов ключа.
+    worst_requests = int(60 // DEFAULT_PAUSE_S) + 1
+    assert worst_requests <= REQUESTS_PER_MINUTE
+    assert worst_requests * MAX_BLOCK * MAX_BLOCK <= ELEMENTS_PER_MINUTE
     assert TransitClient(KEY).pause_s == DEFAULT_PAUSE_S
-    # 30 точек: 2 блока, 4 запроса и 3 паузы между ними, перед первым запросом паузы нет.
-    assert pauses == [0.5, 0.5, 0.5]
-    assert steps == [(1, 4), (2, 4), (3, 4), (4, 4)]
+    # 30 точек: 3 блока, 9 запросов и 8 пауз между ними, перед первым запросом паузы нет.
+    assert pauses == [0.5] * 8
+    assert steps == [(done, 9) for done in range(1, 10)]
+
+
+def test_rate_limit_answer_waits_and_retries_the_same_request():
+    answers = [httpx.Response(429, text="Too Many Requests")]
+    pauses = []
+
+    def handler(request):
+        return answers.pop(0) if answers else _ok(json.loads(request.content))
+
+    client = TransitClient(
+        KEY, client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=pauses.append
+    )
+    minutes = client.matrix(POINTS, "13:00")
+
+    # Минутная остановка ключа не рушит регион: ждём и повторяем тот же запрос.
+    assert pauses == [RATE_LIMIT_WAIT_S] and minutes[0][1] == 10
+
+
+def test_rate_limit_that_does_not_pass_becomes_transit_error():
+    def handler(request):
+        return httpx.Response(429, text="Too Many Requests")
+
+    pauses = []
+    client = TransitClient(
+        KEY, client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=pauses.append
+    )
+    with pytest.raises(TransitError, match="429"):
+        client.matrix(POINTS, "13:00")
+    assert pauses == [RATE_LIMIT_WAIT_S] * RATE_LIMIT_RETRIES
 
 
 def test_http_error_becomes_transit_error_without_the_key():

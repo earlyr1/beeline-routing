@@ -74,7 +74,7 @@ def matrix_points(bundle: Bundle) -> list[LatLon]:
 
 
 def cost(count: int) -> tuple[int, int]:
-    """Сколько запросов и элементов матрицы стоит расчёт: блоки не больше 25 точек с каждой стороны."""
+    """Сколько запросов и элементов матрицы стоит расчёт: блоки не больше 10 точек с каждой стороны."""
     return len(split_blocks(count, MAX_BLOCK)) ** 2, count * count
 
 
