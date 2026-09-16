@@ -10,6 +10,7 @@ from app.domain.enums import Transport
 from app.geo.matrix import BaseMatrix, TrafficProfile, TravelModel, TravelTimes
 from app.geo.transit import (
     DEFAULT_PAUSE_S,
+    ELEMENTS_PER_MINUTE,
     MAX_BLOCK,
     TRANSIT_REQUEST,
     TransitClient,
@@ -112,7 +113,8 @@ def test_client_sleeps_between_calls_and_reports_progress():
     )
     client.matrix(MANY[:30], "13:00", progress=lambda done, total: steps.append((done, total)))
 
-    assert DEFAULT_PAUSE_S == 0.2
+    # Блок 25×25 — 625 элементов, минутный лимит 1000: один запрос в минуту в него укладывается.
+    assert DEFAULT_PAUSE_S > 60.0 and MAX_BLOCK * MAX_BLOCK <= ELEMENTS_PER_MINUTE
     assert TransitClient(KEY).pause_s == DEFAULT_PAUSE_S
     # 30 точек: 2 блока, 4 запроса и 3 паузы между ними, перед первым запросом паузы нет.
     assert pauses == [0.5, 0.5, 0.5]

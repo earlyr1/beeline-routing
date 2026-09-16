@@ -15,6 +15,7 @@ TRANSIT_MATRIX_PATH), и сервис при следующем старте б�
 from __future__ import annotations
 
 import argparse
+import math
 import os
 import statistics
 import sys
@@ -28,8 +29,11 @@ from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_
 from app.geo.osrm import LatLon
 from app.geo.transit import (
     DEFAULT_PAUSE_S,
+    ELEMENTS_PER_MINUTE,
     KEY_ENV,
     MAX_BLOCK,
+    REQUESTS_PER_MINUTE,
+    REQUESTS_PER_MONTH,
     TransitClient,
     TransitError,
     build_transit_matrix,
@@ -39,11 +43,10 @@ from app.geo.transit import (
 from app.ingest.bundle import load_bundle
 from app.settings import Settings
 
-FREE_DEMO_ELEMENTS = 1000
 NO_KEY = (
     f"Нужен ключ 2ГИС в переменной окружения {KEY_ENV}.\n"
     "Демо-ключ на Distance Matrix API запрашивается в кабинете 2ГИС: https://dev.2gis.ru/order\n"
-    f"В демо-пакете {FREE_DEMO_ELEMENTS} элементов матрицы — сначала посчитайте расход флагом --dry-run."
+    "Сначала посчитайте расход и время флагом --dry-run: у демо-ключа месячный лимит запросов."
 )
 DO_NOT_COMMIT = (
     "Файл матрицы коммитить нельзя: условия 2ГИС запрещают хранить результаты. "
@@ -128,8 +131,15 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         f"регион {args.region}, выезд {departure}: точек: {len(points)}, запросов: {requests}, элементов: {elements}"
     )
     if args.dry_run:
-        enough = "хватит" if elements <= FREE_DEMO_ELEMENTS else "не хватит"
-        print(f"демо-пакет 2ГИС — {FREE_DEMO_ELEMENTS} элементов: {enough}")
+        print(
+            f"лимиты демо-ключа: {REQUESTS_PER_MINUTE} запросов и {ELEMENTS_PER_MINUTE} элементов в минуту, "
+            f"{REQUESTS_PER_MONTH} запросов в месяц"
+        )
+        print(
+            f"темп: пауза {args.pause:.0f} с между запросами, расчёт займёт около "
+            f"{math.ceil((requests - 1) * args.pause / 60)} мин"
+        )
+        print(f"месячный лимит: уйдёт {requests} запросов из {REQUESTS_PER_MONTH}")
         print("Пробный расчёт: в сеть не ходили, файл не записан.")
         return 0
 
