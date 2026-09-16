@@ -1,6 +1,7 @@
 """Время на общественном транспорте от 2ГИС: клиент, файл матрицы и подстановка в планировщик. Всё без сети."""
 
 import json
+import math
 from datetime import date, datetime, timedelta
 
 import httpx
@@ -21,6 +22,7 @@ from app.geo.transit import (
     RATE_LIMIT_RETRIES,
     RATE_LIMIT_WAIT_S,
     REQUESTS_PER_MINUTE,
+    SNAP_RADIUS_KM,
     TRANSIT_REQUEST,
     TransitClient,
     TransitError,
@@ -400,6 +402,53 @@ def test_lookup_leaves_a_pair_without_a_route_to_the_model():
     assert travel.minutes(1, 0, Transport.PUBLIC, slot_min=0) == 13
 
 
+def test_lookup_snaps_a_point_to_the_nearest_matrix_point_within_150_m():
+    matrix = build_transit_matrix(POINTS, EAST, "13:00", region="east")
+    assert SNAP_RADIUS_KM == 0.15
+
+    # Геокодер дал тот же адрес на 30 и на 90 метров в стороне, по широте и по долготе: минуты те же, из 2ГИС.
+    for dx, dy in ((0.03, 0), (0, -0.03), (0.09, 0), (0, 0.09), (-0.06, 0.06)):
+        moved = at(3 + dx, dy)
+        lookup = TransitLookup([POINTS[0], moved], [matrix])
+        assert lookup.minutes(0, 1) == 12 and lookup.minutes(1, 0) == 13
+        assert lookup.snapped == 2 and lookup.max_offset_km == pytest.approx(math.hypot(dx, dy), abs=0.002)
+    # Граница радиуса: 145 м — ещё та же точка, 155 м — уже новая, её пары считает модель.
+    assert TransitLookup([POINTS[0], at(3.145, 0)], [matrix]).minutes(0, 1) == 12
+    beyond = TransitLookup([POINTS[0], at(3.155, 0)], [matrix])
+    assert beyond.minutes(0, 1) is None and beyond.snapped == 1 and beyond.covered == 0
+
+
+def test_lookup_takes_the_nearest_of_close_matrix_points_and_the_smallest_offset_among_matrices():
+    # В матрице две точки в 100 м друг от друга с разными минутами до третьей.
+    near = [at(0, 0), at(0.1, 0), at(5, 0)]
+    matrix = build_transit_matrix(near, [[0, 2, 30], [2, 0, 40], [31, 41, 0]], "13:00", region="east")
+    lookup = TransitLookup([at(0.07, 0), at(5, 0)], [matrix])
+    assert lookup.minutes(0, 1) == 40 and lookup.minutes(1, 0) == 41
+
+    # Точка есть в двух матрицах: берётся та, где пара привязалась ближе.
+    first = build_transit_matrix([at(0.1, 0), at(5, 0)], [[0, 50], [51, 0]], "13:00", region="first")
+    second = build_transit_matrix([at(0, 0), at(5, 0)], [[0, 60], [61, 0]], "13:00", region="second")
+    assert TransitLookup([at(0.02, 0), at(5, 0)], [first, second]).minutes(0, 1) == 60
+    assert TransitLookup([at(0.08, 0), at(5, 0)], [first, second]).minutes(0, 1) == 50
+
+
+def test_two_day_points_at_one_matrix_point_are_left_to_the_model_not_zero():
+    # Две заявки по разные стороны от точки матрицы, 120 м между ними: 2ГИС дал бы 0, модель — пешком 2 минуты.
+    matrix = build_transit_matrix(POINTS, EAST, "13:00", region="east")
+    lookup = TransitLookup([at(-0.06, 0), at(0.06, 0), POINTS[1]], [matrix])
+    assert lookup.minutes(0, 1) is None and lookup.minutes(1, 0) is None
+    assert lookup.minutes(0, 2) == 12 and lookup.minutes(1, 2) == 12
+    base = BaseMatrix(
+        road_km=[[0.0, 0.16, 3.0], [0.16, 0.0, 3.0], [3.0, 3.0, 0.0]],
+        car_min=[[0.0, 1.0, 9.0], [1.0, 0.0, 9.0], [9.0, 9.0, 0.0]],
+        straight_km=[[0.0, 0.12, 3.0], [0.12, 0.0, 3.0], [3.0, 3.0, 0.0]],
+        source="osrm",
+    )
+    travel = TravelTimes(base, TravelModel(), TrafficProfile({}), transit=lookup)
+    # 120 м ×1.3 при 5 км/ч — 1.9 минуты.
+    assert travel.minutes(0, 1, Transport.PUBLIC, slot_min=0) == 2
+
+
 def test_make_problem_takes_known_pairs_from_2gis_and_pairs_with_a_new_point_from_the_model():
     requests = [req("R1", 5, 0, "10:00", "12:00"), req("R2", 0, 5, "10:00", "12:00")]
     engineers = [eng("E1", transport=Transport.PUBLIC)]
@@ -483,3 +532,29 @@ def test_settings_and_build_deps_take_the_matrices_from_the_directory(tmp_path):
         {"DATA_DIR": str(tmp_path), "TRANSIT_MATRIX_DIR": str(tmp_path / "свой-каталог")}
     )
     assert moved.transit_dir == tmp_path / "свой-каталог"
+
+
+def test_day_start_warns_when_the_region_matrix_does_not_know_every_point(caplog):
+    requests, engineers = day_requests(), day_engineers()
+    points = _points(requests, engineers)
+    minutes = [[0 if i == j else 10 for j in range(len(points))] for i in range(len(points))]
+    full = build_transit_matrix(points, minutes, "13:00", region="t")
+
+    with caplog.at_level("WARNING", logger="app.planning.session"):
+        new_session(ctx=context(transit=[full]))
+    assert caplog.records == []
+
+    # Матрица посчитана без последней заявки: так выглядит новый адрес или матрица от другой сборки бандла.
+    stale = build_transit_matrix(points[:-1], [row[:-1] for row in minutes[:-1]], "13:00", region="t")
+    with caplog.at_level("WARNING", logger="app.planning.session"):
+        new_session(ctx=context(transit=[stale]))
+    assert len(caplog.records) == 1
+    message = caplog.records[0].getMessage()
+    assert f"привязалось {len(points) - 1} из {len(points)}" in message and "--region t" in message
+
+    # Матрица чужого региона дню не обещана: молчим.
+    caplog.clear()
+    other = build_transit_matrix(points[:-1], [row[:-1] for row in minutes[:-1]], "13:00", region="east")
+    with caplog.at_level("WARNING", logger="app.planning.session"):
+        new_session(ctx=context(transit=[other]))
+    assert caplog.records == []

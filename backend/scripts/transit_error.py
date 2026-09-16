@@ -8,6 +8,10 @@
 берутся из самого сервиса: TravelTimes и TravelModel без матриц 2ГИС и без OSRM, расстояние по прямой. В сеть скрипт
 не ходит. Матрицы локальные и не коммитятся: условия 2ГИС запрещают хранить результаты.
 
+В конце отчёта — привязка точек бандлов из data/bundles к матрицам своих регионов (радиус 150 м): сколько точек
+нашлось, самое большое смещение и доля пар дня, которые сервис возьмёт из 2ГИС. На неизменённом бандле привязываются
+все точки со смещением 0 м; если нет, матрица посчитана для другой сборки бандла.
+
 Ошибка пары — модель минус 2ГИС: плюс значит, что модель считает дорогу дольше, чем 2ГИС. Пары без маршрута 2ГИС
 (в том числе дальше 50 км, их демо-ключ не считает) и пары с нулём минут у 2ГИС (одна и та же точка) не считаются.
 """
@@ -23,7 +27,8 @@ from dataclasses import dataclass
 
 from app.domain.enums import Transport
 from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_matrix
-from app.geo.transit import TransitMatrix, load_transit_matrices
+from app.geo.transit import SNAP_RADIUS_KM, TransitLookup, TransitMatrix, load_transit_matrices
+from app.ingest.bundle import load_bundle
 from app.settings import Settings
 
 # Полосы расстояния по прямой между точками пары, км: нижняя граница входит, верхняя нет.
@@ -234,6 +239,38 @@ def report_lines(matrices: Sequence[TransitMatrix], model: TravelModel | None = 
     ]
 
 
+def coverage_lines(settings: Settings, matrices: Sequence[TransitMatrix]) -> list[str]:
+    """Привязка точек каждого бандла к матрицам его региона: точки, смещение и доля пар из 2ГИС."""
+    rows: list[tuple[str, ...]] = [("регион", "точек", "привязано", "смещение, м", "пар из 2ГИС")]
+    for path in sorted(settings.bundles_dir.glob("*/bundle.json")):
+        region = path.parent.name
+        own = [matrix for matrix in matrices if matrix.region == region]
+        if not own:
+            continue
+        bundle = load_bundle(path)
+        located = [r for r in bundle.requests if r.lat is not None and r.lon is not None]
+        points = [(e.start_lat, e.start_lon) for e in bundle.engineers] + [(r.lat, r.lon) for r in located]
+        lookup = TransitLookup(points, own)
+        pairs = len(points) * (len(points) - 1)
+        share = 100.0 * lookup.covered / pairs if pairs else 0.0
+        rows.append(
+            (
+                region,
+                str(len(points)),
+                str(lookup.snapped),
+                f"{lookup.max_offset_km * 1000:.0f}",
+                f"{lookup.covered} ({share:.0f}%)",
+            )
+        )
+    if len(rows) == 1:
+        return []
+    return [
+        "",
+        f"Привязка точек бандлов к матрицам своего региона, радиус {SNAP_RADIUS_KM * 1000:.0f} м:",
+        *table(rows),
+    ]
+
+
 def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) -> int:
     argparse.ArgumentParser(
         description="Сравнивает встроенную модель общественного транспорта с локальными матрицами 2ГИС"
@@ -243,7 +280,7 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
     if not matrices:
         print(NO_MATRICES.format(directory=settings.transit_dir), file=sys.stderr)
         return 2
-    for line in report_lines(matrices):
+    for line in [*report_lines(matrices), *coverage_lines(settings, matrices)]:
         print(line)
     return 0
 

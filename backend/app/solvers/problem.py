@@ -166,9 +166,9 @@ def make_problem(
         if (r.lat is None or r.lon is None) and r.status == RequestStatus.ACTIVE
     ]
     points = [(e.start_lat, e.start_lon) for e in engineers] + [(r.lat, r.lon) for r in located]
-    # Минуты 2ГИС берутся по парам: точка узнаётся по координатам, и пара из одной матрицы идёт из 2ГИС, даже если
-    # в дне появилась срочная заявка или сменился адрес. Пары с новой точкой, как и день, которого нет ни в одной
-    # матрице, считает встроенная модель, и это не ошибка.
+    # Минуты 2ГИС берутся по парам: точка дня привязывается к ближайшей точке матрицы в 150 м, и пара из одной матрицы
+    # идёт из 2ГИС, даже если в дне появилась срочная заявка или сменился адрес. Пары с новой точкой, как и день,
+    # которого нет ни в одной матрице, считает встроенная модель, и это не ошибка.
     lookup = TransitLookup(points, transit) if transit else None
     travel = TravelTimes(
         build_base_matrix(points, model, osrm=osrm, cache=cache),

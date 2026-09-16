@@ -2,9 +2,12 @@
 
 import pytest
 
+from app.domain.models import Bundle
 from app.geo.transit import build_transit_matrix, save_transit_matrix, transit_matrix_path
+from app.ingest.bundle import save_bundle
 from scripts import transit_error as cli
 from tests.helpers import at
+from tests.planning_helpers import OFFICE, day_engineers, day_requests
 
 # 5 км по прямой: модель сервиса даёт поездку 22.5 + 2.8·5 = 36.5, то есть 37 минут. Третья точка в 60 км:
 # 2ГИС её пар не считал.
@@ -69,3 +72,25 @@ def test_without_matrices_the_script_explains_in_russian(tmp_path, capsys):
     captured = capsys.readouterr()
     assert code != 0 and captured.out == ""
     assert "нет ни одной матрицы 2ГИС" in captured.err and "scripts.transit_matrix" in captured.err
+
+
+def test_coverage_shows_how_bundle_points_snap_to_the_matrix_of_their_region(tmp_path, capsys):
+    requests, engineers = day_requests(), day_engineers()
+    bundle = Bundle(region="east", office=OFFICE, requests=requests, engineers=engineers)
+    save_bundle(bundle, tmp_path / "bundles" / "east" / "bundle.json")
+    points = [(e.start_lat, e.start_lon) for e in engineers] + [(r.lat, r.lon) for r in requests]
+    # Последняя заявка в матрице сдвинута на 50 м: привязка находит её, смещение 50 м.
+    lat, lon = points[-1]
+    shifted = [*points[:-1], (lat + 0.05 / 111.2, lon)]
+    size = len(points)
+    minutes = [[0 if i == j else 20 for j in range(size)] for i in range(size)]
+    save(tmp_path, "east", points=shifted, minutes=minutes)
+
+    code = cli.main([], env={"DATA_DIR": str(tmp_path)})
+
+    out = capsys.readouterr().out
+    assert code == 0 and "радиус 150 м" in out
+    coverage = out.split("Привязка точек бандлов")[1].splitlines()
+    row = next(line for line in coverage if line.startswith("east")).split()
+    # Инженеры стартуют из одной точки офиса: пара между ними — одна точка матрицы, её считает формула.
+    assert row[:4] == ["east", str(size), str(size), "50"]

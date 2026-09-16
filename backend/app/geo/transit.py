@@ -5,8 +5,9 @@
 диспетчер может один раз посчитать матрицы демо-ключом (scripts/transit_matrix.py) и подложить их сервису.
 
 У каждого региона своя матрица и свой файл <регион>.json в каталоге матриц (Settings.transit_dir). Планировщик
-берёт минуты по парам точек (TransitLookup): точка узнаётся по координатам, поэтому после срочной заявки или смены
-адреса пары прежних точек остаются из 2ГИС, а пары с новой точкой считает встроенная модель.
+берёт минуты по парам точек (TransitLookup): точка дня привязывается к ближайшей точке матрицы не дальше 150 м,
+поэтому ни порядок точек, ни метры расхождения геокодера не важны. После срочной заявки или смены адреса пары прежних
+точек остаются из 2ГИС, а пары с новой точкой, которой рядом в матрице нет, считает встроенная модель.
 
 Условия 2ГИС запрещают хранить результаты: файлы остаются на машине диспетчера, в репозиторий они не попадают
 (data/transit/ в .gitignore) и после демо их можно удалить. Ключ берётся только из переменной окружения
@@ -15,6 +16,7 @@ TWOGIS_API_KEY: он не пишется в файл, не логируется 
 
 from __future__ import annotations
 
+import bisect
 import json
 import math
 import time
@@ -297,30 +299,75 @@ class TransitMatrix:
         return float(value)
 
 
-class TransitLookup:
-    """Минуты 2ГИС между точками задачи, пара за парой: из матрицы, в которой лежат обе точки пары.
+# Точка дня берёт минуты ближайшей точки матрицы не дальше этого радиуса. Координаты одного адреса у геокодеров
+# расходятся на метры, клик по карте в точку файла не попадает, а дробные координаты не обязаны совпасть до знака.
+# По самим матрицам 2ГИС минуты у точек до 200 м друг от друга совпадают по медиане, p90 расхождения 3–4 минуты;
+# дальше ошибка растёт (200–400 м: медиана 2, p90 6). Пешую добавку за смещение не делаем: 2ГИС сам доводит пешком
+# до той же остановки, и добавка только ухудшает оценку (медиана расхождения с ней 0.7–2.5 минуты вместо 0).
+SNAP_RADIUS_KM = 0.15
+# Градус широты не короче 110.5 км: полоса широт поиска с запасом накрывает радиус.
+_KM_PER_LAT_DEGREE = 110.5
 
-    Точка узнаётся по координатам с округлением до 6 знаков, а не по месту в списке, поэтому матрице не нужно
-    совпадать с задачей целиком: после срочной заявки или смены адреса список точек дня другой, а пары прежних точек
-    по-прежнему берутся из 2ГИС. Если хотя бы одной точки пары нет в матрице (новая заявка, новый адрес), точки лежат
-    в матрицах разных регионов или 2ГИС не нашёл маршрут, минут нет, и время считает встроенная модель.
+
+@dataclass(frozen=True)
+class Snap:
+    """Привязка точки дня к точке матрицы: все места этой точки в файле и смещение до неё."""
+
+    key: tuple[float, float]  # координаты точки матрицы с округлением до 6 знаков
+    places: tuple[int, ...]  # места точки в файле: одни координаты бывают в матрице несколько раз
+    offset_km: float
+
+
+class _MatrixPoints:
+    """Точки одной матрицы, отсортированные по широте: ближайшая ищется только в полосе широт радиуса."""
+
+    def __init__(self, matrix: TransitMatrix) -> None:
+        self._order = sorted(range(len(matrix.points)), key=lambda index: matrix.points[index][0])
+        self._lats = [matrix.points[index][0] for index in self._order]
+        self._points = matrix.points
+        self._places: dict[tuple[float, float], list[int]] = {}
+        for index, (lat, lon) in enumerate(matrix.points):
+            self._places.setdefault(point_key(lat, lon), []).append(index)
+
+    def snap(self, lat: float, lon: float, radius_km: float) -> Snap | None:
+        """Ближайшая точка матрицы не дальше radius_km; из равных по расстоянию — первая в файле."""
+        band = radius_km / _KM_PER_LAT_DEGREE
+        low = bisect.bisect_left(self._lats, lat - band)
+        high = bisect.bisect_right(self._lats, lat + band)
+        best: tuple[float, int] | None = None
+        for index in self._order[low:high]:
+            distance = haversine_km(lat, lon, *self._points[index])
+            if distance <= radius_km and (best is None or (distance, index) < best):
+                best = (distance, index)
+        if best is None:
+            return None
+        key = point_key(*self._points[best[1]])
+        return Snap(key=key, places=tuple(self._places[key]), offset_km=best[0])
+
+
+class TransitLookup:
+    """Минуты 2ГИС между точками задачи, пара за парой: из матрицы, к точкам которой привязались обе точки пары.
+
+    Точка дня привязывается в каждой матрице к ближайшей точке не дальше radius_km, а не ищется по месту в списке или
+    точному совпадению координат. Поэтому матрице не нужно совпадать с задачей целиком, а метры расхождения геокодера
+    не выбивают точку из 2ГИС. Минут нет, и время считает встроенная модель, если: рядом с одной из точек пары в
+    матрице ничего нет (новая заявка, новый адрес), точки привязались к матрицам разных регионов, обе привязались к
+    одной и той же точке матрицы (2ГИС дал бы 0 минут между разными местами) или 2ГИС не нашёл маршрут.
     """
 
-    def __init__(self, points: Sequence[LatLon], matrices: Sequence[TransitMatrix]) -> None:
+    def __init__(
+        self,
+        points: Sequence[LatLon],
+        matrices: Sequence[TransitMatrix],
+        radius_km: float = SNAP_RADIUS_KM,
+    ) -> None:
         self._matrices = list(matrices)
-        # Места точки в каждой матрице. Одни координаты бывают в файле несколько раз (старт инженера по адресу
-        # его заявки), а ячейки у повторов не всегда равны: повторы могли попасть в разные группы близких точек,
-        # и у одного из них маршрута нет, или 2ГИС на разных запросах ответил на минуту иначе. Поэтому пара
-        # перебирает все места точки.
-        self._places: list[dict[tuple[float, float], list[int]]] = []
-        for matrix in self._matrices:
-            place: dict[tuple[float, float], list[int]] = {}
-            for index, (lat, lon) in enumerate(matrix.points):
-                place.setdefault(point_key(lat, lon), []).append(index)
-            self._places.append(place)
-        nodes = [point_key(lat, lon) for lat, lon in points]
+        indexes = [_MatrixPoints(matrix) for matrix in self._matrices]
+        # Привязка каждой точки дня в каждой матрице, None — рядом в этой матрице ничего нет.
+        self._snaps = [[index.snap(lat, lon, radius_km) for index in indexes] for lat, lon in points]
         # Минуты считаются сразу на все пары: солверы спрашивают время много раз, а точек в дне сотня-другая.
-        self._minutes = [[self._pair(source, target) for target in nodes] for source in nodes]
+        size = len(self._snaps)
+        self._minutes = [[self._pair(i, j) for j in range(size)] for i in range(size)]
         # Сколько упорядоченных пар разных узлов задачи берут минуты из 2ГИС.
         self.covered = sum(
             1
@@ -328,16 +375,30 @@ class TransitLookup:
             for j, value in enumerate(row)
             if i != j and value is not None
         )
+        offsets = [min(snap.offset_km for snap in row if snap) for row in self._snaps if any(row)]
+        # Сколько точек дня привязалось хотя бы к одной матрице и самое большое смещение среди них.
+        self.snapped = len(offsets)
+        self.max_offset_km = max(offsets, default=0.0)
 
-    def _pair(self, source: tuple[float, float], target: tuple[float, float]) -> float | None:
-        """Первое число в ячейках пары: матрицы по порядку, внутри матрицы места точек по порядку."""
-        for matrix, place in zip(self._matrices, self._places, strict=True):
-            for i in place.get(source, ()):
-                for j in place.get(target, ()):
-                    value = matrix.minutes_at(i, j)
-                    if value is not None:
-                        return value
-        return None
+    def _pair(self, i: int, j: int) -> float | None:
+        """Число из матрицы с наименьшим смещением пары; внутри матрицы — первое число по местам точек."""
+        best: tuple[float, float] | None = None
+        for matrix, source, target in zip(self._matrices, self._snaps[i], self._snaps[j], strict=True):
+            if source is None or target is None or source.key == target.key:
+                continue
+            value = next(
+                (
+                    minutes
+                    for place in source.places
+                    for other in target.places
+                    if (minutes := matrix.minutes_at(place, other)) is not None
+                ),
+                None,
+            )
+            offset = source.offset_km + target.offset_km
+            if value is not None and (best is None or offset < best[0]):
+                best = (offset, value)
+        return best[1] if best is not None else None
 
     def minutes(self, i: int, j: int) -> float | None:
         """Минуты 2ГИС между узлами задачи i и j или None: пара не из одной матрицы или маршрута нет."""

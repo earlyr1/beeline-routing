@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -12,7 +13,7 @@ from app.domain.timeutil import fmt_hhmm
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.geo.osrm import OsrmClient
-from app.geo.transit import TransitMatrix
+from app.geo.transit import TransitLookup, TransitMatrix
 from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
@@ -44,6 +45,7 @@ EDITABLE_REQUEST_FIELDS = frozenset(
     }
 )
 _NOT_FOUND = GeoResult(None, None, "none", None)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -53,8 +55,8 @@ class PlanningContext:
     osrm: OsrmClient | None = None
     cache: KVCache | None = None
     # Матрицы времени на общественном транспорте от 2ГИС по регионам, если диспетчер посчитал их и положил
-    # файлы рядом. make_problem берёт из них минуты по парам точек: после срочной заявки пары прежних точек
-    # остаются из 2ГИС, а пары с новой точкой считает встроенная модель.
+    # файлы рядом. make_problem берёт из них минуты по парам точек, привязывая точку дня к ближайшей точке матрицы
+    # в 150 м: после срочной заявки пары прежних точек остаются из 2ГИС, а пары с новой точкой считает модель.
     transit: Sequence[TransitMatrix] = ()
     # Лимит OR-Tools на день без обеда и на перепланирование по событию.
     time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S
@@ -125,6 +127,31 @@ def _solve(problem: Problem, workload_level: int, time_limit_s: int) -> tuple[Pl
     return optimizer.solve(problem), FcfsSolver().solve(problem)
 
 
+def warn_stale_transit(region: str, problem: Problem, transit: Sequence[TransitMatrix]) -> None:
+    """Пишет в лог, если у региона дня есть матрица 2ГИС, а часть точек дня к ней не привязалась.
+
+    На известном файле региона привязываются все точки. Если нет, в дне новые адреса или матрица посчитана для
+    другой сборки бандла: такие пары молча уходят на формулу, поэтому диспетчеру стоит об этом знать.
+    """
+    own = [matrix for matrix in transit if matrix.region == region]
+    if not own:
+        return
+    points = [(e.start_lat, e.start_lon) for e in problem.engineers] + [
+        (r.lat, r.lon) for r in problem.requests
+    ]
+    lookup = TransitLookup(points, own)
+    if lookup.snapped < len(points):
+        logger.warning(
+            "2ГИС: к матрице региона %s привязалось %d из %d точек дня. Новые адреса или матрица устарела "
+            "(пересчитайте: python -m scripts.transit_matrix --region %s --force); пары остальных точек "
+            "считает формула.",
+            region,
+            lookup.snapped,
+            len(points),
+            region,
+        )
+
+
 def start_session(
     dataset_id: str,
     region: str,
@@ -139,6 +166,7 @@ def start_session(
 ) -> PlanningSession:
     """План всего дня с нуля: предподсчёт загрузки и пересборка дня. Лимит OR-Tools зависит от обеда."""
     problem = _day_problem(requests, engineers, ctx, workload_level, lunch_enabled)
+    warn_stale_transit(region, problem, ctx.transit)
     plan, baseline = _solve(problem, workload_level, ctx.day_time_limit_s(lunch_enabled))
     return PlanningSession(
         dataset_id=dataset_id,
