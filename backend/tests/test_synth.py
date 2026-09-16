@@ -315,7 +315,7 @@ def test_cancellation_time_is_deterministic_and_lands_before_the_window(cfg):
 
 
 def test_cancellation_time_never_starts_before_nine(cfg):
-    # Окно аварии 0:01–23:59 и любое окно до 09:00: отмена приходит ровно в 09:00.
+    # Окно аварии 0:01–23:59 и любое окно до 09:01: отмена приходит ровно в 09:01, сразу после начала шкалы дня.
     assert cancellation_time(cfg, "50104", 1) == CANCELLATION_EARLIEST
     assert cancellation_time(cfg, "50104", CANCELLATION_EARLIEST) == CANCELLATION_EARLIEST
     early = {cancellation_time(cfg, str(number), 600) for number in range(20)}

@@ -24,7 +24,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "84466",
@@ -42,7 +43,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "14416",
@@ -60,7 +62,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "68359",
@@ -78,7 +81,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "66944",
@@ -96,7 +100,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "52041",
@@ -114,7 +119,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "23807",
@@ -132,7 +138,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "60484",
@@ -150,7 +157,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "63591",
@@ -168,7 +176,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "53552",
@@ -186,7 +195,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "58066",
@@ -204,7 +214,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "2915",
@@ -222,7 +233,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "3566",
@@ -240,7 +252,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "68946",
@@ -258,7 +271,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "55454",
@@ -276,7 +290,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "35057",
@@ -294,7 +309,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "75745",
@@ -312,7 +328,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "65717",
@@ -330,7 +347,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "44117",
@@ -348,7 +366,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "76173",
@@ -366,7 +385,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "876",
@@ -384,7 +404,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "62011",
@@ -402,7 +423,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "57353",
@@ -420,7 +442,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "2245",
@@ -438,7 +461,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заявка на подключение"
+      "source_type_hd": "Заявка на подключение",
+      "needs_equipment": true
     },
     {
       "id": "14494",
@@ -456,7 +480,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "78920",
@@ -474,7 +499,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заявка на подключение"
+      "source_type_hd": "Заявка на подключение",
+      "needs_equipment": true
     },
     {
       "id": "78876",
@@ -492,7 +518,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "23094",
@@ -510,7 +537,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "79144",
@@ -528,7 +556,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заявка на подключение"
+      "source_type_hd": "Заявка на подключение",
+      "needs_equipment": true
     },
     {
       "id": "60141",
@@ -546,7 +575,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "79450",
@@ -564,7 +594,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "58129",
@@ -582,7 +613,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Заявка на подключение"
+      "source_type_hd": "Заявка на подключение",
+      "needs_equipment": true
     },
     {
       "id": "93798",
@@ -600,7 +632,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "89696",
@@ -618,7 +651,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "20362",
@@ -636,7 +670,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "40698",
@@ -654,7 +689,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Подключение",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "2427",
@@ -672,7 +708,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Дозаказ",
-      "source_type_hd": "Дозаказ оборудования"
+      "source_type_hd": "Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "51603",
@@ -690,7 +727,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Дозаказ",
-      "source_type_hd": "Заказ подключения/Дозаказ оборудования"
+      "source_type_hd": "Заказ подключения/Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "13404",
@@ -708,7 +746,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Дозаказ",
-      "source_type_hd": "Конвергенция абонента"
+      "source_type_hd": "Конвергенция абонента",
+      "needs_equipment": false
     },
     {
       "id": "72476",
@@ -726,7 +765,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Дозаказ",
-      "source_type_hd": "Дозаказ оборудования"
+      "source_type_hd": "Дозаказ оборудования",
+      "needs_equipment": true
     },
     {
       "id": "90989",
@@ -744,7 +784,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "7660",
@@ -762,7 +803,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "89067",
@@ -780,7 +822,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Работа с кабелем"
+      "source_type_hd": "Работа с кабелем",
+      "needs_equipment": false
     },
     {
       "id": "65268",
@@ -798,7 +841,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Работа с кабелем"
+      "source_type_hd": "Работа с кабелем",
+      "needs_equipment": false
     },
     {
       "id": "33880",
@@ -816,7 +860,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Низкая скорость"
+      "source_type_hd": "Низкая скорость",
+      "needs_equipment": false
     },
     {
       "id": "37590",
@@ -834,7 +879,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "33507",
@@ -852,7 +898,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "88209",
@@ -870,7 +917,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Низкая скорость"
+      "source_type_hd": "Низкая скорость",
+      "needs_equipment": false
     },
     {
       "id": "24482",
@@ -888,7 +936,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Рост ошибок на порту"
+      "source_type_hd": "Рост ошибок на порту",
+      "needs_equipment": false
     },
     {
       "id": "40111",
@@ -906,7 +955,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Работа с кабелем"
+      "source_type_hd": "Работа с кабелем",
+      "needs_equipment": false
     },
     {
       "id": "46199",
@@ -924,7 +974,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "75282",
@@ -942,7 +993,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Роутер. Замена техническим специалистом"
+      "source_type_hd": "Роутер. Замена техническим специалистом",
+      "needs_equipment": true
     },
     {
       "id": "63577",
@@ -960,7 +1012,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "7610",
@@ -978,7 +1031,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Переключение на Гбит/с"
+      "source_type_hd": "Переключение на Гбит/с",
+      "needs_equipment": false
     },
     {
       "id": "19216",
@@ -996,7 +1050,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "TVE/ENT. Замена приставки техником"
+      "source_type_hd": "TVE/ENT. Замена приставки техником",
+      "needs_equipment": true
     },
     {
       "id": "11872",
@@ -1014,7 +1069,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Рост ошибок на порту"
+      "source_type_hd": "Рост ошибок на порту",
+      "needs_equipment": false
     },
     {
       "id": "54422",
@@ -1032,7 +1088,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "IP-адрес 169..."
+      "source_type_hd": "IP-адрес 169...",
+      "needs_equipment": false
     },
     {
       "id": "4724",
@@ -1050,7 +1107,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Низкая скорость"
+      "source_type_hd": "Низкая скорость",
+      "needs_equipment": false
     },
     {
       "id": "11899",
@@ -1068,7 +1126,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Низкая скорость"
+      "source_type_hd": "Низкая скорость",
+      "needs_equipment": false
     },
     {
       "id": "60886",
@@ -1086,7 +1145,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Переключение на Гбит/с"
+      "source_type_hd": "Переключение на Гбит/с",
+      "needs_equipment": false
     },
     {
       "id": "32066",
@@ -1104,7 +1164,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "63894",
@@ -1122,7 +1183,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "IP-адрес 169..."
+      "source_type_hd": "IP-адрес 169...",
+      "needs_equipment": false
     },
     {
       "id": "64168",
@@ -1140,7 +1202,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "TVE/ENT. Замена приставки техником"
+      "source_type_hd": "TVE/ENT. Замена приставки техником",
+      "needs_equipment": true
     },
     {
       "id": "40919",
@@ -1158,7 +1221,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Рост ошибок на порту"
+      "source_type_hd": "Рост ошибок на порту",
+      "needs_equipment": false
     },
     {
       "id": "36961",
@@ -1176,7 +1240,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "12329",
@@ -1194,7 +1259,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Разрывы"
+      "source_type_hd": "Разрывы",
+      "needs_equipment": false
     },
     {
       "id": "95692",
@@ -1212,7 +1278,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "13583",
@@ -1230,7 +1297,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "3151",
@@ -1248,7 +1316,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Нет линка"
+      "source_type_hd": "Нет линка",
+      "needs_equipment": false
     },
     {
       "id": "45778",
@@ -1266,7 +1335,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "Рост ошибок на порту"
+      "source_type_hd": "Рост ошибок на порту",
+      "needs_equipment": false
     },
     {
       "id": "20055",
@@ -1284,7 +1354,8 @@
       "transport_required": null,
       "status": "active",
       "source_type_bk": "Локальная заявка",
-      "source_type_hd": "IP-адрес 169..."
+      "source_type_hd": "IP-адрес 169...",
+      "needs_equipment": false
     },
     {
       "id": "7258",
@@ -1302,7 +1373,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "78673",
@@ -1320,7 +1392,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "98998",
@@ -1338,7 +1411,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "32589",
@@ -1356,7 +1430,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "51774",
@@ -1374,7 +1449,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "90915",
@@ -1392,7 +1468,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "45243",
@@ -1410,7 +1487,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "81698",
@@ -1428,7 +1506,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "97168",
@@ -1446,7 +1525,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "65034",
@@ -1464,7 +1544,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "1287",
@@ -1482,7 +1563,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     },
     {
       "id": "31495",
@@ -1500,7 +1582,8 @@
       "transport_required": "car",
       "status": "active",
       "source_type_bk": "Глобальная проблема",
-      "source_type_hd": "Авария"
+      "source_type_hd": "Авария",
+      "needs_equipment": false
     }
   ],
   "engineers": [
@@ -1728,7 +1811,8 @@
         "transport_required": "car",
         "status": "active",
         "source_type_bk": "Глобальная проблема",
-        "source_type_hd": "Авария"
+        "source_type_hd": "Авария",
+        "needs_equipment": false
       },
       "request_id": null,
       "engineer_id": null,
@@ -2718,5 +2802,47 @@
       "3151: начало 20:18 позже окна до 14:00 на 378 мин",
       "20362: начало 21:10 позже окна до 16:00 на 310 мин"
     ]
-  }
+  },
+  "cancellations": [
+    {
+      "request_id": "23807",
+      "time": "09:01"
+    },
+    {
+      "request_id": "40111",
+      "time": "09:01"
+    },
+    {
+      "request_id": "58066",
+      "time": "09:01"
+    },
+    {
+      "request_id": "66944",
+      "time": "09:14"
+    },
+    {
+      "request_id": "2915",
+      "time": "09:15"
+    },
+    {
+      "request_id": "52041",
+      "time": "09:22"
+    },
+    {
+      "request_id": "60484",
+      "time": "10:06"
+    },
+    {
+      "request_id": "53552",
+      "time": "11:20"
+    },
+    {
+      "request_id": "63591",
+      "time": "11:23"
+    },
+    {
+      "request_id": "24482",
+      "time": "17:31"
+    }
+  ]
 }

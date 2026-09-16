@@ -13,18 +13,19 @@ from app.domain.models import Cancellation, Request
 from app.ingest.beeline_csv import RawFile
 from app.synth.config import SynthConfig
 
-# Раньше 09:00 отмены не приходят: день на шкале начинается с этого часа.
-CANCELLATION_EARLIEST = 9 * 60
+# Раньше 09:01 отмены не приходят: день на шкале начинается в 09:00, и часы после расчёта встают ровно туда.
+# Отмена ровно в 09:00 попала бы в план сразу, а утренний план должен содержать все заявки дня.
+CANCELLATION_EARLIEST = 9 * 60 + 1
 # Отмена приходит за 30–240 минут до начала окна: клиент успевает отказаться до выезда инженера.
 CANCELLATION_MIN_AHEAD = 30
 CANCELLATION_MAX_AHEAD = 240
 
 
 def cancellation_time(cfg: SynthConfig, request_id: str, window_start: int) -> int:
-    """Время отмены: начало окна минус 30–240 минут, но не раньше 09:00. Детерминировано по seed и номеру заявки.
+    """Время отмены: начало окна минус 30–240 минут, но не раньше 09:01. Детерминировано по seed и номеру заявки.
 
     Смены начинаются не раньше 10:00, а визит не начинается раньше своего окна, поэтому отмена всегда приходит
-    до того, как по заявке начнут работу. У окна аварии 0:01–23:59 время отмены — ровно 09:00.
+    до того, как по заявке начнут работу. У окна аварии 0:01–23:59 время отмены — ровно 09:01.
     """
     rng = random.Random(f"{cfg.seed}:cancellation:{request_id}")
     ahead = rng.randint(CANCELLATION_MIN_AHEAD, CANCELLATION_MAX_AHEAD)
