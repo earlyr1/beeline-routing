@@ -45,17 +45,20 @@ RATE_LIMIT_WAIT_S = 61.0
 RATE_LIMIT_RETRIES = 3
 KEY_ENV = "TWOGIS_API_KEY"
 
-# Форма запроса и ответа Distance Matrix API 2ГИС собрана в одном месте. Имена полей тот, кто запускает расчёт,
-# сверяет с официальной документацией https://docs.2gis.com/ru/api/navigation/distance-matrix/overview в момент
-# запуска: если API изменился, правится только этот словарь, остальной код имён полей не знает.
+# Форма запроса и ответа Distance Matrix API 2ГИС собрана в одном месте: если API изменится, правится только этот
+# словарь, остальной код имён полей не знает. Форма проверена живым запросом 16.09.2026: режим задаёт поле transport,
+# а виды транспорта — обязательный список public_transport_params.transport. С полем type 2ГИС отвечает 422
+# «type is invalid», без списка видов — 400 «public_transport_params is not found».
 TRANSIT_REQUEST = {
     "points": "points",  # тело запроса: список точек
     "lat": "lat",  # точка: широта
     "lon": "lon",  # точка: долгота
     "sources": "sources",  # тело запроса: индексы точек-источников в points
     "targets": "targets",  # тело запроса: индексы точек-назначений в points
-    "mode": "type",  # тело запроса: режим расчёта
+    "mode": "transport",  # тело запроса: режим расчёта
     "public_transport": "public_transport",  # значение режима: общественный транспорт
+    "params": "public_transport_params",  # тело запроса: настройки общественного транспорта
+    "kinds": "transport",  # настройки: какими видами транспорта можно ехать
     "departure": "start_time",  # тело запроса: время выезда, RFC 3339 со смещением часового пояса
     "routes": "routes",  # ответ: список элементов матрицы
     "source_id": "source_id",  # элемент ответа: индекс точки-источника в points
@@ -64,6 +67,21 @@ TRANSIT_REQUEST = {
     "status": "status",  # элемент ответа: удалось ли построить маршрут
     "ok": "OK",  # значение status для найденного маршрута
 }
+
+
+# Виды общественного транспорта Москвы, которыми может ехать инженер: всё городское, включая МЦК и МЦД.
+PUBLIC_TRANSPORT_KINDS = (
+    "bus",
+    "trolleybus",
+    "tram",
+    "shuttle_bus",
+    "metro",
+    "light_metro",
+    "monorail",
+    "suburban_train",
+    "mcc",
+    "mcd",
+)
 
 
 class TransitError(RuntimeError):
@@ -91,6 +109,7 @@ def request_body(
         TRANSIT_REQUEST["sources"]: list(sources),
         TRANSIT_REQUEST["targets"]: list(targets),
         TRANSIT_REQUEST["mode"]: TRANSIT_REQUEST["public_transport"],
+        TRANSIT_REQUEST["params"]: {TRANSIT_REQUEST["kinds"]: list(PUBLIC_TRANSPORT_KINDS)},
         TRANSIT_REQUEST["departure"]: departure_timestamp(departure),
     }
 

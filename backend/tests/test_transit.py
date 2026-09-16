@@ -13,6 +13,7 @@ from app.geo.transit import (
     DEFAULT_PAUSE_S,
     ELEMENTS_PER_MINUTE,
     MAX_BLOCK,
+    PUBLIC_TRANSPORT_KINDS,
     RATE_LIMIT_RETRIES,
     RATE_LIMIT_WAIT_S,
     REQUESTS_PER_MINUTE,
@@ -82,7 +83,10 @@ def test_request_body_and_url_follow_the_documented_shape():
     ]
     assert body[TRANSIT_REQUEST["sources"]] == [0, 1, 2]
     assert body[TRANSIT_REQUEST["targets"]] == [0, 1, 2]
-    assert body[TRANSIT_REQUEST["mode"]] == TRANSIT_REQUEST["public_transport"]
+    # Режим — поле transport, виды транспорта обязательны: с полем type 2ГИС отвечает 422 «type is invalid».
+    assert body["transport"] == "public_transport" and "type" not in body
+    assert body["public_transport_params"] == {"transport": list(PUBLIC_TRANSPORT_KINDS)}
+    assert {"bus", "metro", "tram"} <= set(PUBLIC_TRANSPORT_KINDS)
     # RFC 3339 со смещением Москвы: без смещения 2ГИС отвечает 400 «'start_time' has non-RFC3339 form».
     stamp = datetime.fromisoformat(body[TRANSIT_REQUEST["departure"]])
     assert body[TRANSIT_REQUEST["departure"]].endswith("T13:00:00+03:00")
