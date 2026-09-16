@@ -22,8 +22,9 @@ DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S = 30
 class Settings:
     data_dir: Path
     cache_path: Path
-    # Матрица времени на общественном транспорте от 2ГИС: локальный файл диспетчера, в репозиторий он не попадает.
-    transit_matrix_path: Path
+    # Матрицы времени на общественном транспорте от 2ГИС: по файлу <регион>.json в каталоге. Файлы локальные,
+    # в репозиторий они не попадают.
+    transit_dir: Path
     osrm_url: str | None
     yandex_maps_api_key: str | None
     llm_base_url: str | None
@@ -64,7 +65,7 @@ class Settings:
         return cls(
             data_dir=data_dir,
             cache_path=Path(optional("CACHE_PATH") or data_dir / "cache.sqlite"),
-            transit_matrix_path=Path(optional("TRANSIT_MATRIX_PATH") or data_dir / "transit_matrix.json"),
+            transit_dir=Path(optional("TRANSIT_MATRIX_DIR") or data_dir / "transit"),
             osrm_url=optional("OSRM_URL"),
             yandex_maps_api_key=optional("YANDEX_MAPS_API_KEY"),
             llm_base_url=optional("LLM_BASE_URL"),

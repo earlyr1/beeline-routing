@@ -11,7 +11,7 @@ from app.api.registry import DatasetRegistry
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.geo.osrm import OsrmClient
-from app.geo.transit import load_transit_matrix
+from app.geo.transit import load_transit_matrices
 from app.ingest.geocode import (
     NO_ADDRESS,
     Geocoder,
@@ -94,8 +94,9 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         traffic=TrafficProfile.load(BACKEND_DIR / "config" / "traffic_profile.yaml"),
         osrm=osrm,
         cache=kv,
-        # Матрица 2ГИС читается один раз при старте. Файла нет или он не читается — сервис работает как без него.
-        transit=load_transit_matrix(settings.transit_matrix_path),
+        # Матрицы 2ГИС по регионам читаются один раз при старте. Каталога нет или файл не читается — сервис
+        # работает как без него, а нужную матрицу дню выбирает make_problem по точкам.
+        transit=load_transit_matrices(settings.transit_dir),
         time_limit_s=settings.solver_time_limit_s,
         time_limit_lunch_s=settings.solver_time_limit_lunch_s,
         geocode=geocode,

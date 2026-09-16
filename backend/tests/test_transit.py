@@ -16,8 +16,10 @@ from app.geo.transit import (
     TransitClient,
     TransitError,
     build_transit_matrix,
+    load_transit_matrices,
     load_transit_matrix,
     save_transit_matrix,
+    transit_matrix_path,
 )
 from app.settings import Settings
 from app.solvers.problem import make_problem
@@ -161,18 +163,40 @@ def test_unreachable_element_stays_none():
     assert minutes[0][1] is None and minutes[0][2] == 10
 
 
-def test_transit_matrix_round_trip_keeps_six_decimals(tmp_path):
-    matrix = build_transit_matrix(POINTS, [[0, 12, None], [12, 0, 30], [30, 25, 0]], "13:00")
-    path = tmp_path / "transit_matrix.json"
+def test_transit_matrix_round_trip_keeps_six_decimals_and_the_region(tmp_path):
+    matrix = build_transit_matrix(POINTS, [[0, 12, None], [12, 0, 30], [30, 25, 0]], "13:00", region="east")
+    path = transit_matrix_path(tmp_path, "east")
 
     save_transit_matrix(matrix, path)
 
+    assert path == tmp_path / "east.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["source"] == "2gis" and payload["departure"] == "13:00"
+    assert payload["region"] == "east"
     assert payload["points"] == [[round(lat, 6), round(lon, 6)] for lat, lon in POINTS]
     assert payload["minutes"][0][2] is None
     loaded = load_transit_matrix(path)
-    assert loaded == matrix and loaded.matches(POINTS)
+    assert loaded == matrix and loaded.matches(POINTS) and loaded.region == "east"
+
+
+def test_load_transit_matrices_reads_every_region_and_skips_what_it_cannot_read(tmp_path):
+    assert load_transit_matrices(tmp_path / "нет-каталога") == []
+
+    directory = tmp_path / "transit"
+    save_transit_matrix(
+        build_transit_matrix(POINTS, [[0, 12, 20], [12, 0, 30], [30, 25, 0]], "13:00", region="east"),
+        transit_matrix_path(directory, "east"),
+    )
+    save_transit_matrix(
+        build_transit_matrix(POINTS[:2], [[0, 5], [5, 0]], "09:00", region="north_west"),
+        transit_matrix_path(directory, "north_west"),
+    )
+    (directory / "broken.json").write_text("{не json", encoding="utf-8")
+    (directory / "заметка.txt").write_text("это не матрица", encoding="utf-8")
+
+    loaded = load_transit_matrices(directory)
+    assert [matrix.region for matrix in loaded] == ["east", "north_west"]
+    assert loaded[0].matches(POINTS) and loaded[1].departure == "09:00"
 
 
 def test_missing_broken_and_mismatched_files_are_not_an_error(tmp_path):
@@ -214,46 +238,63 @@ def test_travel_times_take_public_minutes_from_transit_and_fall_back_otherwise()
     assert travel.minutes(0, 1, Transport.FOOT, slot_min=0) == 150
 
 
-def test_make_problem_passes_the_transit_matrix_and_ignores_a_mismatched_one():
+def test_make_problem_picks_the_matrix_of_the_day_among_several_and_ignores_the_rest():
     requests = [req("R1", 5, 0, "10:00", "12:00")]
     engineers = [eng("E1", transport=Transport.PUBLIC)]
     points = _points(requests, engineers)
-    matrix = build_transit_matrix(points, [[0, 7], [7, 0]], "13:00")
+    matrix = build_transit_matrix(points, [[0, 7], [7, 0]], "13:00", region="east")
+    other = build_transit_matrix([at(9, 9), at(8, 8)], [[0, 7], [7, 0]], "13:00", region="north_west")
 
-    problem = make_problem(
-        requests, engineers, model=TravelModel(), traffic=TrafficProfile({}), transit=matrix
-    )
+    def problem_with(transit):
+        return make_problem(
+            requests, engineers, model=TravelModel(), traffic=TrafficProfile({}), transit=transit
+        )
+
+    problem = problem_with([other, matrix])
     assert problem.travel.transit is matrix
     assert problem.travel_min(0, 1, engineers[0]) == 7
 
-    other = build_transit_matrix([at(9, 9), at(8, 8)], [[0, 7], [7, 0]], "13:00")
-    without = make_problem(
-        requests, engineers, model=TravelModel(), traffic=TrafficProfile({}), transit=other
-    )
+    without = problem_with([other])
     assert without.travel.transit is None
     assert without.travel_min(0, 1, engineers[0]) > 7
+    assert problem_with([]).travel.transit is None
+    assert problem_with(()).travel.transit is None
 
 
-def test_planning_context_passes_the_transit_matrix_into_the_day_problem():
+def test_planning_context_passes_the_matrices_into_the_day_problem():
     requests, engineers = day_requests(), day_engineers()
-    matrix = build_transit_matrix(_points(requests, engineers), [[0] * 5 for _ in range(5)], "13:00")
-    session = new_session(ctx=context(transit=matrix), requests=requests, engineers=engineers)
+    points = _points(requests, engineers)
+    other = build_transit_matrix(POINTS, [[0] * 3 for _ in range(3)], "13:00", region="north_west")
+    matrix = build_transit_matrix(points, [[0] * 5 for _ in range(5)], "13:00", region="east")
+
+    ctx = context(transit=[other, matrix])
+    session = new_session(ctx=ctx, requests=requests, engineers=engineers)
     assert session.problem.travel.transit is matrix
+    assert context().transit == ()
+    assert new_session(requests=requests, engineers=engineers).problem.travel.transit is None
 
 
-def test_settings_and_build_deps_take_the_transit_matrix_from_the_file(tmp_path):
+def test_settings_and_build_deps_take_the_matrices_from_the_directory(tmp_path):
     settings = Settings.from_env({"DATA_DIR": str(tmp_path), "GEOCODER": "cache-only"})
-    assert settings.transit_matrix_path == tmp_path / "transit_matrix.json"
-    assert build_deps(settings).ingest.planning.transit is None
+    assert settings.transit_dir == tmp_path / "transit"
+    assert list(build_deps(settings).ingest.planning.transit) == []
 
     save_transit_matrix(
-        build_transit_matrix(POINTS, [[0, 12, 20], [12, 0, 30], [30, 25, 0]], "13:00"),
-        settings.transit_matrix_path,
+        build_transit_matrix(POINTS, [[0, 12, 20], [12, 0, 30], [30, 25, 0]], "13:00", region="east"),
+        transit_matrix_path(settings.transit_dir, "east"),
     )
-    assert build_deps(settings).ingest.planning.transit.departure == "13:00"
+    save_transit_matrix(
+        build_transit_matrix(POINTS[:2], [[0, 5], [5, 0]], "09:00", region="north_west"),
+        transit_matrix_path(settings.transit_dir, "north_west"),
+    )
+    (settings.transit_dir / "east.json.bak").write_text("{", encoding="utf-8")
+    (settings.transit_dir / "broken.json").write_text("{", encoding="utf-8")
 
-    settings.transit_matrix_path.write_text("{", encoding="utf-8")
-    assert build_deps(settings).ingest.planning.transit is None
+    loaded = build_deps(settings).ingest.planning.transit
+    assert [matrix.region for matrix in loaded] == ["east", "north_west"]
+    assert loaded[0].departure == "13:00"
 
-    moved = Settings.from_env({"DATA_DIR": str(tmp_path), "TRANSIT_MATRIX_PATH": str(tmp_path / "своя.json")})
-    assert moved.transit_matrix_path == tmp_path / "своя.json"
+    moved = Settings.from_env(
+        {"DATA_DIR": str(tmp_path), "TRANSIT_MATRIX_DIR": str(tmp_path / "свой-каталог")}
+    )
+    assert moved.transit_dir == tmp_path / "свой-каталог"

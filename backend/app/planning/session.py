@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -52,8 +52,9 @@ class PlanningContext:
     traffic: TrafficProfile
     osrm: OsrmClient | None = None
     cache: KVCache | None = None
-    # Матрица времени на общественном транспорте от 2ГИС, если диспетчер посчитал её и положил файл рядом.
-    transit: TransitMatrix | None = None
+    # Матрицы времени на общественном транспорте от 2ГИС по регионам, если диспетчер посчитал их и положил
+    # файлы рядом. Свою матрицу дню выбирает make_problem: она подходит, только если точки те же и в том порядке.
+    transit: Sequence[TransitMatrix] = ()
     # Лимит OR-Tools на день без обеда и на перепланирование по событию.
     time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S
     # Лимит OR-Tools на весь день с обедом.
