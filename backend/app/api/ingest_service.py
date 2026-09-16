@@ -12,7 +12,7 @@ from pydantic import ValidationError
 
 from app.api.registry import DatasetRecord, PreparedDay
 from app.api.schemas import GeocodingCounts, NotFoundAddress, UploadReport
-from app.domain.models import Bundle, Cancellation, Request
+from app.domain.models import Bundle, Request
 from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
 from app.ingest.bundle import load_bundle
 from app.ingest.geocode import GeoResult
@@ -122,12 +122,6 @@ def _drop_repeated_ids(raw: RawFile) -> RawFile:
     return replace(raw, rows=rows, skipped=skipped)
 
 
-def _day_cancellations(cancellations: list[Cancellation], requests: list[Request]) -> list[Cancellation]:
-    """Отмены по заявкам, которые в дне есть: в загруженном файле часть заявок бандла может отсутствовать."""
-    known = {request.id for request in requests}
-    return [item for item in cancellations if item.request_id in known]
-
-
 def _read_upload(
     record: DatasetRecord, filename: str, data: bytes, deps: IngestDeps
 ) -> tuple[PreparedDay, str, list[str]]:
@@ -148,7 +142,6 @@ def _read_upload(
             requests,
             bundle.engineers,
             bundle.control_plan,
-            _day_cancellations(bundle.cancellations, requests),
         )
         return day, "bundle", []
 
@@ -172,7 +165,6 @@ def _read_upload(
         requests,
         reference.engineers,
         control,
-        _day_cancellations(reference.cancellations, requests),
     )
     return day, "beeline_csv", raw.skipped
 
@@ -218,7 +210,7 @@ def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: I
             matrix_source=problem.travel.base.source,
         )
         with record.lock:
-            record.start_day(session, day.cancellations)
+            record.start_day(session)
             _set(record, prepared=day, report=report, status="ready", stage="ready")
     except ValueError as error:
         _set(record, status="failed", error=str(error))

@@ -1,10 +1,10 @@
 """Время дня и события на шкале через API: текущее время плана, таймлайн и фоновый предподсчёт."""
 
+import json
 import threading
 
 import pytest
 
-from app.domain.models import Cancellation
 from tests.api_helpers import HashGeocoder, make_client, sample_bundle, upload
 from tests.llm_helpers import ScriptedProvider, completion, tool_call
 from tests.timeline_helpers import cancel, fcfs_solves, restore
@@ -79,86 +79,35 @@ def plan_part(state):
     return {key: value for key, value in state.items() if key not in (*TIMELINE_FIELDS, "dataset_id")}
 
 
-def day_with_cancellations(tmp_path, solves, *cancellations):
-    """Датасет из бандла с отменами дня: при сборке дня они сами встают на шкалу."""
-    bundle = sample_bundle().model_copy(update={"cancellations": list(cancellations)})
-    client, deps = make_client(tmp_path, bundle=bundle)
-    background = Background()
-    deps.run_background = background.append
-    base = f"/api/datasets/{upload(client, 'bundle.json', bundle.model_dump_json().encode())}"
-    assert client.get(base).json()["status"] == "ready"
-    solves.clear()
-    return client, base, background
-
-
-def cancellation(request_id, time):
-    return Cancellation(request_id=request_id, time=time)
-
-
 def planned(state):
     return sorted(visit["request_id"] for route in state["plan"]["routes"] for visit in route["visits"])
 
 
-def seeded(state):
-    return [
-        (item["id"], item["event"]["request_id"], item["event"]["time"], item["status"])
-        for item in state["timeline"]
-    ]
-
-
-def test_day_cancellations_are_seeded_on_the_timeline_as_pending(tmp_path, solves):
-    client, base, background = day_with_cancellations(
-        tmp_path, solves, cancellation("R3", "11:00"), cancellation("R2", "09:30")
-    )
+def test_old_bundle_day_cancellations_are_not_put_on_the_timeline(tmp_path, solves):
+    """Отмены дня из контрольного файла больше не встают на шкалу: клиент отменял уже после приезда инженера."""
+    bundle = json.loads(sample_bundle().model_dump_json())
+    bundle["cancellations"] = [{"request_id": "R2", "time": "09:30"}, {"request_id": "R3", "time": "11:00"}]
+    client, deps = make_client(tmp_path, bundle=sample_bundle())
+    background = Background()
+    deps.run_background = background.append
+    base = f"/api/datasets/{upload(client, 'bundle.json', json.dumps(bundle).encode())}"
+    assert client.get(base).json()["status"] == "ready"
 
     state = state_of(client, base)
 
-    # Отмены стоят по времени, и день начинается утренним планом: все заявки на месте.
-    assert seeded(state) == [
-        ("tl_1", "R2", "09:30", "pending"),
-        ("tl_2", "R3", "11:00", "pending"),
-    ]
-    assert state["cursor"] == "00:00" and state["events"] == []
+    assert (state["cursor"], state["timeline"], state["events"]) == ("00:00", [], [])
     assert all(request["status"] == "active" for request in state["requests"])
     assert "R2" in planned(state) and "R3" in planned(state)
+    # День целиком: заявки не отменяются и когда часы доходят до прежнего времени отмены.
+    later = at(client, base, "12:00")
+    assert later["timeline"] == [] and request_status(later, "R2") == "active" and "R2" in planned(later)
+    # «Построить план» на нетронутой шкале тоже ничего на неё не кладёт.
+    assert client.post(f"{base}/plan").json()["timeline"] == []
 
-    background.run()
-
-    assert state_of(client, base)["timeline_ready"] is True
-
-
-def test_day_cancellation_lands_when_the_clock_reaches_it_and_can_be_deleted(tmp_path, solves):
-    client, base, _ = day_with_cancellations(
-        tmp_path, solves, cancellation("R2", "09:30"), cancellation("R3", "11:00")
-    )
-    assert "R2" in planned(state_of(client, base))
-
-    applied = at(client, base, "10:00")
-
-    assert statuses(applied) == [("tl_1", "applied"), ("tl_2", "pending")]
-    assert request_status(applied, "R2") == "cancelled" and "R2" not in planned(applied)
-    assert request_status(applied, "R3") == "active"
-
-    response = client.delete(f"{base}/timeline/events/tl_1")
-
-    assert response.status_code == 200, response.text
-    state = response.json()
-    assert statuses(state) == [("tl_2", "pending")]
-    assert request_status(state, "R2") == "active" and "R2" in planned(state)
-
-
-def test_plan_rebuild_seeds_the_day_cancellations_again(tmp_path, solves):
-    client, base, _ = day_with_cancellations(tmp_path, solves, cancellation("R2", "09:30"))
-    precomputed = state_of(client, base)
-    # Шкала дня не менялась: «Построить план» отдаёт предподсчитанный день без пересборки.
-    assert client.post(f"{base}/plan").json() == precomputed
-    at(client, base, "10:00")
-    assert client.delete(f"{base}/timeline/events/tl_1").status_code == 200
-
-    rebuilt = client.post(f"{base}/plan").json()
-
-    assert seeded(rebuilt) == [("tl_2", "R2", "09:30", "pending")]
-    assert (rebuilt["cursor"], request_status(rebuilt, "R2")) == ("00:00", "active")
+    # Ручная отмена работает как раньше: встаёт на шкалу и применяется, когда часы доходят до неё.
+    added_state = added(client, base, cancel("R2", "13:00"))
+    assert [item["event"]["request_id"] for item in added_state["timeline"]] == ["R2"]
+    assert request_status(at(client, base, "14:00"), "R2") == "cancelled"
 
 
 def test_state_after_upload_has_cursor_at_midnight_and_empty_timeline(tmp_path, solves):

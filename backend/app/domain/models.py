@@ -172,16 +172,6 @@ class Plan(BaseModel):
     violations: list[str] = Field(default_factory=list)
 
 
-class Cancellation(BaseModel):
-    """Отмена заявки клиентом в течение дня: факт дня со своим временем на шкале.
-
-    Утренний план заявку содержит: отмена приходит позже, когда часы дня доходят до её времени.
-    """
-
-    request_id: str
-    time: HHMM
-
-
 class Bundle(BaseModel):
     region: str
     office: Office
@@ -189,8 +179,8 @@ class Bundle(BaseModel):
     engineers: list[Engineer]
     events: list[Event] = Field(default_factory=list)
     control_plan: Plan | None = None
-    # Отмены дня: в старых бандлах поля нет — тогда день собирается без них.
-    cancellations: list[Cancellation] = Field(default_factory=list)
+    # Поле cancellations старых бандлов (отмены дня на шкале) игнорируется: в реальных данных клиент отменял уже
+    # после приезда инженера, время и дорога потрачены, поэтому заявка со статусом «Отменена» — обычная заявка дня.
 
     @model_validator(mode="after")
     def _unique_ids(self) -> Bundle:

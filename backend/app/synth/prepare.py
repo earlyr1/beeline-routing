@@ -24,7 +24,6 @@ from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import make_problem
-from app.synth.cancellations import build_cancellations
 from app.synth.config import SynthConfig
 from app.synth.control import build_control_plan
 from app.synth.engineers import build_engineers
@@ -174,7 +173,6 @@ def prepare_region(
         engineers=engineers,
         events=events,
         control_plan=control_plan,
-        cancellations=build_cancellations(cfg, requests, control, synthetic),
     )
     check = self_check(fcfs.metrics, optimized.metrics)
     report = render_report(

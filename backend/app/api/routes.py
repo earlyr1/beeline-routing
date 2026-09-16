@@ -131,9 +131,9 @@ def build_plan(dataset_id: str, deps: Deps, body: PlanRequest | None = None) -> 
             workload_level=level,
             lunch_enabled=lunch,
         )
-        record.start_day(replace(fresh, version=version), day.cancellations)
+        record.start_day(replace(fresh, version=version))
         state = planning_state(record)
-    # Планы после отмен дня считаются в фоне, как и после любого события на шкале.
+    # Шаги шкалы считаются в фоне, как и после любого события; у пустой шкалы шагов нет.
     ensure_precompute(record, deps.ingest.planning, deps.run_background)
     return state
 

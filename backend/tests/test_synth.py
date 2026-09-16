@@ -7,13 +7,6 @@ from app.domain.models import Metrics, Office, Plan, Route, Visit
 from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
 from app.ingest.geocode import GeoResult
 from app.settings import REPO_ROOT
-from app.synth.cancellations import (
-    CANCELLATION_EARLIEST,
-    CANCELLATION_MAX_AHEAD,
-    CANCELLATION_MIN_AHEAD,
-    build_cancellations,
-    cancellation_time,
-)
 from app.synth.config import ShiftTemplate, SynthConfig
 from app.synth.engineers import (
     assign_transports,
@@ -343,53 +336,6 @@ def test_demo_events_follow_the_optimized_plan(cfg):
     events = build_demo_events(cfg, "east", requests, control, synthetic, {"Бригада А": "E01"}, plan)
     assert events[0].request_id == "2"
     assert events[1].engineer_id == "E02"
-
-
-def test_cancellation_time_is_deterministic_and_lands_before_the_window(cfg):
-    first = cancellation_time(cfg, "74198", 840)
-    assert first == cancellation_time(cfg, "74198", 840)
-    assert 840 - CANCELLATION_MAX_AHEAD <= first <= 840 - CANCELLATION_MIN_AHEAD
-    # Время зависит от номера заявки: у разных заявок оно разное.
-    assert len({cancellation_time(cfg, str(number), 840) for number in range(20)}) > 1
-
-
-def test_cancellation_time_never_starts_before_nine(cfg):
-    # Окно аварии 0:01–23:59 и любое окно до 09:01: отмена приходит ровно в 09:01, сразу после начала шкалы дня.
-    assert cancellation_time(cfg, "50104", 1) == CANCELLATION_EARLIEST
-    assert cancellation_time(cfg, "50104", CANCELLATION_EARLIEST) == CANCELLATION_EARLIEST
-    early = {cancellation_time(cfg, str(number), 600) for number in range(20)}
-    assert min(early) == CANCELLATION_EARLIEST and max(early) <= 600 - CANCELLATION_MIN_AHEAD
-
-
-def test_build_cancellations_lists_cancelled_requests_of_the_day_in_time_order(cfg):
-    synthetic = RawFile(
-        rows=[row(0, "1", ws=780, we=900), row(1, "2", ws=600, we=720), row(2, "3")],
-        office_address="x",
-        is_control=False,
-    )
-    control = RawFile(
-        rows=[
-            row(0, "305", status="Отменена", ws=780, we=900),
-            row(1, "306", status="Отменена", ws=600, we=720),
-            row(2, "307", status="Выполнена"),
-        ],
-        office_address=None,
-        is_control=True,
-    )
-    requests = build_requests(cfg, synthetic, control, _fake_geo)
-    by_id = {request.id: request for request in requests}
-
-    cancellations = build_cancellations(cfg, requests, control, synthetic)
-
-    assert {item.request_id for item in cancellations} == {"1", "2"}
-    assert [item.time for item in cancellations] == sorted(item.time for item in cancellations)
-    for item in cancellations:
-        window_start = by_id[item.request_id].window_start
-        latest = max(CANCELLATION_EARLIEST, window_start - CANCELLATION_MIN_AHEAD)
-        assert CANCELLATION_EARLIEST <= item.time <= latest
-    # Заявки, которой нет в дне, нет и среди отмен.
-    without_first = build_cancellations(cfg, [by_id["2"]], control, synthetic)
-    assert [item.request_id for item in without_first] == ["2"]
 
 
 def test_demo_cancel_prefers_window_starting_after_event_time(cfg):

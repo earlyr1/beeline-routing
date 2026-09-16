@@ -4,7 +4,7 @@ import pytest
 from pydantic import BaseModel, ValidationError
 
 from app.domain.enums import EventType, Skill, Transport
-from app.domain.models import Bundle, Cancellation, Engineer, Event, Office, Request
+from app.domain.models import Bundle, Engineer, Event, Office, Request
 from app.domain.timeutil import HHMM, fmt_hhmm, parse_beeline_datetime, parse_hhmm
 
 
@@ -210,36 +210,37 @@ def test_old_bundle_with_foot_loads_as_public_transport_and_is_saved_without_foo
     assert "foot" not in json.dumps(Bundle.model_json_schema())
 
 
-def test_bundle_keeps_equipment_flag_and_day_cancellations():
+def test_bundle_keeps_equipment_flag():
     bundle = Bundle(
         region="east",
         office=Office(region="east", title="Восток", address="Москва", lat=55.7, lon=37.6),
         requests=[_request(needs_equipment=True), _request(id="R2")],
         engineers=[],
-        cancellations=[Cancellation(request_id="R2", time="09:30")],
     )
     dumped = bundle.model_dump_json()
-    assert '"needs_equipment":true' in dumped and '"request_id":"R2","time":"09:30"' in dumped
+    assert '"needs_equipment":true' in dumped and "cancellations" not in dumped
     restored = Bundle.model_validate_json(dumped)
     assert restored == bundle
     assert restored.requests[1].needs_equipment is False
 
 
-def test_bundle_without_equipment_and_cancellations_still_loads():
+def test_old_bundle_with_day_cancellations_and_without_equipment_still_loads():
     bundle = Bundle(
         region="east",
         office=Office(region="east", title="Восток", address="Москва", lat=55.7, lon=37.6),
-        requests=[_request()],
+        requests=[_request(), _request(id="R2")],
         engineers=[],
     )
     old = json.loads(bundle.model_dump_json())
-    old.pop("cancellations")
+    # Старые бандлы несли отмены дня из контрольного файла: теперь поле молча игнорируется.
+    old["cancellations"] = [{"request_id": "R2", "time": "09:30"}]
     for request in old["requests"]:
         request.pop("needs_equipment")
 
     restored = Bundle.model_validate(old)
 
-    assert restored.cancellations == [] and restored.requests[0].needs_equipment is False
+    assert restored == bundle and restored.requests[0].needs_equipment is False
+    assert "cancellations" not in restored.model_dump_json()
 
 
 def test_save_and_load_bundle(tmp_path):
