@@ -14,6 +14,7 @@ import {
 } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
 import { EngineerLink } from '../EngineerLink';
+import { EquipmentBadge } from '../EquipmentBadge';
 import { RequestActions } from '../RequestActions';
 
 export function RequestsTab() {
@@ -91,6 +92,7 @@ export function RequestsTab() {
                   {clockStatus && <span className={`badge badge--clock-${clockStatus}`}>{REQUEST_CLOCK_LABELS[clockStatus]}</span>}
                   {request.priority === 'urgent' && <span className="badge badge--urgent">Срочная</span>}
                   {request.asap && <span className="badge badge--asap">Как можно скорее</span>}
+                  {request.needs_equipment && <EquipmentBadge />}
                   {cancelled && <span className="badge badge--cancelled">Отменена</span>}
                   {pinned && <span className="badge">Закреплена</span>}
                   {badge && (

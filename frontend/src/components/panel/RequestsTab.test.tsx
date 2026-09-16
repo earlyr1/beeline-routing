@@ -102,6 +102,16 @@ describe('RequestsTab', () => {
     expect(within(windowed).queryByText('Как можно скорее')).not.toBeInTheDocument();
   });
 
+  it('помечает заявки, к которым бригада везёт оборудование', () => {
+    render(<RequestsTab />);
+    const badge = within(rowOf('74198')).getByText('Оборудование');
+    expect(badge).toHaveClass('badge', 'badge--equipment');
+    expect(badge).toHaveAttribute('title', 'Нужно привезти оборудование: роутер, приставка или колонка');
+    expect(within(rowOf('86160')).getByText('Оборудование')).toBeInTheDocument();
+    expect(within(rowOf('50104')).queryByText('Оборудование')).not.toBeInTheDocument();
+    expect(within(rowOf('18754')).queryByText('Оборудование')).not.toBeInTheDocument();
+  });
+
   it('показывает, что с заявкой происходит на время часов', () => {
     render(<RequestsTab />);
     // Часы на 13:30: к 50104 инженер выехал в 13:00 и приедет в 13:35, у URG-001 работы идут с 13:05.

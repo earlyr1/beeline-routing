@@ -50,6 +50,11 @@ export interface ServiceRequest {
   status: RequestStatus;
   source_type_bk: string;
   source_type_hd: string;
+  /**
+   * Инженеру нужно взять с собой единицу оборудования: роутер, приставку или колонку.
+   * На заявку приходится не больше одной единицы; на расчёт плана флаг не влияет, это информация для бригады.
+   */
+  needs_equipment: boolean;
 }
 
 export interface Engineer {

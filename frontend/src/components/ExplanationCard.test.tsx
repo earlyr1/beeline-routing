@@ -151,6 +151,24 @@ describe('ExplanationCard', () => {
     expect(within(card()).queryByText(/· окно /)).not.toBeInTheDocument();
   });
 
+  it('помечает в шапке карточки заявку, к которой нужно везти оборудование', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation({ request_id: '74198' }));
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '74198' });
+    const view = render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    const badge = within(card()).getByText('Оборудование');
+    expect(badge).toHaveClass('badge', 'badge--equipment');
+    expect(badge).toHaveAttribute('title', 'Нужно привезти оборудование: роутер, приставка или колонка');
+    // Метка стоит в той же строке, что окно и навык.
+    expect(badge.closest('p')).toHaveTextContent('окно 10:00–12:00 · 60 мин · Работы на подключение и дозаказы');
+    view.unmount();
+
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104' });
+    render(<ExplanationCard />);
+    await screen.findByText(/окно 14:00–16:00/);
+    expect(within(card()).queryByText('Оборудование')).not.toBeInTheDocument();
+  });
+
   it('показывает статус заявки на время часов рядом с её номером', async () => {
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
     resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '14:10' });

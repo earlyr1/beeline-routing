@@ -81,7 +81,23 @@ describe('UrgentRequestDialog', () => {
       transport_required: 'car',
       priority: 'urgent',
       asap: false,
+      needs_equipment: false,
     });
+  });
+
+  it('отправляет со срочной заявкой отметку «Нужно оборудование»', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    const equipment = screen.getByLabelText('Нужно оборудование');
+    expect(equipment).not.toBeChecked();
+
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
+    fireEvent.click(equipment);
+    expect(equipment).toBeChecked();
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить и перепланировать' }));
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ needs_equipment: true });
   });
 
   it('starts the default window inside working hours right after planning the day', async () => {
@@ -864,6 +880,38 @@ describe('RequestEditDialog', () => {
     expect(useAppStore.getState().editingRequestId).toBe('46393');
     fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
     expect(useAppStore.getState().editingRequestId).toBeNull();
+  });
+
+  it('ставит заявке отметку «Нужно оборудование» и называет изменение', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    const equipment = screen.getByLabelText('Нужно оборудование');
+    expect(equipment).not.toBeChecked();
+
+    fireEvent.click(equipment);
+    expect(equipment).toBeChecked();
+    expect(screen.getByText('Изменится: оборудование нужно')).toBeInTheDocument();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(useAppStore.getState().editingRequestId).toBeNull());
+    expect(applyEvent).toHaveBeenCalledWith({
+      type: 'request_updated',
+      time: '13:30',
+      request_id: '46393',
+      engineer_id: null,
+      request: { ...original, needs_equipment: true },
+    });
+  });
+
+  it('снимает отметку с заявки, к которой оборудование везли', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:30', editingRequestId: '74198' });
+    render(<RequestEditDialog />);
+    const equipment = screen.getByLabelText('Нужно оборудование');
+    expect(equipment).toBeChecked();
+    expect(screen.queryByText(/Изменится/)).not.toBeInTheDocument();
+
+    fireEvent.click(equipment);
+    expect(screen.getByText('Изменится: оборудование не нужно')).toBeInTheDocument();
   });
 
   it('turns the request into «как можно скорее», hides the window and previews the change', async () => {

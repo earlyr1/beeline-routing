@@ -12,6 +12,7 @@ import {
 import { PRIORITY_LABELS, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { AsapToggle } from './AsapToggle';
+import { EquipmentToggle } from './EquipmentToggle';
 
 const SKILLS = Object.keys(SKILL_LABELS) as Skill[];
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as Priority[];
@@ -144,6 +145,7 @@ function EditRequestForm({ original, engineers }: { original: ServiceRequest; en
             <input type="time" value={time} onChange={(event) => setTime(event.target.value)} />
           </label>
         </div>
+        <EquipmentToggle checked={form.needsEquipment} onChange={(checked) => update('needsEquipment', checked)} />
         {hint && <p className="muted field-note">{hint}</p>}
         {changes.length > 0 && <p className="muted">{`Изменится: ${changes.join(', ')}`}</p>}
         {errors.length > 0 && (
