@@ -26,7 +26,7 @@ export const POLL_RETRIES = 3;
 export const SESSION_DATASET_KEY = 'routing.datasetId';
 /** Шаг проигрывания дня: минута плана за 100 мс, то есть час дня за 6 секунд. */
 export const PLAY_TICK_MS = 100;
-/** Часы до первого ответа сервера: после загрузки и пересчёта с нуля план стоит на начале дня. */
+/** Часы до первого ответа сервера: плана ещё нет, и шкалы дня, на начало которой их поставить, тоже. */
 export const DAY_START: HHMM = '00:00';
 
 /** Диалог, для которого диспетчер указывает точку на карте. */
@@ -479,7 +479,10 @@ export const useAppStore = create<AppState>()((set, get) => {
         const state = await enqueue(current, () => buildPlan(datasetId, { workload_level: workloadLevel, lunch: lunchEnabled }));
         if (!isCurrent(current)) return;
         get().setPlanningState(state);
-        set({ selectedRequestId: null });
+        // Новый день начинается со своего начала: часы встают на начало шкалы дня, и это время уходит на сервер,
+        // чтобы курсор плана совпал с часами. Шкала дня после пересчёта пуста, и перевод курсора ничего не считает.
+        set({ selectedRequestId: null, clock: fromMinutes(dayScale(state, state.plan).from) });
+        await get().commitClock();
       } catch (error) {
         if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });
       } finally {

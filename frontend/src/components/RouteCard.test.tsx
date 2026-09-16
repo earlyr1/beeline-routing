@@ -213,7 +213,7 @@ describe('RouteCard', () => {
   it('draws the now line of the personal timeline at the clock of the day', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', clock: '15:00' });
     render(<RouteCard />);
-    expect(timeline().querySelector('.timeline__now')).toHaveStyle({ left: `${percent({ from: 480, to: 1380 }, 900)}%` });
+    expect(timeline().querySelector('.timeline__now')).toHaveStyle({ left: `${percent({ from: 540, to: 1380 }, 900)}%` });
   });
 
   it('hides the events section of a brigade without events', () => {

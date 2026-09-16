@@ -137,13 +137,15 @@ describe('useAppStore', () => {
     expect(useAppStore.getState()).not.toHaveProperty('setEventTime');
   });
 
-  it('builds a plan and puts the clock at the cursor of the new day', async () => {
+  it('builds a plan, puts the clock at the start of the new day and moves the cursor there', async () => {
     resetStore({ datasetId: 'd_test', clock: '14:00' });
     vi.mocked(api.buildPlan).mockResolvedValue(at('00:00'));
+    vi.mocked(api.moveCursor).mockResolvedValue(at('09:00', { version: 5 }));
     await useAppStore.getState().plan();
     expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 1, lunch: true });
-    expect(useAppStore.getState()).toMatchObject({ clock: '00:00', showPrevious: false, busy: false });
-    expect(useAppStore.getState().state?.version).toBe(4);
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '09:00']]);
+    expect(useAppStore.getState()).toMatchObject({ clock: '09:00', showPrevious: false, busy: false, committing: false });
+    expect(useAppStore.getState().state?.version).toBe(5);
   });
 
   it('builds the plan with the chosen workload level and lunch and takes both from every received state', async () => {
@@ -152,6 +154,7 @@ describe('useAppStore', () => {
     useAppStore.getState().setWorkloadLevel(0);
     useAppStore.getState().setLunchEnabled(false);
     vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false }));
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false, cursor: '09:00' }));
     await useAppStore.getState().plan();
     expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 0, lunch: false });
     expect(useAppStore.getState()).toMatchObject({ workloadLevel: 0, lunchEnabled: false });
@@ -597,14 +600,16 @@ describe('clock of the day', () => {
     expect(useAppStore.getState()).toMatchObject({ busy: false, committing: false, clock: '14:10' });
   });
 
-  it('rebuilds the day without committing the clock and stops the playback', async () => {
+  it('rebuilds the day, stops the playback and puts the clock and the cursor at the start of the new day', async () => {
     resetStore({ datasetId: 'd_test', state: at('13:00'), clock: '14:10', playing: true });
     vi.mocked(api.buildPlan).mockResolvedValue(at('00:00', { version: 7 }));
+    vi.mocked(api.moveCursor).mockResolvedValue(at('09:00', { version: 8 }));
     const planning = useAppStore.getState().plan();
     expect(useAppStore.getState().playing).toBe(false);
     await planning;
-    expect(api.moveCursor).not.toHaveBeenCalled();
-    expect(useAppStore.getState()).toMatchObject({ clock: '00:00', busy: false });
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '09:00']]);
+    expect(useAppStore.getState()).toMatchObject({ clock: '09:00', busy: false, committing: false });
+    expect(useAppStore.getState().state?.version).toBe(8);
   });
 
   it('deletes a timeline event and shows the plan the server returns', async () => {
@@ -717,12 +722,12 @@ describe('playback of the day', () => {
 
   it('starts from the beginning of the day scale where the slider stands when the clock is earlier', async () => {
     resetStore({ datasetId: 'd_test', state: at('00:00') });
-    vi.mocked(api.moveCursor).mockResolvedValue(at('08:00', { version: 5 }));
+    vi.mocked(api.moveCursor).mockResolvedValue(at('09:00', { version: 5 }));
     useAppStore.getState().play();
-    expect(useAppStore.getState().clock).toBe('08:00');
+    expect(useAppStore.getState().clock).toBe('09:00');
     await vi.advanceTimersByTimeAsync(PLAY_TICK_MS);
-    expect(api.moveCursor).toHaveBeenCalledWith('d_test', '08:00');
-    expect(useAppStore.getState().clock).toBe('08:01');
+    expect(api.moveCursor).toHaveBeenCalledWith('d_test', '09:00');
+    expect(useAppStore.getState().clock).toBe('09:01');
   });
 
   it('stops the playback and shows the error when a commit fails', async () => {

@@ -95,11 +95,13 @@ describe('panel tabs', () => {
   });
 
   it('TimelineTab renders visit bars and selects a request', () => {
-    render(<TimelineTab />);
+    const { container } = render(<TimelineTab />);
     fireEvent.click(screen.getByRole('button', { name: 'Заявка 50104 14:00–14:45' }));
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
     expect(screen.getByText(/текущее время 13:00/)).toBeInTheDocument();
-    expect(screen.getByText('09:00')).toBeInTheDocument();
+    // День начинается в 09:00: раньше подписей часов нет.
+    expect(container.querySelectorAll('.timeline__tick')[0]).toHaveTextContent('09:00');
+    expect(screen.queryByText('08:00')).not.toBeInTheDocument();
   });
 
   it('TimelineTab draws the now line of every engineer at the clock of the day', () => {
@@ -108,7 +110,7 @@ describe('panel tabs', () => {
     expect(screen.getByText(/текущее время 15:00/)).toBeInTheDocument();
     const lines = Array.from(container.querySelectorAll('.timeline__now'));
     expect(lines).toHaveLength(3);
-    for (const line of lines) expect(line).toHaveStyle({ left: `${percent({ from: 480, to: 1380 }, 900)}%` });
+    for (const line of lines) expect(line).toHaveStyle({ left: `${percent({ from: 540, to: 1380 }, 900)}%` });
   });
 
   it('TimelineTab draws a grey lunch bar that opens nothing and no bar without a lunch', () => {

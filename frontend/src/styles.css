@@ -450,10 +450,39 @@ h4 {
   color: var(--muted);
 }
 
-.metric--compact .metric__value {
-  font-size: 14px;
-  font-weight: 600;
-  white-space: nowrap;
+/* Нагрузка и обед прямо в шапке: два переключателя вместо значения, каждый пересчитывает день. */
+.metric--controls {
+  min-width: 210px;
+  gap: 2px;
+}
+
+.metric__switches {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.metric__select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.metric__select:disabled,
+.metric__lunch:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.metric__lunch[aria-pressed='true'] {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
 }
 
 .metric--warn .metric__value {

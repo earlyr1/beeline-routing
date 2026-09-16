@@ -40,9 +40,3 @@ export function travelBufferText(level: number): string {
 
 /** Обед сессии; состояние от прежнего backend без флага обеда считается днём с обедом. */
 export const lunchEnabledOf = (value: boolean | undefined): boolean => value ?? DEFAULT_LUNCH_ENABLED;
-
-/** «😐 Обычный день · с обедом»: нагрузка и обед дня одной строкой. */
-export function dayModeText(level: number, lunch: boolean): string {
-  const { emoji, title } = workloadLevel(level);
-  return `${emoji} ${title} · ${lunch ? 'с обедом' : 'без обеда'}`;
-}
