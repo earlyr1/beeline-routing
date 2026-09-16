@@ -184,7 +184,13 @@ def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: I
         _set(record, stage="matrix")
         ctx = deps.planning
         problem = make_problem(
-            day.requests, day.engineers, model=ctx.model, traffic=ctx.traffic, osrm=ctx.osrm, cache=ctx.cache
+            day.requests,
+            day.engineers,
+            model=ctx.model,
+            traffic=ctx.traffic,
+            osrm=ctx.osrm,
+            cache=ctx.cache,
+            transit=ctx.transit,
         )
         _set(record, stage="solving")
         session = start_session(

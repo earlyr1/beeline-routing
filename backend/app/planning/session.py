@@ -12,6 +12,7 @@ from app.domain.timeutil import fmt_hhmm
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.geo.osrm import OsrmClient
+from app.geo.transit import TransitMatrix
 from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
@@ -51,6 +52,8 @@ class PlanningContext:
     traffic: TrafficProfile
     osrm: OsrmClient | None = None
     cache: KVCache | None = None
+    # Матрица времени на общественном транспорте от 2ГИС, если диспетчер посчитал её и положил файл рядом.
+    transit: TransitMatrix | None = None
     # Лимит OR-Tools на день без обеда и на перепланирование по событию.
     time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S
     # Лимит OR-Tools на весь день с обедом.
@@ -110,6 +113,7 @@ def _day_problem(
         cache=ctx.cache,
         buffer=travel_buffer(workload_level),
         lunch=lunch_enabled,
+        transit=ctx.transit,
     )
 
 

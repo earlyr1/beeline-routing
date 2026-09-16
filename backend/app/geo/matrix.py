@@ -16,6 +16,7 @@ from app.domain.enums import Transport
 from app.geo.haversine import haversine_km
 from app.geo.kvcache import KVCache
 from app.geo.osrm import LatLon, OsrmClient, OsrmError
+from app.geo.transit import TransitMatrix
 
 
 @dataclass(frozen=True)
@@ -94,10 +95,18 @@ def build_base_matrix(
 
 
 class TravelTimes:
-    def __init__(self, base: BaseMatrix, model: TravelModel, traffic: TrafficProfile) -> None:
+    def __init__(
+        self,
+        base: BaseMatrix,
+        model: TravelModel,
+        traffic: TrafficProfile,
+        transit: TransitMatrix | None = None,
+    ) -> None:
         self.base = base
         self.model = model
         self.traffic = traffic
+        # Матрица 2ГИС для общественного транспорта, если диспетчер её посчитал. Километры от неё не зависят.
+        self.transit = transit
 
     def km(self, i: int, j: int, transport: Transport) -> float:
         if i == j:
@@ -119,5 +128,14 @@ class TravelTimes:
         elif transport == Transport.FOOT:
             raw = self.km(i, j, transport) / self.model.foot_speed_kmh * 60.0
         else:
-            raw = self.km(i, j, transport) / self.model.public_speed_kmh * 60.0 + self.model.public_wait_min
+            raw = self._public_minutes(i, j)
         return math.ceil(raw - 1e-9)
+
+    def _public_minutes(self, i: int, j: int) -> float:
+        """Минуты 2ГИС, если матрица есть и в ячейке число; иначе наша оценка: по прямой ×1.3 и ожидание."""
+        from_2gis = self.transit.minutes_at(i, j) if self.transit is not None else None
+        if from_2gis is not None:
+            return from_2gis
+        return (
+            self.km(i, j, Transport.PUBLIC) / self.model.public_speed_kmh * 60.0 + self.model.public_wait_min
+        )
