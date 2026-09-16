@@ -1,8 +1,8 @@
 import type { Engineer, Plan, PlanningState, RouteLunch, ServiceRequest } from '../api/types';
 import { formatWindow, isValidTime, requestWindowPhrase, toMinutes } from './format';
 
-/** Ось по умолчанию 08:00–23:00, расширяется под данные, но не дальше 00:00–24:00. */
-export const AXIS_DEFAULT_FROM = 8 * 60;
+/** Ось по умолчанию 09:00–23:00, расширяется под данные, но не дальше 00:00–24:00. */
+export const AXIS_DEFAULT_FROM = 9 * 60;
 export const AXIS_DEFAULT_TO = 23 * 60;
 export const AXIS_MAX = 24 * 60;
 

@@ -65,7 +65,13 @@ describe('App', () => {
     expect(screen.getByText('Сейчас 13:00')).toBeInTheDocument();
     expect(screen.getByText('2 из 3')).toBeInTheDocument();
     const banner = within(screen.getByRole('banner'));
-    expect(banner.getAllByRole('button').map((button) => button.textContent)).toEqual(['Пересчитать с нуля', 'Другой файл', 'Срочная заявка']);
+    expect(banner.getAllByRole('button').map((button) => button.textContent)).toEqual([
+      'с обедом',
+      'Пересчитать с нуля',
+      'Другой файл',
+      'Срочная заявка',
+    ]);
+    expect(banner.getByRole('combobox', { name: 'Нагрузка инженеров' })).toHaveValue('1');
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
       'Заявки',
       'Бригады',

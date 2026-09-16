@@ -4,7 +4,6 @@ import {
   DEFAULT_WORKLOAD_LEVEL,
   WORKLOAD_LEVELS,
   clampWorkloadLevel,
-  dayModeText,
   lunchEnabledOf,
   travelBufferText,
   workloadLevel,
@@ -44,11 +43,5 @@ describe('lunch by plan', () => {
     expect(lunchEnabledOf(undefined)).toBe(true);
     expect(lunchEnabledOf(true)).toBe(true);
     expect(lunchEnabledOf(false)).toBe(false);
-  });
-
-  it('names the mode of the day: the workload level and the lunch', () => {
-    expect(dayModeText(1, true)).toBe('😐 Обычный день · с обедом');
-    expect(dayModeText(2, false)).toBe('🥵 На пределе · без обеда');
-    expect(dayModeText(0, false)).toBe('😌 Спокойный день · без обеда');
   });
 });

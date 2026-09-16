@@ -49,20 +49,20 @@ describe('time bar', () => {
 
   it('caps the slider at 23:59 and keeps the clock inside it', () => {
     expect(DAY_LAST_MINUTE).toBe(1439);
-    expect(sliderRange({ from: 480, to: 1380 })).toEqual({ min: 480, max: 1380 });
+    expect(sliderRange({ from: 540, to: 1380 })).toEqual({ min: 540, max: 1380 });
     expect(sliderRange({ from: 360, to: 1440 })).toEqual({ min: 360, max: 1439 });
-    const range = { min: 480, max: 1380 };
-    expect(sliderValue('00:00', range)).toBe(480);
+    const range = { min: 540, max: 1380 };
+    expect(sliderValue('00:00', range)).toBe(540);
     expect(sliderValue('13:05', range)).toBe(785);
     expect(sliderValue('23:30', range)).toBe(1380);
-    expect(playEnd({ from: 480, to: 1380 })).toBe(1380);
-    expect(playEnd({ from: 480, to: 1440 })).toBe(1439);
-    expect(pinLeft(range, 480)).toBe(0);
-    expect(pinLeft(range, 930)).toBe(50);
+    expect(playEnd({ from: 540, to: 1380 })).toBe(1380);
+    expect(playEnd({ from: 540, to: 1440 })).toBe(1439);
+    expect(pinLeft(range, 540)).toBe(0);
+    expect(pinLeft(range, 960)).toBe(50);
   });
 
   it('groups pins of the same minute into one pin coloured by the worst status', () => {
-    const range = { min: 480, max: 1380 };
+    const range = { min: 540, max: 1380 };
     const timeline = makeTimeline();
     const pins = timelinePins(timeline, range);
     expect(pins.map((pin) => [pin.time, pin.items.map((item) => item.id), pin.status, pin.label])).toEqual([

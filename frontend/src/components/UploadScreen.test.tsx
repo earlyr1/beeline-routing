@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
-  return { ...actual, uploadFile: vi.fn(), getDatasetStatus: vi.fn(), buildPlan: vi.fn() };
+  return { ...actual, uploadFile: vi.fn(), getDatasetStatus: vi.fn(), buildPlan: vi.fn(), moveCursor: vi.fn() };
 });
 
 import * as api from '../api/client';
@@ -21,6 +21,8 @@ describe('UploadScreen', () => {
   it('uploads a chosen file, shows the report and builds the plan', async () => {
     vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus());
     vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState());
+    // После расчёта часы встают на начало дня, и это время уходит на сервер.
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ cursor: '09:00' }));
     render(<UploadScreen />);
 
     fireEvent.change(screen.getByTestId('file-input'), { target: { files: [new File(['x'], 'east.csv')] } });
@@ -48,6 +50,7 @@ describe('UploadScreen', () => {
   it('lets the dispatcher set the workload level and the lunch before the upload and plans the day with them', async () => {
     vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus());
     vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false }));
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ workload_level: 0, lunch_enabled: false, cursor: '09:00' }));
     render(<UploadScreen />);
 
     const slider = screen.getByRole('slider', { name: 'Нагрузка инженеров' });

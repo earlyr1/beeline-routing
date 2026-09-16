@@ -5,20 +5,24 @@ import { dayScale, hourTicks, percent, timelineRow, timelineRows, timeScale } fr
 describe('timeline', () => {
   const state = makePlanningState();
 
-  it('uses the default 08:00–23:00 axis when data fits inside it', () => {
-    expect(timeScale(state, state.plan)).toEqual({ from: 480, to: 1380 });
+  it('uses the default 09:00–23:00 axis when data fits inside it', () => {
+    expect(timeScale(state, state.plan)).toEqual({ from: 540, to: 1380 });
   });
 
   it('extends the axis to fit data but never beyond 00:00–24:00', () => {
     const early = { ...state, engineers: state.engineers.map((engineer) => ({ ...engineer, shift_start: '06:30' })) };
     expect(timeScale(early, state.plan).from).toBe(360);
 
+    // Смена, начатая между 08:00 и 09:00, тоже сдвигает начало шкалы вниз, до целого часа.
+    const morning = { ...state, engineers: state.engineers.map((engineer) => ({ ...engineer, shift_start: '08:30' })) };
+    expect(timeScale(morning, state.plan).from).toBe(480);
+
     const route = state.plan.routes[0];
     const overnight = {
       ...state.plan,
       routes: [{ ...route, visits: [{ ...route.visits[0], start: '23:10', end: '49:13' }] }, ...state.plan.routes.slice(1)],
     };
-    expect(timeScale(state, overnight)).toEqual({ from: 480, to: 1440 });
+    expect(timeScale(state, overnight)).toEqual({ from: 540, to: 1440 });
   });
 
   it('converts minutes to clamped percentages', () => {
@@ -95,16 +99,16 @@ describe('timeline', () => {
   });
 
   it('builds the day scale of the slider like the plan scale when the events fit inside it', () => {
-    expect(dayScale(state, state.plan)).toEqual({ from: 480, to: 1380 });
-    expect(dayScale(state, state.previous_plan!)).toEqual({ from: 480, to: 1380 });
+    expect(dayScale(state, state.plan)).toEqual({ from: 540, to: 1380 });
+    expect(dayScale(state, state.previous_plan!)).toEqual({ from: 540, to: 1380 });
   });
 
   it('keeps the day scale when the dispatcher switches to the plan before the event', () => {
     const [e01, ...rest] = state.previous_plan!.routes;
     const previous = { ...state.previous_plan!, routes: [{ ...e01, lunch: { start: '23:00', end: '23:45' } }, ...rest] };
     const withLate = { ...state, previous_plan: previous };
-    expect(dayScale(withLate, withLate.plan)).toEqual({ from: 480, to: 1440 });
-    expect(dayScale(withLate, previous)).toEqual({ from: 480, to: 1440 });
+    expect(dayScale(withLate, withLate.plan)).toEqual({ from: 540, to: 1440 });
+    expect(dayScale(withLate, previous)).toEqual({ from: 540, to: 1440 });
   });
 
   it('widens the day scale to whole hours around the events of the timeline', () => {

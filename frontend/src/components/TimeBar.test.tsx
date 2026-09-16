@@ -18,7 +18,7 @@ import * as api from '../api/client';
 import type { PlanningState } from '../api/types';
 import { pinLeft } from '../lib/timeBar';
 import { PLAY_TICK_MS, useAppStore } from '../store/useAppStore';
-import { makePlanningState, makeTimeline } from '../test/fixtures';
+import { makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { TimeBar } from './TimeBar';
 
@@ -45,7 +45,7 @@ describe('TimeBar', () => {
     expect(clockLabel()).toHaveTextContent('13:00');
     expect(screen.getByText('1 ч = 6 с')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Запустить' })).toBeEnabled();
-    expect(slider()).toHaveAttribute('min', '480');
+    expect(slider()).toHaveAttribute('min', '540');
     expect(slider()).toHaveAttribute('max', '1380');
     expect(slider()).toHaveAttribute('step', '1');
     expect(slider().value).toBe('780');
@@ -55,7 +55,14 @@ describe('TimeBar', () => {
     resetStore({ datasetId: 'd_test', state: at('00:00') });
     render(<TimeBar />);
     expect(clockLabel()).toHaveTextContent('00:00');
-    expect(slider().value).toBe('480');
+    expect(slider().value).toBe('540');
+  });
+
+  it('widens the slider below 09:00 when an event of the day is earlier', () => {
+    const early = makeTimelineItem({ event: { type: 'cancel', time: '06:15', request: null, request_id: '50104', engineer_id: null } });
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: [early] }) });
+    render(<TimeBar />);
+    expect(slider()).toHaveAttribute('min', '360');
   });
 
   it('plays one hour of the day in six seconds and commits the clock on pause', async () => {
@@ -137,7 +144,7 @@ describe('TimeBar', () => {
     ]);
     const pending = screen.getByTitle('Задержка: Бригада Арташкин на 150 мин с 15:00 · впереди');
     expect(pending).toHaveClass('time-bar__pin', 'time-bar__pin--pending');
-    expect(pending).toHaveStyle({ left: `${pinLeft({ min: 480, max: 1380 }, 900)}%` });
+    expect(pending).toHaveStyle({ left: `${pinLeft({ min: 540, max: 1380 }, 900)}%` });
     expect(screen.getByTitle('Отмена заявки 74198 в 16:30 · отклонено: Заявка 74198 уже выполнена.')).toHaveClass('time-bar__pin--rejected');
     expect(screen.getByTitle('Отмена заявки 10135 в 09:30 · применено')).toHaveClass('time-bar__pin--applied');
     const group = screen.getByRole('button', { name: /^Недоступен\s*2$/ });
