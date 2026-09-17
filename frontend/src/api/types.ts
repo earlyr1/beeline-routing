@@ -279,10 +279,15 @@ export interface PlanningState {
   timeline: TimelineItem[];
   /** Сервер уже посчитал план после каждого события шкалы; пока false, статусы событий впереди могут измениться. */
   timeline_ready: boolean;
+  /** «Ломающее» событие, на котором стоит время, и его варианты; null — выбирать нечего. */
+  pending_choice?: EventChoice | null;
 }
 
-/** applied — применено к плану на cursor; pending — впереди, позже cursor; rejected — сервер его не принял. */
-export type TimelineStatus = 'applied' | 'pending' | 'rejected';
+/**
+ * applied — применено к плану на cursor; pending — впереди, позже cursor; rejected — сервер его не принял;
+ * awaiting — «ломающее» событие без выбора, на котором остановилось время.
+ */
+export type TimelineStatus = 'applied' | 'pending' | 'rejected' | 'awaiting';
 
 /** Событие на шкале дня. */
 export interface TimelineItem {
@@ -293,6 +298,38 @@ export interface TimelineItem {
   status: TimelineStatus;
   /** Почему событие отклонено; null у применённых и событий впереди. */
   reason: string | null;
+  /** Выбранная стратегия исправления; null у «неломающих» событий и у ещё не выбранных. */
+  variant: EventVariant | null;
+  /** «Ломающее» событие: сервер предлагает для него варианты исправления. */
+  choosable: boolean;
+}
+
+/** Стратегия исправления плана на «ломающее» событие. */
+export type EventVariant = 'optimal' | 'stable' | 'keep';
+
+/** Вариант исправления: итоги и отличия от рекомендованного. */
+export interface VariantOption {
+  variant: EventVariant;
+  title: string;
+  summary: string;
+  metrics: Metrics;
+  /** Визиты, которые начнутся позже конца окна. */
+  late: number;
+  /** Заявки, переехавшие к другой бригаде относительно плана до события. */
+  moved: number;
+  pros: string[];
+  cons: string[];
+  recommended: boolean;
+}
+
+/** Варианты исправления для «ломающего» события шкалы. */
+export interface EventChoice {
+  entry_id: string;
+  event: PlanEvent;
+  metrics_before: Metrics;
+  late_before: number;
+  variants: VariantOption[];
+  current: EventVariant | null;
 }
 
 /** Тело POST /api/datasets/{id}/cursor. */

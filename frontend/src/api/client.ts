@@ -5,6 +5,8 @@ import type {
   ClientConfig,
   CursorRequest,
   DatasetStatus,
+  EventChoice,
+  EventVariant,
   Explanation,
   HHMM,
   PlanEvent,
@@ -63,6 +65,8 @@ const postJson = (body: unknown): RequestInit => ({
   body: JSON.stringify(body),
 });
 
+const putJson = (body: unknown): RequestInit => ({ ...postJson(body), method: 'PUT' });
+
 const dataset = (datasetId: string) => `/datasets/${encodeURIComponent(datasetId)}`;
 
 export const getConfig = () => request<ClientConfig>('/config');
@@ -98,6 +102,14 @@ export const addTimelineEvent = (datasetId: string, event: PlanEvent) =>
 
 export const deleteTimelineEvent = (datasetId: string, entryId: string) =>
   request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
+
+/** Варианты исправления для «ломающего» события шкалы. */
+export const getTimelineVariants = (datasetId: string, entryId: string) =>
+  request<EventChoice>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}/variants`);
+
+/** Выбрать или поменять стратегию события: план пересчитывается с этого события. */
+export const setTimelineVariant = (datasetId: string, entryId: string, variant: EventVariant) =>
+  request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}/variant`, putJson({ variant }));
 
 /** План на время дня: применены все события шкалы не позже этого времени. */
 export const moveCursor = (datasetId: string, time: HHMM) =>

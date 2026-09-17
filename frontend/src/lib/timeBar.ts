@@ -17,10 +17,11 @@ export const EVENT_SHORT_LABELS: Record<EventType, string> = {
   request_updated: 'Изменение',
 };
 
-/** Статус события языком диспетчера: «применено», «впереди» или «отклонено: причина». */
+/** Статус события языком диспетчера: «применено», «впереди», «ждёт выбора варианта» или «отклонено: причина». */
 export function timelineStatusText(item: TimelineItem): string {
   if (item.status === 'applied') return 'применено';
   if (item.status === 'pending') return 'впереди';
+  if (item.status === 'awaiting') return 'ждёт выбора варианта';
   return item.reason ? `отклонено: ${item.reason}` : 'отклонено';
 }
 
@@ -66,13 +67,13 @@ export interface TimelinePin {
   time: HHMM;
   left: number;
   items: TimelineItem[];
-  /** Худший статус среди событий минуты: отклонено, затем впереди, затем применено. */
+  /** Главный статус среди событий минуты: ждёт выбора, затем отклонено, затем впереди, затем применено. */
   status: TimelineStatus;
   /** Подпись первого события минуты. */
   label: string;
 }
 
-const STATUS_WEIGHT: Record<TimelineStatus, number> = { applied: 0, pending: 1, rejected: 2 };
+const STATUS_WEIGHT: Record<TimelineStatus, number> = { applied: 0, pending: 1, rejected: 2, awaiting: 3 };
 
 export function timelinePins(timeline: TimelineItem[], range: SliderRange): TimelinePin[] {
   const byMinute = new Map<number, TimelineItem[]>();

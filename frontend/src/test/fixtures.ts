@@ -2,6 +2,8 @@ import type {
   DatasetStatus,
   DelayForecast,
   Engineer,
+  EventChoice,
+  EventVariant,
   Explanation,
   Metrics,
   PlanEvent,
@@ -11,6 +13,7 @@ import type {
   ServiceRequest,
   Skill,
   TimelineItem,
+  VariantOption,
   Visit,
 } from '../api/types';
 
@@ -233,6 +236,8 @@ export function makeTimelineItem(overrides: Partial<TimelineItem> = {}): Timelin
     event: { type: 'cancel', time: '09:30', request: null, request_id: '10135', engineer_id: null },
     status: 'applied',
     reason: null,
+    variant: null,
+    choosable: false,
     ...overrides,
   };
 }
@@ -252,6 +257,39 @@ export function makeTimeline(): TimelineItem[] {
       reason: 'Заявка 74198 уже выполнена.',
     }),
   ];
+}
+
+/**
+ * Варианты исправления для недоступности Бригады Белузин в 13:00: рекомендован пересчёт дня,
+ * минимум перестановок держит маршруты, «ничего не менять» оставляет двух клиентов без инженера и двоих с опозданием.
+ */
+export function makeEventChoice(overrides: Partial<EventChoice> = {}): EventChoice {
+  const metrics = makePlanningState().plan.metrics;
+  const option = (variant: EventVariant, patch: Partial<VariantOption> = {}): VariantOption => ({
+    variant,
+    title: { optimal: 'Оптимально по дню', stable: 'Минимум перестановок', keep: 'Ничего не менять' }[variant],
+    summary: { optimal: 'Пересчитать остаток дня целиком', stable: 'Чужие маршруты почти не трогаем', keep: 'Оставить маршруты как есть' }[variant],
+    metrics,
+    late: 0,
+    moved: 0,
+    pros: [],
+    cons: [],
+    recommended: false,
+    ...patch,
+  });
+  return {
+    entry_id: 'tl_2',
+    event: { type: 'engineer_unavailable', time: '13:00', request: null, request_id: null, engineer_id: 'E02' },
+    metrics_before: metrics,
+    late_before: 0,
+    variants: [
+      option('optimal', { recommended: true, moved: 3, pros: ['на 1 бригаду меньше'], cons: ['на 3 заявки больше переезжает к другим бригадам'] }),
+      option('stable', { moved: 0, pros: ['на 3 заявки меньше переезжает к другим бригадам'], cons: ['на 1 бригаду больше'] }),
+      option('keep', { late: 2, metrics: { ...metrics, unassigned: metrics.unassigned + 2 }, cons: ['на 4 клиента без инженера или с опозданием больше'] }),
+    ],
+    current: null,
+    ...overrides,
+  };
 }
 
 /** Смена транспорта Бригады Арташкин с автомобиля на велосипед, как её возвращает сервер после применения. */

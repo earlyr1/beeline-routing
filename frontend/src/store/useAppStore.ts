@@ -8,15 +8,18 @@ import {
   getDatasetStatus,
   getPlanningState,
   getReverseGeocode,
+  getTimelineVariants,
   moveCursor,
+  setTimelineVariant,
   uploadFile,
 } from '../api/client';
-import type { ClientConfig, DatasetStatus, HHMM, PlanEvent, PlanningState, TimelineItem } from '../api/types';
+import type { ClientConfig, DatasetStatus, EventChoice, EventVariant, HHMM, PlanEvent, PlanningState, TimelineItem } from '../api/types';
 import type { PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
 import { NO_TIMELINE_MOVE, newlyRejected, pausesAt, playEnd, rejectedNotice, timelineMove, type TimelineMove } from '../lib/timeBar';
 import { dayScale } from '../lib/timeline';
+import { CHOOSABLE_EVENTS } from '../lib/variants';
 import { DEFAULT_LUNCH_ENABLED, DEFAULT_WORKLOAD_LEVEL, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 
 export const POLL_INTERVAL_MS = 1000;
@@ -70,6 +73,14 @@ export interface AppData {
   committing: boolean;
   /** Что сделал последний полученный план на шкале: сколько событий применилось и ушли ли часы назад через события. */
   timelineMove: TimelineMove;
+  /** Окно выбора варианта исправления; null — закрыто или ждёт варианты. */
+  choice: EventChoice | null;
+  /** Окно выбора открыто и ждёт варианты от сервера. */
+  choiceLoading: boolean;
+  /** Куда вернуть часы после выбора: время и шли ли часы до остановки на событии. */
+  resumeAfterChoice: { time: HHMM; play: boolean } | null;
+  /** Событие, окно которого закрыли без выбора: ответы сервера его не открывают, пока часы не пойдут дальше. */
+  dismissedChoice: string | null;
   busy: boolean;
   error: string | null;
   pickMode: boolean;
@@ -104,6 +115,12 @@ export interface AppActions {
   applyEvent(event: PlanEvent): Promise<boolean>;
   /** Убрать событие со шкалы дня. */
   deleteTimelineEvent(entryId: string): Promise<boolean>;
+  /** Выбрать стратегию для открытого окна; часы возвращаются туда, откуда их остановило событие. */
+  chooseVariant(variant: EventVariant): Promise<boolean>;
+  /** Открыть окно выбора для события шкалы (смена выбора с метки). */
+  openChoice(entryId: string): Promise<void>;
+  /** Закрыть окно без выбора: часы стоят на событии. */
+  closeChoice(): void;
   /** Вернуть план, открытый до перезагрузки страницы. */
   restoreSession(): Promise<void>;
   setPlanningState(state: PlanningState): void;
@@ -176,6 +193,10 @@ export const initialAppData: AppData = {
   playing: false,
   committing: false,
   timelineMove: NO_TIMELINE_MOVE,
+  choice: null,
+  choiceLoading: false,
+  resumeAfterChoice: null,
+  dismissedChoice: null,
   busy: false,
   error: null,
   pickMode: false,
@@ -206,6 +227,9 @@ const NO_ADDRESS_LOOKUP = { urgentAddressLookup: 'idle', urgentSuggestedAddress:
 /** Новая сессия начинается с остановленными часами. */
 const NO_CLOCK_ACTIVITY = { dragging: false, playing: false, committing: false } satisfies Partial<AppData>;
 
+/** Окно выбора варианта закрыто и ничего не ждёт. */
+const NO_CHOICE = { choice: null, choiceLoading: false, resumeAfterChoice: null, dismissedChoice: null } satisfies Partial<AppData>;
+
 const OFFLINE_CONFIG: ClientConfig = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: false };
 
 function errorMessage(error: unknown): string {
@@ -214,6 +238,9 @@ function errorMessage(error: unknown): string {
 }
 
 const withPeriod = (text: string) => (/[.!?…]$/u.test(text) ? text : `${text}.`);
+
+/** Более позднее из двух времён; неправильное время уступает второму. */
+const laterOf = (a: HHMM, b: HHMM): HHMM => (isValidTime(a) && isValidTime(b) && toMinutes(a) > toMinutes(b) ? a : b);
 
 const isTransient = (error: unknown) => error instanceof ApiError && (error.status === 0 || error.status >= 500);
 
@@ -319,7 +346,7 @@ export function resetAppSession(): void {
 export const useAppStore = create<AppState>()((set, get) => {
   /** План с сервера. syncClock ставит часы на его время; фиксация часов их не трогает, диспетчер мог сдвинуть их дальше. */
   function receive(next: PlanningState, syncClock: boolean): void {
-    const { state: shown, selectedRequestId, selectedEngineerId, editingRequestId, whyOpen, clock } = get();
+    const { state: shown, selectedRequestId, selectedEngineerId, editingRequestId, whyOpen, clock, playing: wasPlaying } = get();
     const same = shown !== null && shown.dataset_id === next.dataset_id ? shown : null;
     const exists = (requestId: string | null) => requestId !== null && next.requests.some((request) => request.id === requestId);
     const rejected = same ? newlyRejected(same.timeline ?? [], next.timeline ?? []) : [];
@@ -339,6 +366,19 @@ export const useAppStore = create<AppState>()((set, get) => {
       lunchEnabled: lunchEnabledOf(next.lunch_enabled),
       ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
     });
+    // Время плана остановилось на «ломающем» событии без выбора: часы ждут на нём, открывается окно выбора.
+    const pending = next.pending_choice ?? null;
+    const { choice, dismissedChoice } = get();
+    if (pending && pending.entry_id !== choice?.entry_id && pending.entry_id !== dismissedChoice) {
+      stopTicking();
+      set({
+        playing: false,
+        clock: next.cursor,
+        choice: pending,
+        choiceLoading: false,
+        resumeAfterChoice: { time: laterOf(clock, next.cursor), play: wasPlaying },
+      });
+    }
     if (next.timeline_ready === false) schedulePoll();
   }
 
@@ -513,6 +553,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         toolbarDialog: null,
         mapMenu: null,
         ...NO_ADDRESS_LOOKUP,
+        ...NO_CHOICE,
       });
       try {
         const status = await uploadFile(file);
@@ -535,7 +576,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       // Пересчёт с нуля ставит часы на начало дня: идущие часы останавливаются без фиксации.
       get().stopPlayback();
       const current = generation;
-      set({ busy: true, error: null });
+      set({ busy: true, error: null, ...NO_CHOICE });
       try {
         const state = await enqueue(current, () => buildPlan(datasetId, { workload_level: workloadLevel, lunch: lunchEnabled }));
         if (!isCurrent(current)) return;
@@ -557,10 +598,12 @@ export const useAppStore = create<AppState>()((set, get) => {
     },
 
     async applyEvent(event) {
-      const { datasetId } = get();
+      const { datasetId, clock } = get();
       if (!datasetId) return false;
       const current = generation;
-      set({ busy: true, error: null });
+      // «Ломающее» событие на время часов или раньше: сервер сразу попросит выбрать вариант, окно ждёт его ответа.
+      const asks = CHOOSABLE_EVENTS.has(event.type) && isValidTime(event.time) && isValidTime(clock) && toMinutes(event.time) <= toMinutes(clock);
+      set({ busy: true, error: null, ...(asks ? { choice: null, choiceLoading: true, dismissedChoice: null } : {}) });
       try {
         // Диспетчер видит на часах их время и ждёт, что событие в это время применится сразу.
         await get().commitClock();
@@ -573,6 +616,8 @@ export const useAppStore = create<AppState>()((set, get) => {
         return false;
       } finally {
         if (isCurrent(current)) set({ busy: false });
+        // Сервер не остановил время на событии (или отклонил его): окно, ждавшее варианты, закрывается.
+        if (isCurrent(current) && get().choiceLoading) set({ choiceLoading: false });
       }
     },
 
@@ -592,6 +637,52 @@ export const useAppStore = create<AppState>()((set, get) => {
       } finally {
         if (isCurrent(current)) set({ busy: false });
       }
+    },
+
+    async chooseVariant(variant) {
+      const { datasetId, choice, resumeAfterChoice } = get();
+      if (!datasetId || !choice) return false;
+      const current = generation;
+      set({ busy: true, error: null });
+      let chosen = false;
+      try {
+        const state = await enqueue(current, () => setTimelineVariant(datasetId, choice.entry_id, variant));
+        if (!isCurrent(current)) return false;
+        set(NO_CHOICE);
+        get().setPlanningState(state);
+        chosen = true;
+      } catch (error) {
+        if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });
+      } finally {
+        if (isCurrent(current)) set({ busy: false });
+      }
+      if (!chosen || !isCurrent(current) || !resumeAfterChoice) return chosen;
+      // Часы шли до события — идут дальше; ползунок отпустили за событием — план догоняет отпущенное время.
+      if (resumeAfterChoice.play) {
+        get().play();
+      } else if (resumeAfterChoice.time !== get().clock) {
+        set({ clock: resumeAfterChoice.time });
+        await get().commitClock();
+      }
+      return true;
+    },
+
+    async openChoice(entryId) {
+      const { datasetId } = get();
+      if (!datasetId) return;
+      const current = generation;
+      set({ choice: null, choiceLoading: true, resumeAfterChoice: null, error: null });
+      try {
+        const choice = await getTimelineVariants(datasetId, entryId);
+        // Окно закрыли, пока варианты считались: ответ его заново не открывает.
+        if (isCurrent(current) && get().choiceLoading) set({ choice, choiceLoading: false });
+      } catch (error) {
+        if (isCurrent(current)) set({ choiceLoading: false, error: errorMessage(error) });
+      }
+    },
+
+    closeChoice() {
+      set({ dismissedChoice: get().choice?.entry_id ?? null, choice: null, choiceLoading: false, resumeAfterChoice: null });
     },
 
     async restoreSession() {
@@ -635,6 +726,8 @@ export const useAppStore = create<AppState>()((set, get) => {
     commitClock() {
       const { datasetId, state, clock } = get();
       if (!datasetId || !state) return Promise.resolve(true);
+      // Часы пытаются пройти событие, окно которого закрыли без выбора: сервер снова остановит их, окно откроется.
+      if (state.pending_choice && isValidTime(clock) && toMinutes(clock) > toMinutes(state.cursor)) set({ dismissedChoice: null });
       if (commitRun) {
         // Фиксация уже в пути: когда она вернётся, досылается одна фиксация с последним временем часов.
         commitAgain = true;
@@ -670,6 +763,11 @@ export const useAppStore = create<AppState>()((set, get) => {
     play() {
       const { state, playing, clock } = get();
       if (!state || playing) return;
+      // Время стоит на событии без выбора: вместо запуска снова открывается окно, после выбора часы пойдут.
+      if (state.pending_choice) {
+        set({ dismissedChoice: null, choice: state.pending_choice, resumeAfterChoice: { time: state.cursor, play: true } });
+        return;
+      }
       const scale = dayScale(state, state.plan);
       const end = playEnd(scale);
       // Часы раньше начала шкалы стоят на ползунке в её начале: проигрывание идёт с того места, где ползунок.

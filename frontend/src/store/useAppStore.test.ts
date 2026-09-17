@@ -14,13 +14,15 @@ vi.mock('../api/client', async (importOriginal) => {
     deleteTimelineEvent: vi.fn(),
     moveCursor: vi.fn(),
     getReverseGeocode: vi.fn(),
+    getTimelineVariants: vi.fn(),
+    setTimelineVariant: vi.fn(),
   };
 });
 
 import * as api from '../api/client';
 import type { DatasetStatus, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
 import { cancelEvent } from '../lib/events';
-import { makeDatasetStatus, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
+import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
 
@@ -785,6 +787,97 @@ describe('dragging the clock', () => {
     useAppStore.getState().endDrag();
     await vi.advanceTimersByTimeAsync(0);
     expect(api.moveCursor).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('choice of a variant for an event that breaks the plan', () => {
+  const awaitingState = (cursor: string) =>
+    at(cursor, { pending_choice: makeEventChoice(), timeline: [makeTimelineItem({ id: 'tl_2', status: 'awaiting', choosable: true, variant: null, event: makeEventChoice().event })] });
+
+  it('pauses the playing clock at the event, opens the choice and plays on after the choice', async () => {
+    vi.useFakeTimers();
+    useAppStore.getState().setPlanningState(at('12:58'));
+    vi.mocked(api.moveCursor).mockResolvedValue(awaitingState('13:00'));
+    useAppStore.setState({ clock: '12:58' });
+    useAppStore.setState({ state: { ...useAppStore.getState().state!, timeline: awaitingState('13:00').timeline } });
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 3);
+
+    expect(useAppStore.getState()).toMatchObject({ playing: false, clock: '13:00', choiceLoading: false });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+    expect(useAppStore.getState().resumeAfterChoice).toEqual({ time: '13:00', play: true });
+
+    vi.mocked(api.setTimelineVariant).mockResolvedValue(at('13:00', { pending_choice: null }));
+    vi.mocked(api.moveCursor).mockResolvedValue(at('13:00'));
+    await useAppStore.getState().chooseVariant('stable');
+    expect(api.setTimelineVariant).toHaveBeenCalledWith('d_test', 'tl_2', 'stable');
+    expect(useAppStore.getState()).toMatchObject({ choice: null, resumeAfterChoice: null, playing: true });
+    useAppStore.getState().stopPlayback();
+  });
+
+  it('after a slider release past the event commits to the released time once the variant is chosen', async () => {
+    useAppStore.getState().setPlanningState(at('09:00'));
+    vi.mocked(api.moveCursor).mockResolvedValueOnce(awaitingState('13:00')).mockResolvedValueOnce(at('17:00'));
+    useAppStore.getState().startDrag();
+    useAppStore.getState().setClock('17:00');
+    useAppStore.getState().endDrag();
+    await vi.waitFor(() => expect(useAppStore.getState().choice?.entry_id).toBe('tl_2'));
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:00', resumeAfterChoice: { time: '17:00', play: false } });
+
+    vi.mocked(api.setTimelineVariant).mockResolvedValue(at('13:00'));
+    await useAppStore.getState().chooseVariant('keep');
+    expect(vi.mocked(api.moveCursor).mock.calls.at(-1)).toEqual(['d_test', '17:00']);
+    expect(useAppStore.getState().clock).toBe('17:00');
+  });
+
+  it('closing without a choice keeps the clock at the event, and play asks again', () => {
+    useAppStore.getState().setPlanningState(awaitingState('13:00'));
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+    useAppStore.getState().closeChoice();
+    expect(useAppStore.getState()).toMatchObject({ choice: null, dismissedChoice: 'tl_2', clock: '13:00' });
+
+    // Тот же ответ сервера окно заново не открывает, а «Запустить» открывает.
+    useAppStore.getState().setPlanningState(awaitingState('13:00'));
+    expect(useAppStore.getState().choice).toBeNull();
+    useAppStore.getState().play();
+    expect(useAppStore.getState()).toMatchObject({ playing: false, dismissedChoice: null, resumeAfterChoice: { time: '13:00', play: true } });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+  });
+
+  it('opens a loading choice while a breaking event at the clock is added', async () => {
+    useAppStore.getState().setPlanningState(at('12:00'));
+    const response = deferred<PlanningState>();
+    vi.mocked(api.addTimelineEvent).mockReturnValue(response.promise);
+    const adding = useAppStore.getState().applyEvent({ type: 'engineer_unavailable', time: '12:00', request: null, request_id: null, engineer_id: 'E02' });
+    await vi.waitFor(() => expect(useAppStore.getState().choiceLoading).toBe(true));
+    response.resolve(awaitingState('12:00'));
+    await adding;
+    expect(useAppStore.getState()).toMatchObject({ choiceLoading: false });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+  });
+
+  it('opens the choice of an applied event from its pin and changes it without moving the clock', async () => {
+    useAppStore.getState().setPlanningState(at('15:00'));
+    vi.mocked(api.getTimelineVariants).mockResolvedValue(makeEventChoice({ current: 'optimal' }));
+    await useAppStore.getState().openChoice('tl_2');
+    expect(useAppStore.getState()).toMatchObject({ choiceLoading: false, resumeAfterChoice: null });
+    expect(useAppStore.getState().choice?.current).toBe('optimal');
+
+    vi.mocked(api.setTimelineVariant).mockResolvedValue(at('15:00', { version: 9 }));
+    expect(await useAppStore.getState().chooseVariant('keep')).toBe(true);
+    expect(api.moveCursor).not.toHaveBeenCalled();
+    expect(useAppStore.getState()).toMatchObject({ choice: null, clock: '15:00' });
+    expect(useAppStore.getState().state?.version).toBe(9);
+  });
+
+  it('keeps the dialog open with an error when the choice fails and closes it on a new day', async () => {
+    useAppStore.getState().setPlanningState(awaitingState('13:00'));
+    vi.mocked(api.setTimelineVariant).mockRejectedValue(new api.ApiError(409, 'Для этого события варианты не предлагаются.'));
+    expect(await useAppStore.getState().chooseVariant('keep')).toBe(false);
+    expect(useAppStore.getState()).toMatchObject({ error: 'Для этого события варианты не предлагаются.', busy: false });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+    useAppStore.getState().reset();
+    expect(useAppStore.getState()).toMatchObject({ choice: null, choiceLoading: false, resumeAfterChoice: null, dismissedChoice: null });
   });
 });
 
