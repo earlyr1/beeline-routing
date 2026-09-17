@@ -17,11 +17,22 @@ from app.api.schemas import (
     PlanningState,
     PlanRequest,
     RouteGeometry,
+    VariantRequest,
 )
-from app.api.timeline import ensure_precompute, insert_and_replay, move_cursor, planning_state, settle
+from app.api.timeline import (
+    NOT_CHOOSABLE_TEXT,
+    VariantUnavailable,
+    ensure_precompute,
+    event_choice,
+    insert_and_replay,
+    move_cursor,
+    planning_state,
+    settle,
+)
 from app.domain.models import Event
+from app.domain.timeutil import fmt_hhmm
 from app.planning.explain import build_explanation
-from app.planning.models import Explanation
+from app.planning.models import EventChoice, Explanation
 from app.planning.session import (
     EventRejected,
     PlanningSession,
@@ -30,6 +41,7 @@ from app.planning.session import (
     start_session,
 )
 from app.planning.timeline import EVENT_TIME_RANGE_TEXT, LAST_MINUTE, check_known, known_requests
+from app.planning.variants import is_choosable
 
 router = APIRouter(prefix="/api")
 
@@ -154,7 +166,8 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
     """Событие в текущее время плана или позже: встаёт на шкалу, и текущее время переходит к нему.
 
     Событие раньше текущего времени отклоняется. События на шкале между текущим временем и новым событием
-    применяются по пути. Отклонённое событие на шкале не остаётся, текущее время не меняется.
+    применяются по пути. Отклонённое событие на шкале не остаётся, текущее время не меняется. «Ломающее» событие
+    сразу получает стратегию optimal; если по пути есть «ломающее» событие без выбора, ответ 409.
     """
     record = _record(deps, dataset_id)
     ctx = deps.ingest.planning
@@ -172,8 +185,14 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
                 cursor = record.cursor
                 if event.time < cursor:
                     raise HTTPException(status_code=422, detail=early_event_text(event.time, cursor))
-                entry = record.timeline.create(event, geo)
+                entry = record.timeline.create(event, geo, variant="optimal" if is_choosable(event) else None)
             step = insert_and_replay(record, ctx, entry)
+            if step is None:
+                with record.lock:
+                    record.timeline.remove(entry.id)
+                    awaiting = record.timeline.walk(record.base).awaiting
+                when = fmt_hhmm(awaiting.event.time if awaiting is not None else cursor)
+                raise HTTPException(status_code=409, detail=f"Сначала выберите вариант для события в {when}.")
             if step.reason is not None:
                 raise HTTPException(status_code=422, detail=step.reason)
             settle(record, ctx, max(cursor, event.time))
@@ -209,7 +228,7 @@ def add_timeline_event(dataset_id: str, event: Event, deps: Deps) -> PlanningSta
                 entry = record.timeline.create(event, geo)
             if event.time <= cursor:
                 step = insert_and_replay(record, ctx, entry)
-                if step.reason is not None:
+                if step is not None and step.reason is not None:
                     raise HTTPException(status_code=422, detail=step.reason)
             else:
                 with record.lock:
@@ -231,6 +250,39 @@ def delete_timeline_event(dataset_id: str, entry_id: str, deps: Deps) -> Plannin
                 _session(record)
                 if record.timeline.remove(entry_id) is None:
                     raise HTTPException(status_code=404, detail=f"Событие {entry_id} не найдено.")
+            settle(record, ctx)
+            return planning_state(record)
+    finally:
+        ensure_precompute(record, ctx, deps.run_background)
+
+
+@router.get("/datasets/{dataset_id}/timeline/events/{entry_id}/variants", response_model=EventChoice)
+def get_timeline_variants(dataset_id: str, entry_id: str, deps: Deps) -> EventChoice:
+    """Варианты исправления для «ломающего» события шкалы: для окна выбора и смены выбора."""
+    record = _record(deps, dataset_id)
+    with record.lock:
+        _session(record)
+    try:
+        return event_choice(record, deps.ingest.planning, entry_id)
+    except VariantUnavailable as error:
+        raise HTTPException(status_code=error.status, detail=str(error)) from error
+
+
+@router.put("/datasets/{dataset_id}/timeline/events/{entry_id}/variant", response_model=PlanningState)
+def put_timeline_variant(dataset_id: str, entry_id: str, body: VariantRequest, deps: Deps) -> PlanningState:
+    """Выбор или смена стратегии события. План на текущее время пересчитывается с этого события."""
+    record = _record(deps, dataset_id)
+    ctx = deps.ingest.planning
+    try:
+        with record.timeline_lock:
+            with record.lock:
+                _session(record)
+                entry = record.timeline.find(entry_id)
+                if entry is None:
+                    raise HTTPException(status_code=404, detail=f"Событие {entry_id} не найдено.")
+                if not is_choosable(entry.event):
+                    raise HTTPException(status_code=409, detail=NOT_CHOOSABLE_TEXT)
+                record.timeline.set_variant(entry_id, body.variant)
             settle(record, ctx)
             return planning_state(record)
     finally:

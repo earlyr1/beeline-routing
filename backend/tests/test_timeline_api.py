@@ -5,6 +5,8 @@ import threading
 
 import pytest
 
+from app.domain.enums import EventType
+from app.domain.models import Event
 from tests.api_helpers import HashGeocoder, make_client, sample_bundle, upload
 from tests.llm_helpers import ScriptedProvider, completion, tool_call
 from tests.timeline_helpers import cancel, fcfs_solves, restore
@@ -124,7 +126,14 @@ def test_future_event_is_pending_and_computed_in_background(tmp_path, solves):
     state = added(client, base, cancel("R2", "13:00"))
 
     assert state["timeline"] == [
-        {"id": "tl_1", "event": body(cancel("R2", "13:00")), "status": "pending", "reason": None}
+        {
+            "id": "tl_1",
+            "event": body(cancel("R2", "13:00")),
+            "status": "pending",
+            "reason": None,
+            "variant": None,
+            "choosable": False,
+        }
     ]
     assert (state["cursor"], state["timeline_ready"]) == ("00:00", False)
     assert plan_part(state) == plan_part(initial)
@@ -328,6 +337,8 @@ def test_timeline_event_checks_ids_and_time_range(tmp_path, solves):
     assert statuses(state_of(client, base)) == [("tl_1", "pending"), ("tl_2", "pending")]
     assert solves == []
 
+    # Срочная заявка — «ломающее» событие: без выбора варианта время на ней остановится.
+    assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "optimal"}).status_code == 200
     evening = at(client, base, "17:00")
     assert statuses(evening) == [("tl_1", "applied"), ("tl_2", "applied")]
     assert request_status(evening, "URG-1") == "cancelled"
@@ -551,3 +562,113 @@ def test_timeline_edit_is_geocoded_once_when_added(tmp_path, solves):
     stored = next(request for request in state["requests"] if request["id"] == "R2")
     assert (stored["address"], stored["geocode_precision"]) == ("Город Москва, ул.Таганская, д. 7", "street")
     assert state["timeline"][2]["event"]["previous_request"]["address"] == before["address"]
+
+
+def unavailable(engineer_id, time):
+    return Event(type=EventType.ENGINEER_UNAVAILABLE, time=time, engineer_id=engineer_id)
+
+
+def busy_of(client, base):
+    return next(route["engineer_id"] for route in state_of(client, base)["plan"]["routes"] if route["visits"])
+
+
+def cursor_to(client, base, time):
+    response = client.post(f"{base}/cursor", json={"time": time})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    busy = busy_of(client, base)
+    added(client, base, unavailable(busy, "13:00"))
+    added(client, base, cancel("R3", "14:30"))
+    background.run()
+    ahead = state_of(client, base)
+    assert ahead["timeline_ready"] is True and ahead["pending_choice"] is None
+    assert [(item["status"], item["choosable"], item["variant"]) for item in ahead["timeline"]] == [
+        ("pending", True, None),
+        ("pending", False, None),
+    ]
+
+    stopped = cursor_to(client, base, "17:00")
+    assert stopped["cursor"] == "13:00"
+    assert [item["status"] for item in stopped["timeline"]] == ["awaiting", "pending"]
+    choice = stopped["pending_choice"]
+    assert choice["entry_id"] == "tl_1" and choice["current"] is None
+    assert [option["variant"] for option in choice["variants"]] == ["optimal", "stable", "keep"]
+    assert [option["title"] for option in choice["variants"]] == [
+        "Оптимально по дню",
+        "Минимум перестановок",
+        "Ничего не менять",
+    ]
+    assert sum(option["recommended"] for option in choice["variants"]) == 1
+    assert stopped["plan"] == ahead["plan"]
+
+    chosen = client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "keep"})
+    assert chosen.status_code == 200, chosen.text
+    chosen = chosen.json()
+    assert (chosen["cursor"], chosen["pending_choice"]) == ("13:00", None)
+    assert [(item["status"], item["variant"]) for item in chosen["timeline"]] == [
+        ("applied", "keep"),
+        ("pending", None),
+    ]
+    assert {item["request_id"] for item in chosen["plan"]["unassigned"]} >= {
+        visit["request_id"]
+        for route in ahead["plan"]["routes"]
+        if route["engineer_id"] == busy
+        for visit in route["visits"]
+        if visit["start"] >= "13:00"
+    }
+
+    later = cursor_to(client, base, "17:00")
+    assert [item["status"] for item in later["timeline"]] == ["applied", "applied"]
+
+    changed = client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "optimal"}).json()
+    assert (changed["cursor"], changed["timeline"][0]["variant"]) == ("17:00", "optimal")
+    assert changed["plan"] != later["plan"]
+    again = client.get(f"{base}/timeline/events/tl_1/variants")
+    assert again.status_code == 200 and again.json()["current"] == "optimal"
+
+
+def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    busy = busy_of(client, base)
+    cursor_to(client, base, "12:00")
+    state = added(client, base, unavailable(busy, "12:00"))
+    assert state["cursor"] == "12:00"
+    assert state["timeline"][0]["status"] == "awaiting"
+    assert state["pending_choice"]["entry_id"] == "tl_1"
+
+
+def test_variant_errors(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    added(client, base, cancel("R1", "16:00"))
+    background.run()
+    assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "keep"}).status_code == 409
+    assert client.get(f"{base}/timeline/events/tl_1/variants").status_code == 409
+    assert client.put(f"{base}/timeline/events/tl_9/variant", json={"variant": "keep"}).status_code == 404
+    assert client.get(f"{base}/timeline/events/tl_9/variants").status_code == 404
+    assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "best"}).status_code == 422
+
+
+def test_legacy_events_and_proposals_apply_the_optimal_variant_without_asking(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    busy = busy_of(client, base)
+    response = client.post(f"{base}/events", json=body(unavailable(busy, "13:00")))
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert state["pending_choice"] is None
+    assert [(item["status"], item["variant"]) for item in state["timeline"]] == [("applied", "optimal")]
+
+
+def test_legacy_event_after_an_event_without_a_choice_is_409_and_not_kept(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    added(client, base, unavailable(busy_of(client, base), "13:00"))
+
+    response = client.post(f"{base}/events", json=body(cancel("R3", "14:30")))
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Сначала выберите вариант для события в 13:00."
+    state = state_of(client, base)
+    assert (state["cursor"], statuses(state)) == ("00:00", [("tl_1", "pending")])

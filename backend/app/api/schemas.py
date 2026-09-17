@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
 from app.domain.enums import Transport
 from app.domain.models import Engineer, Event, Office, Plan, Request
 from app.domain.timeutil import HHMM
-from app.planning.models import AppliedEvent, PlanDiff
+from app.planning.models import AppliedEvent, EventChoice, EventVariant, PlanDiff
 from app.planning.session import PlanningSession
 from app.planning.timeline import CURSOR_RANGE_TEXT, LAST_MINUTE, TimelineStatus
 from app.planning.workload import WORKLOAD_LEVEL_TEXT, is_workload_level
@@ -90,6 +90,16 @@ class TimelineItem(BaseModel):
     event: Event
     status: TimelineStatus
     reason: str | None = None
+    # Стратегия «ломающего» события; null — не выбрана или событие не «ломающее».
+    variant: EventVariant | None = None
+    # «Ломающее» событие: для него сервер предлагает варианты исправления.
+    choosable: bool = False
+
+
+class VariantRequest(BaseModel):
+    """Тело PUT …/timeline/events/{id}/variant."""
+
+    variant: EventVariant
 
 
 class PlanningState(BaseModel):
@@ -114,6 +124,8 @@ class PlanningState(BaseModel):
     timeline: list[TimelineItem] = Field(default_factory=list)
     # Все шаги таймлайна посчитаны: статусы событий впереди окончательные.
     timeline_ready: bool = True
+    # «Ломающее» событие, на котором остановилось текущее время, и его варианты; null — выбирать нечего.
+    pending_choice: EventChoice | None = None
 
 
 class RouteLeg(BaseModel):
@@ -149,6 +161,7 @@ def to_planning_state(
     cursor: int | None = None,
     timeline: list[TimelineItem] | None = None,
     timeline_ready: bool = True,
+    pending_choice: EventChoice | None = None,
 ) -> PlanningState:
     """Состояние на текущее время cursor (по умолчанию время последнего события сессии)."""
     return PlanningState(
@@ -171,4 +184,5 @@ def to_planning_state(
         cursor=session.now if cursor is None else cursor,
         timeline=timeline or [],
         timeline_ready=timeline_ready,
+        pending_choice=pending_choice,
     )

@@ -15,6 +15,7 @@ from app.llm.client import LlmError
 from app.llm.interpret import NOTHING_FOUND, interpret
 from app.llm.prompt import build_messages
 from app.llm.schemas import STATUS_DONE_RU, ChatRequest, ChatResponse, Proposal
+from app.planning.variants import is_choosable
 
 router = APIRouter(prefix="/api/datasets/{dataset_id}")
 
@@ -50,16 +51,28 @@ def _refreshed(event: Event, cursor: int) -> Event:
 def _approve(deps: AppDeps, record: DatasetRecord, proposal: Proposal) -> Proposal:
     """Применяет одно предложение через таймлайн: событие встаёт на шкалу, текущее время переходит к нему.
 
-    Вызывать под record.timeline_lock.
+    «Ломающее» событие сразу получает стратегию optimal. Вызывать под record.timeline_lock.
     """
     ctx = deps.ingest.planning
     with record.lock:
         _session(record)
         cursor = record.cursor
         event = _refreshed(proposal.event, cursor)
-        entry = record.timeline.create(event, checked=True)
+        entry = record.timeline.create(
+            event, checked=True, variant="optimal" if is_choosable(event) else None
+        )
     step = insert_and_replay(record, ctx, entry)
-    if step.applied is None:
+    if step is None:
+        with record.lock:
+            record.timeline.remove(entry.id)
+        result = proposal.model_copy(
+            update={
+                "status": "failed",
+                "event": event,
+                "error": "Сначала выберите вариант для события на шкале.",
+            }
+        )
+    elif step.applied is None:
         result = proposal.model_copy(update={"status": "failed", "event": event, "error": step.reason})
     else:
         settle(record, ctx, max(cursor, event.time))
