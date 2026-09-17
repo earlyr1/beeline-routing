@@ -11,6 +11,7 @@ from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
 from app.planning import session as session_module
 from app.planning.timeline import Timeline, replay_step
+from app.planning.variants import VARIANTS, is_choosable
 from app.solvers.fcfs import FcfsSolver
 
 
@@ -57,14 +58,21 @@ def restore(request_id, time):
 
 
 def replay_all(timeline: Timeline, base, ctx):
-    """Считает все недостающие шаги по порядку, как фоновый предподсчёт, и возвращает полный проход."""
+    """Считает все недостающие шаги по порядку, как фоновый предподсчёт, и возвращает полный проход.
+
+    На «ломающем» событии без выбора считает шаги всех стратегий и возвращает проход, остановленный на выборе.
+    """
     version = max([base.version, *(step.session.version for step in timeline.steps.values())])
     while True:
         walk = timeline.walk(base)
+        if walk.awaiting is not None:
+            return walk
         if walk.done == len(timeline.entries):
             return walk
         entry = timeline.entries[walk.done]
-        step = replay_step(walk.session, entry, ctx, version + 1)
-        timeline.store(walk, entry, step)
+        variants = VARIANTS if is_choosable(entry.event) and entry.variant is None else (None,)
+        for variant in variants:
+            step = replay_step(walk.session, entry, ctx, version + 1, variant)
+            timeline.store(walk, entry, step, variant)
         if step.applied is not None:
             version += 1

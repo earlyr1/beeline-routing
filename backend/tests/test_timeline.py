@@ -6,9 +6,10 @@ from app.domain.enums import EventType, RequestStatus
 from app.domain.models import Event
 from app.ingest.geocode import GeoResult
 from app.planning.session import EventRejected, apply_event, geocode_entry
-from app.planning.timeline import Timeline, check_known, known_requests
+from app.planning.timeline import Timeline, check_known, entry_token, known_requests, replay_step
+from app.planning.variants import VARIANTS
 from tests.helpers import req
-from tests.planning_helpers import context, new_session
+from tests.planning_helpers import busy_engineer, context, new_session
 from tests.timeline_helpers import cancel, fcfs_solves, replay_all, restore
 
 
@@ -232,7 +233,7 @@ def test_urgent_request_is_located_at_add_time_and_replay_does_not_geocode(solve
 
     assert geo == {} and (located.request.lat, located.request.lon) == (55.7601, 37.6202)
     timeline = Timeline()
-    timeline.insert(timeline.create(located, geo))
+    timeline.insert(timeline.create(located, geo, variant="optimal"))
     walk = replay_all(timeline, base, ctx)
     assert len(calls) == 1 and walk.session.request("U1").geocode_precision == "street"
 
@@ -283,3 +284,94 @@ def test_known_ids_come_from_the_base_day_and_earlier_urgent_entries():
         with pytest.raises(EventRejected) as error:
             check_known(base, timeline.entries, event)
         assert str(error.value) == text
+
+
+def unavailable(engineer_id, time):
+    return Event(type=EventType.ENGINEER_UNAVAILABLE, time=time, engineer_id=engineer_id)
+
+
+def _variants_of(timeline, base, ctx, entry):
+    """Как фоновый расчёт: три шага события без выбора после посчитанного прохода."""
+    walk = timeline.walk(base)
+    for variant in VARIANTS:
+        timeline.store(walk, entry, replay_step(walk.session, entry, ctx, 99, variant), variant)
+    return walk
+
+
+def test_walk_stops_at_a_breaking_event_without_a_choice_until_its_variants_are_known(solves):
+    ctx = context()
+    base = new_session(ctx)
+    busy = busy_engineer(base.plan)
+    breaking, later = _added(timeline := Timeline(), unavailable(busy, "13:00"), cancel("R1", "16:00"))
+
+    assert entry_token(breaking) == breaking.id and entry_token(breaking, "keep") == f"{breaking.id}@keep"
+    walk = timeline.walk(base)
+    assert (walk.done, walk.awaiting) == (0, None)
+
+    _variants_of(timeline, base, ctx, breaking)
+    walk = timeline.walk(base)
+    assert (walk.done, walk.awaiting) == (0, breaking)
+    assert timeline.pending_choice(base, 12 * 60) is None
+    pending_walk, entry = timeline.pending_choice(base, 15 * 60)
+    assert entry == breaking and pending_walk.session == base
+    items, ready = timeline.view(base, 15 * 60)
+    assert [item.status for item in items] == ["awaiting", "pending"] and ready is True
+    items, _ = timeline.view(base, 12 * 60)
+    assert [item.status for item in items] == ["pending", "pending"]
+
+
+def test_chosen_variant_is_applied_and_changing_it_replays_later_events_with_their_choices(solves):
+    ctx = context()
+    base = new_session(ctx)
+    busy = busy_engineer(base.plan)
+    timeline = Timeline()
+    breaking, later = _added(timeline, unavailable(busy, "13:00"), cancel("R1", "16:00"))
+    _variants_of(timeline, base, ctx, breaking)
+
+    chosen = timeline.set_variant(breaking.id, "keep")
+    assert chosen.variant == "keep" and timeline.find(breaking.id) is chosen
+    walk = replay_all(timeline, base, ctx)
+    assert walk.awaiting is None and walk.done == 2
+    assert walk.keys[0] == ((), f"{breaking.id}@keep")
+    assert walk.keys[1] == ((f"{breaking.id}@keep",), later.id)
+    kept_plan = walk.steps[0].session.plan
+
+    timeline.set_variant(breaking.id, "optimal")
+    walk = replay_all(timeline, base, ctx)
+    assert walk.keys[1] == ((f"{breaking.id}@optimal",), later.id)
+    assert walk.steps[0].session.plan != kept_plan
+    assert timeline.set_variant("tl_404", "keep") is None
+
+
+def test_rejected_breaking_event_needs_no_choice(solves):
+    ctx = context()
+    base = new_session(ctx)
+    timeline = Timeline()
+    (ghost,) = _added(timeline, unavailable("E404", "13:00"))
+    walk = timeline.walk(base)
+    timeline.store(walk, ghost, replay_step(walk.session, ghost, ctx, 2, "optimal"), "optimal")
+    walk = timeline.walk(base)
+    assert walk.awaiting is None and walk.done == 1 and walk.steps[0].reason is not None
+    items, ready = timeline.view(base, 15 * 60)
+    assert [item.status for item in items] == ["rejected"] and ready is True
+
+
+def test_prune_keeps_the_other_variants_of_chosen_events_and_remove_drops_them(solves):
+    ctx = context()
+    base = new_session(ctx)
+    busy = busy_engineer(base.plan)
+    timeline = Timeline()
+    (breaking,) = _added(timeline, unavailable(busy, "13:00"))
+    _variants_of(timeline, base, ctx, breaking)
+    timeline.set_variant(breaking.id, "stable")
+    walk = replay_all(timeline, base, ctx)
+
+    timeline.prune(walk)
+    assert {key[1] for key in timeline.steps} == {f"{breaking.id}@{variant}" for variant in VARIANTS}
+    timeline.remove(breaking.id)
+    assert timeline.steps == {}
+
+
+def test_entry_can_be_created_with_a_variant():
+    entry = Timeline().create(unavailable("E1", "13:00"), variant="optimal")
+    assert entry.variant == "optimal" and entry_token(entry) == "tl_1@optimal"
