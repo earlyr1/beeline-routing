@@ -551,7 +551,8 @@ def apply_event(
     problem = _pinned_problem(base, session, stored_event)
     strategy: EventVariant = variant if is_choosable(stored_event) else "optimal"
     if strategy == "keep":
-        plan, baseline = keep_plan(problem), FcfsSolver().solve(problem)
+        unassigned_before = {item.request_id for item in session.plan.unassigned}
+        plan, baseline = keep_plan(problem, unassigned_before), FcfsSolver().solve(problem)
     else:
         plan, baseline = _solve(problem, session.workload_level, ctx.time_limit_s, strategy)
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}

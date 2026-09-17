@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
 from app.domain.enums import TRANSPORT_RU, EventType, ReasonCode
@@ -51,16 +51,18 @@ def late_visits(plan: Plan) -> int:
     return sum(1 for route in plan.routes for visit in route.visits if visit.late_min > 0)
 
 
-def keep_plan(problem: Problem) -> Plan:
+def keep_plan(problem: Problem, unassigned_before: Collection[str] = ()) -> Plan:
     """«Ничего не менять»: прежние маршруты без решателя на задаче после события.
 
     Порядок заявок инженера — его несделанная часть плана до события (Problem.previous_order из pin_problem).
     Маршруты прогоняются обычной симуляцией: опоздания и переработки видны в визитах и нарушениях. Заявки
     инженера, которому больше нельзя работать (недоступен или задержан до конца смены), и заявки, которым нужен
     транспорт, которого у инженера теперь нет, остаются без инженера. Новая срочная заявка ни в чей маршрут
-    не попадает.
+    не попадает. unassigned_before — заявки без инженера в плане до события: их причину считает build_plan,
+    как обычно, а не пишет этот вариант.
     """
     open_ids = set(problem.open_request_ids)
+    before = set(unassigned_before)
     sequences: dict[str, list[str]] = {}
     fixed: dict[str, Unassigned] = {}
     for state in problem.states:
@@ -88,7 +90,7 @@ def keep_plan(problem: Problem) -> Plan:
         sequences[engineer.id] = kept
     placed = {request_id for sequence in sequences.values() for request_id in sequence}
     for request_id in problem.open_request_ids:
-        if request_id not in placed and request_id not in fixed:
+        if request_id not in placed and request_id not in fixed and request_id not in before:
             fixed[request_id] = Unassigned(
                 request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=KEEP_TEXT
             )

@@ -24,6 +24,11 @@ class FcfsSolves(list):
         # Стратегия каждого решения по порядку: optimal или stable.
         self.variants: list[str] = []
 
+    def clear(self) -> None:
+        """Забывает и время, и стратегии решений."""
+        super().clear()
+        self.variants.clear()
+
     def hold(self, time: str) -> tuple[threading.Event, threading.Event]:
         """Первое решение задачи на time ждёт release; entered сообщает, что решение началось."""
         entered, release = threading.Event(), threading.Event()

@@ -672,3 +672,59 @@ def test_legacy_event_after_an_event_without_a_choice_is_409_and_not_kept(tmp_pa
     assert response.json()["detail"] == "Сначала выберите вариант для события в 13:00."
     state = state_of(client, base)
     assert (state["cursor"], statuses(state)) == ("00:00", [("tl_1", "pending")])
+
+
+def delayed(engineer_id, time, minutes):
+    return Event(type=EventType.ENGINEER_DELAYED, time=time, engineer_id=engineer_id, delay_min=minutes)
+
+
+def choose(client, base, entry_id, variant):
+    response = client.put(f"{base}/timeline/events/{entry_id}/variant", json={"variant": variant})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def cached_steps(deps, base):
+    return set(deps.registry.get(base.rsplit("/", 1)[1]).timeline.steps)
+
+
+def test_background_precompute_stops_at_the_first_event_without_a_choice(tmp_path, solves):
+    client, deps, base, background = dataset(tmp_path, solves)
+    added(client, base, unavailable(busy_of(client, base), "13:00"))
+    added(client, base, cancel("R3", "14:30"))
+
+    background.run()
+
+    # Посчитаны три варианта события в 13:00 («ничего не менять» без решателя), отмена после него не считалась.
+    assert cached_steps(deps, base) == {((), f"tl_1@{variant}") for variant in ("optimal", "stable", "keep")}
+    assert (solves, solves.variants) == (["13:00", "13:00"], ["optimal", "stable"])
+
+
+def test_changing_an_earlier_choice_replays_a_later_breaking_event_with_its_own_choice(tmp_path, solves):
+    client, deps, base, background = dataset(tmp_path, solves)
+    busy = busy_of(client, base)
+    other = next(
+        route["engineer_id"]
+        for route in state_of(client, base)["plan"]["routes"]
+        if route["engineer_id"] != busy
+    )
+    added(client, base, unavailable(busy, "13:00"))
+    added(client, base, delayed(other, "14:00", 30))
+    background.run()
+    assert cursor_to(client, base, "17:00")["pending_choice"]["entry_id"] == "tl_1"
+    choose(client, base, "tl_1", "keep")
+    assert cursor_to(client, base, "17:00")["pending_choice"]["entry_id"] == "tl_2"
+    choose(client, base, "tl_2", "stable")
+    assert statuses(cursor_to(client, base, "17:00")) == [("tl_1", "applied"), ("tl_2", "applied")]
+    solves.clear()
+
+    changed = choose(client, base, "tl_1", "optimal")
+
+    assert (changed["cursor"], changed["pending_choice"]) == ("17:00", None)
+    assert [(item["status"], item["variant"]) for item in changed["timeline"]] == [
+        ("applied", "optimal"),
+        ("applied", "stable"),
+    ]
+    # Шаг «Оптимально» в 13:00 уже был в кэше, задержка пересчитана после него и со своей стратегией.
+    assert (solves, solves.variants) == (["14:00"], ["stable"])
+    assert (("tl_1@optimal",), "tl_2@stable") in cached_steps(deps, base)

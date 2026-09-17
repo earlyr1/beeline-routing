@@ -2,7 +2,7 @@
 
 import pytest
 
-from app.domain.enums import EventType, ReasonCode, Transport
+from app.domain.enums import EventType, ReasonCode, Skill, Transport
 from app.domain.models import Event, Metrics, Plan, Route, Visit
 from app.planning import session as session_module
 from app.planning.models import DiffMove, PlanDiff
@@ -64,6 +64,29 @@ def test_keep_leaves_the_upcoming_visits_of_an_unavailable_engineer_without_an_e
     assert all(reasons[rid].reason_text == KEEP_TEXT for rid in upcoming)
     # Без решателя: FCFS в тестах подменяет _solve, и «ничего не менять» его не вызывает.
     assert solves == []
+
+
+def test_keep_leaves_the_own_reason_of_a_request_that_was_unassigned_before_the_event(solves):
+    ctx = context()
+    requests = [
+        req("R1", 1, 0, "10:00", "12:00"),
+        req("R2", 1.2, 0, "14:00", "16:00"),
+        req("RX", -1, 0, "15:00", "17:00", skill=Skill.EMERGENCY),
+    ]
+    engineers = [eng("E1", skills=[Skill.LOCAL]), eng("E2", skills=[Skill.LOCAL])]
+    base = new_session(ctx, requests=requests, engineers=engineers)
+    busy = busy_engineer(base.plan)
+    upcoming = _upcoming(base.plan, busy, 13 * 60)
+    before = {item.request_id: item for item in base.plan.unassigned}
+    assert upcoming and before["RX"].reason_code == ReasonCode.NO_SKILL
+    event = Event(type=EventType.ENGINEER_UNAVAILABLE, time="13:00", engineer_id=busy)
+
+    kept = apply_event(base, event, ctx, variant="keep")
+
+    reasons = {item.request_id: item for item in kept.plan.unassigned}
+    # Без инженера заявка была и до события: у неё своя причина, а не «план не пересчитан».
+    assert reasons["RX"] == before["RX"]
+    assert all(reasons[rid].reason_text == KEEP_TEXT for rid in upcoming)
 
 
 def test_keep_drops_visits_that_need_a_transport_the_engineer_no_longer_has(solves):
@@ -141,6 +164,35 @@ def test_stable_solves_with_an_expensive_reassignment_and_optimal_keeps_the_leve
     assert captured[0].reassignment == 20_000
     assert captured[1].reassignment == STABLE_REASSIGNMENT == 500_000
     assert captured[1].vehicle_fixed_cost == captured[0].vehicle_fixed_cost
+
+
+def test_stable_moves_fewer_requests_to_other_brigades_than_optimal_with_or_tools():
+    """Настоящий OR-Tools на собранном дне.
+
+    Утром инженеры далеко друг от друга: M1 у офиса, M2 в 30 км. Срочная U у офиса приходит на то же время, что B
+    инженера с M1, обе одному не успеть. «Оптимально» отдаёт U ему, а B переносит второму: так на 31 км короче, это
+    больше штрафа 20 км за перенос. «Минимум перестановок» везёт U второму инженеру: перенос стоит 500 км.
+    """
+    ctx = context()
+    requests = [
+        req("M1", 0, 0, "09:00", "09:30", duration=120),
+        req("M2", 30, 0, "09:00", "11:00", duration=120),
+        req("B", 12, 0, "15:00", "15:20", duration=60),
+    ]
+    base = new_session(ctx, requests=requests, engineers=[eng("E1"), eng("E2")], lunch_enabled=False)
+    near = next(engineer_id for engineer_id, visits in routes(base.plan).items() if "M1" in visits)
+    assert routes(base.plan)[near] == ["M1", "B"]
+    urgent = req("U", 0, 0, "15:00", "15:20", duration=60)
+    event = Event(type=EventType.URGENT, time="12:00", request=urgent)
+
+    optimal = apply_event(base, event, ctx)
+    stable = apply_event(base, event, ctx, variant="stable")
+
+    assert optimal.plan.unassigned == [] and stable.plan.unassigned == []
+    assert [move.request_id for move in optimal.last_diff.moved] == ["B"]
+    assert stable.last_diff.moved == []
+    assert routes(stable.plan)[near] == ["M1", "B"]
+    assert stable.plan.metrics.total_km > optimal.plan.metrics.total_km
 
 
 def test_events_that_do_not_break_the_plan_ignore_the_variant(solves):
