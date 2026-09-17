@@ -17,7 +17,8 @@ from app.geo.transit import TransitLookup, TransitMatrix
 from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
-from app.planning.models import AppliedEvent, PlanDiff
+from app.planning.models import AppliedEvent, EventVariant, PlanDiff
+from app.planning.variants import STABLE_REASSIGNMENT, is_choosable, keep_plan
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
@@ -121,9 +122,17 @@ def _day_problem(
     )
 
 
-def _solve(problem: Problem, workload_level: int, time_limit_s: int) -> tuple[Plan, Plan]:
-    """Оптимизированный план с весами уровня нагрузки и базовый FCFS. Стоимость инженера FCFS не использует."""
-    optimizer = OrToolsSolver(time_limit_s=time_limit_s, weights=workload_weights(workload_level))
+def _solve(
+    problem: Problem, workload_level: int, time_limit_s: int, variant: EventVariant = "optimal"
+) -> tuple[Plan, Plan]:
+    """Оптимизированный план с весами уровня нагрузки и базовый FCFS. Стоимость инженера FCFS не использует.
+
+    variant="stable" делает перенос заявки к другому инженеру очень дорогим (вариант «Минимум перестановок»).
+    """
+    weights = workload_weights(workload_level)
+    if variant == "stable":
+        weights = replace(weights, reassignment=STABLE_REASSIGNMENT)
+    optimizer = OrToolsSolver(time_limit_s=time_limit_s, weights=weights)
     return optimizer.solve(problem), FcfsSolver().solve(problem)
 
 
@@ -521,19 +530,30 @@ def check_event(session: PlanningSession, event: Event, ctx: PlanningContext) ->
 
 
 def apply_event(
-    session: PlanningSession, event: Event, ctx: PlanningContext, *, version: int | None = None
+    session: PlanningSession,
+    event: Event,
+    ctx: PlanningContext,
+    *,
+    version: int | None = None,
+    variant: EventVariant = "optimal",
 ) -> PlanningSession:
     """Применяет одно событие дня и возвращает НОВУЮ сессию; входная не меняется.
 
     Бросает EventRejected, если событие противоречит текущему состоянию. Уровень нагрузки и обед остаются как в
     сессии. Лимит OR-Tools обычный и с обедом: перепланирование стартует от текущего плана. version — номер нового
     плана (у сессии и у применённого события); без него следующий за номером входной сессии.
+
+    variant — стратегия для «ломающего» события (app/planning/variants.py); у остальных событий не влияет.
     """
     _check_time(session, event)
     requests, engineers, stored_event = _apply_to_inputs(session, event, ctx)
     base = _day_problem(requests, engineers, ctx, session.workload_level, session.lunch_enabled)
     problem = _pinned_problem(base, session, stored_event)
-    plan, baseline = _solve(problem, session.workload_level, ctx.time_limit_s)
+    strategy: EventVariant = variant if is_choosable(stored_event) else "optimal"
+    if strategy == "keep":
+        plan, baseline = keep_plan(problem), FcfsSolver().solve(problem)
+    else:
+        plan, baseline = _solve(problem, session.workload_level, ctx.time_limit_s, strategy)
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}
     diff = compute_diff(session.plan, plan, cancelled)
     if stored_event.type == EventType.ENGINEER_DELAYED:

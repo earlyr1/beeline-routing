@@ -20,6 +20,8 @@ class FcfsSolves(list):
     def __init__(self):
         super().__init__()
         self.gates: dict[str, tuple[threading.Event, threading.Event]] = {}
+        # Стратегия каждого решения по порядку: optimal или stable.
+        self.variants: list[str] = []
 
     def hold(self, time: str) -> tuple[threading.Event, threading.Event]:
         """Первое решение задачи на time ждёт release; entered сообщает, что решение началось."""
@@ -27,9 +29,10 @@ class FcfsSolves(list):
         self.gates[time] = (entered, release)
         return entered, release
 
-    def solve(self, problem, workload_level, time_limit_s):
+    def solve(self, problem, workload_level, time_limit_s, variant="optimal"):
         time = fmt_hhmm(problem.now)
         self.append(time)
+        self.variants.append(variant)
         gate = self.gates.pop(time, None)
         if gate is not None:
             entered, release = gate

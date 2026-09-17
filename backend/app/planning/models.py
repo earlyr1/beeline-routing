@@ -93,3 +93,31 @@ class AppliedEvent(BaseModel):
     id: str
     event: Event
     version: int
+
+
+EventVariant = Literal["optimal", "stable", "keep"]
+
+
+class VariantOption(BaseModel):
+    """Один вариант исправления плана на событие: итоги и отличия от рекомендованного."""
+
+    variant: EventVariant
+    title: str
+    summary: str
+    metrics: Metrics
+    late: int  # визиты, которые начнутся позже конца окна
+    moved: int  # заявки, переехавшие к другой бригаде относительно плана до события
+    pros: list[str] = Field(default_factory=list)
+    cons: list[str] = Field(default_factory=list)
+    recommended: bool = False
+
+
+class EventChoice(BaseModel):
+    """Выбор варианта для «ломающего» события шкалы: три варианта от одного плана до события."""
+
+    entry_id: str
+    event: Event
+    metrics_before: Metrics
+    late_before: int
+    variants: list[VariantOption]
+    current: EventVariant | None = None
