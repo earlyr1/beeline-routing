@@ -1,3 +1,4 @@
+import { clearExplanationCache } from '../components/useExplanation';
 import { initialAppData, resetAppSession, useAppStore, type AppState } from '../store/useAppStore';
 
 const pristine = useAppStore.getState();
@@ -8,6 +9,7 @@ const pristine = useAppStore.getState();
  */
 export function resetStore(patch: Partial<AppState> = {}): void {
   resetAppSession();
+  clearExplanationCache();
   const clock = patch.state?.cursor ?? initialAppData.clock;
   useAppStore.setState({ ...pristine, ...initialAppData, clock, ...patch }, true);
 }

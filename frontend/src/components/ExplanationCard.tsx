@@ -1,13 +1,12 @@
-import { useEffect, useState } from 'react';
-import { getExplanation } from '../api/client';
-import type { Explanation } from '../api/types';
 import { REQUEST_CLOCK_LABELS, requestClockStatus } from '../lib/clock';
-import { brigadeName, formatKm, formatSigned, requestWindowPhrase, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
+import { brigadeName, formatKm, requestWindowPhrase, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
 import { assignmentIndex, byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 import { EngineerLink } from './EngineerLink';
 import { EquipmentBadge } from './EquipmentBadge';
 import { RequestActions } from './RequestActions';
+import { useExplanation } from './useExplanation';
+import { WhyButton } from './WhyPanel';
 
 export function ExplanationCard() {
   const datasetId = useAppStore((s) => s.datasetId);
@@ -18,34 +17,7 @@ export function ExplanationCard() {
   const showPrevious = useAppStore((s) => s.showPrevious);
   const clock = useAppStore((s) => s.clock);
   const version = state?.version ?? 0;
-  const [explanation, setExplanation] = useState<Explanation | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!datasetId || !selectedRequestId) {
-      setExplanation(null);
-      return;
-    }
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    getExplanation(datasetId, selectedRequestId)
-      .then((data) => {
-        if (!cancelled) setExplanation(data);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setExplanation(null);
-        setError(err instanceof Error ? err.message : 'Не удалось получить объяснение');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [datasetId, selectedRequestId, version]);
+  const { explanation, error, loading } = useExplanation(datasetId, selectedRequestId, version);
 
   if (!state || !selectedRequestId) return null;
   const request = state.requests.find((item) => item.id === selectedRequestId);
@@ -102,7 +74,11 @@ export function ExplanationCard() {
       {error && <p className="error-text">{error}</p>}
       {explanation && !loading && (
         <>
-          <p className="explanation__summary">{explanation.summary}</p>
+          {/* На виду короткий вывод; проверки, факторы и другие инженеры — в панели «Почему». */}
+          <div className="explanation__verdict">
+            <p className="explanation__summary">{explanation.summary}</p>
+            <WhyButton />
+          </div>
           {explanation.visit && (
             <p className="muted">
               {engineerLink(explanation.engineer_id)}: приезд {explanation.visit.arrival}, начало {explanation.visit.start}, окончание{' '}
@@ -110,52 +86,6 @@ export function ExplanationCard() {
             </p>
           )}
           {explanation.unassigned && <p className="warn-text">{explanation.unassigned.reason_text}</p>}
-          <ul className="checks">
-            {explanation.constraints.map((check) => (
-              <li key={check.name} className={check.ok ? 'check check--ok' : 'check check--fail'}>
-                <span aria-hidden="true">{check.ok ? '✓' : '✗'}</span>
-                <strong>{check.name}</strong>
-                <span>{check.detail}</span>
-              </li>
-            ))}
-          </ul>
-          {explanation.factors.length > 0 && (
-            <>
-              <h4>Почему такой выбор</h4>
-              <ul className="factors">
-                {explanation.factors.map((factor) => (
-                  <li key={factor}>{factor}</li>
-                ))}
-              </ul>
-            </>
-          )}
-          {explanation.alternatives.length > 0 && (
-            <>
-              <h4>Другие инженеры</h4>
-              <table className="table table--compact">
-                <thead>
-                  <tr>
-                    <th>Инженер</th>
-                    <th>Может взять</th>
-                    <th>Начало</th>
-                    <th>Доп. пробег</th>
-                    <th>Комментарий</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {explanation.alternatives.map((alternative) => (
-                    <tr key={alternative.engineer_id}>
-                      <td>{engineerLink(alternative.engineer_id)}</td>
-                      <td>{alternative.feasible ? 'да' : 'нет'}</td>
-                      <td>{alternative.start ?? '—'}</td>
-                      <td>{alternative.extra_km === null ? '—' : `${formatSigned(alternative.extra_km, 1)} км`}</td>
-                      <td>{alternative.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </>
-          )}
         </>
       )}
     </section>

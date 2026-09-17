@@ -54,6 +54,8 @@ export interface AppData {
   state: PlanningState | null;
   selectedRequestId: string | null;
   selectedEngineerId: string | null;
+  /** Панель «Почему» слева от карты: подробное объяснение открытой заявки или бригады. */
+  whyOpen: boolean;
   activeTab: string;
   showPrevious: boolean;
   /** Время на часах шкалы дня. Во время перетаскивания и проигрывания оно впереди плана, пока его не зафиксируют. */
@@ -119,6 +121,11 @@ export interface AppActions {
   endDrag(): void;
   selectRequest(requestId: string | null): void;
   selectEngineer(engineerId: string | null): void;
+  /** Открыть страницу бригады на месте карточки заявки одним шагом: панель «Почему» переходит к бригаде. */
+  openBrigade(engineerId: string): void;
+  /** Открыть или закрыть панель «Почему» для того, что открыто справа. */
+  toggleWhy(): void;
+  closeWhy(): void;
   setTab(tabId: string): void;
   setShowPrevious(value: boolean): void;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
@@ -158,6 +165,7 @@ export const initialAppData: AppData = {
   state: null,
   selectedRequestId: null,
   selectedEngineerId: null,
+  whyOpen: false,
   activeTab: 'requests',
   showPrevious: false,
   clock: DAY_START,
@@ -303,7 +311,7 @@ export function resetAppSession(): void {
 export const useAppStore = create<AppState>()((set, get) => {
   /** План с сервера. syncClock ставит часы на его время; фиксация часов их не трогает, диспетчер мог сдвинуть их дальше. */
   function receive(next: PlanningState, syncClock: boolean): void {
-    const { state: shown, selectedRequestId, editingRequestId, clock } = get();
+    const { state: shown, selectedRequestId, selectedEngineerId, editingRequestId, whyOpen, clock } = get();
     const same = shown !== null && shown.dataset_id === next.dataset_id ? shown : null;
     const exists = (requestId: string | null) => requestId !== null && next.requests.some((request) => request.id === requestId);
     const rejected = same ? newlyRejected(same.timeline ?? [], next.timeline ?? []) : [];
@@ -315,6 +323,8 @@ export const useAppStore = create<AppState>()((set, get) => {
       clock: syncClock && isValidTime(next.cursor ?? '') ? next.cursor : clock,
       timelineMove: same ? timelineMove(same, next) : NO_TIMELINE_MOVE,
       selectedRequestId: exists(selectedRequestId) ? selectedRequestId : null,
+      // Заявка пропала из плана, а бригада не выбрана: объяснять в панели «Почему» больше нечего.
+      whyOpen: whyOpen && (exists(selectedRequestId) || selectedEngineerId !== null),
       editingRequestId: exists(editingRequestId) ? editingRequestId : null,
       // Нагрузка и обед сессии на сервере: «Пересчитать с нуля» и восстановленный план продолжают с ними.
       workloadLevel: clampWorkloadLevel(next.workload_level),
@@ -624,11 +634,25 @@ export const useAppStore = create<AppState>()((set, get) => {
     },
 
     selectRequest(requestId) {
-      set({ selectedRequestId: requestId });
+      // Панель «Почему» переходит к тому, что открыто справа, и закрывается, когда справа ничего не открыто.
+      set({ selectedRequestId: requestId, whyOpen: get().whyOpen && (requestId !== null || get().selectedEngineerId !== null) });
     },
 
     selectEngineer(engineerId) {
-      set({ selectedEngineerId: engineerId });
+      set({ selectedEngineerId: engineerId, whyOpen: get().whyOpen && (engineerId !== null || get().selectedRequestId !== null) });
+    },
+
+    openBrigade(engineerId) {
+      set({ selectedRequestId: null, selectedEngineerId: engineerId });
+    },
+
+    toggleWhy() {
+      const { whyOpen, selectedRequestId, selectedEngineerId } = get();
+      set({ whyOpen: !whyOpen && (selectedRequestId !== null || selectedEngineerId !== null) });
+    },
+
+    closeWhy() {
+      set({ whyOpen: false });
     },
 
     setTab(tabId) {

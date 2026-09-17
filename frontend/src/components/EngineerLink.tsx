@@ -2,8 +2,7 @@ import { useAppStore } from '../store/useAppStore';
 
 /** Имя инженера ссылкой на страницу бригады. Клик не доходит до строки, внутри которой стоит ссылка. */
 export function EngineerLink({ engineerId, name }: { engineerId: string; name: string }) {
-  const selectRequest = useAppStore((s) => s.selectRequest);
-  const selectEngineer = useAppStore((s) => s.selectEngineer);
+  const openBrigade = useAppStore((s) => s.openBrigade);
   return (
     <button
       type="button"
@@ -11,8 +10,7 @@ export function EngineerLink({ engineerId, name }: { engineerId: string; name: s
       title="Открыть страницу бригады"
       onClick={(event) => {
         event.stopPropagation();
-        selectRequest(null);
-        selectEngineer(engineerId);
+        openBrigade(engineerId);
       }}
     >
       {name}

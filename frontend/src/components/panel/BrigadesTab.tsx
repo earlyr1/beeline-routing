@@ -8,8 +8,7 @@ export function BrigadesTab() {
   const state = useAppStore((s) => s.state);
   const showPrevious = useAppStore((s) => s.showPrevious);
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
-  const selectRequest = useAppStore((s) => s.selectRequest);
-  const selectEngineer = useAppStore((s) => s.selectEngineer);
+  const openBrigade = useAppStore((s) => s.openBrigade);
   if (!state) return null;
 
   const plan = displayedPlan(state, showPrevious);
@@ -29,8 +28,7 @@ export function BrigadesTab() {
               className={`brigade-row${selected ? ' brigade-row--selected' : ''}`}
               onClick={() => {
                 // Страница бригады стоит на месте карточки заявки: открытая карточка закрывается.
-                selectRequest(null);
-                selectEngineer(engineer.id);
+                openBrigade(engineer.id);
               }}
             >
               <span className="dot" style={{ background: engineerColor(engineer.id, ids) }} />

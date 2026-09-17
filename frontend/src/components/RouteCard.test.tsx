@@ -84,14 +84,14 @@ describe('RouteCard', () => {
     expect(within(card()).getByText(/^Визитов: 3 · оборудование 2 единицы · пробег/)).toBeInTheDocument();
   });
 
-  it('explains the route in dispatcher language', () => {
+  it('keeps the route explanation behind «Почему?»', () => {
     render(<RouteCard />);
-    expect(listItems('Почему такой маршрут')).toEqual([
-      'Маршрут 23,7 км — 68% пробега всего плана; порядок визитов следует окнам заявок.',
-      'Все визиты начинаются внутри окон, минимальный запас до конца окна 1 ч 50 мин (заявка 46393).',
-      'Работы заканчиваются в 15:55, до конца смены в 22:00 остаётся 6 ч 5 мин.',
-      'Визиты 74198, 86160 начаты до события и закреплены: перепланирование их не меняет.',
-    ]);
+    expect(within(card()).queryByRole('list', { name: 'Почему такой маршрут' })).not.toBeInTheDocument();
+    fireEvent.click(action('Почему?'));
+    expect(useAppStore.getState().whyOpen).toBe(true);
+    expect(action('Почему?')).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(action('Почему?'));
+    expect(useAppStore.getState().whyOpen).toBe(false);
   });
 
   it('opens a request from the route', () => {
@@ -120,7 +120,8 @@ describe('RouteCard', () => {
     useAppStore.setState({ selectedEngineerId: 'E03' });
     render(<RouteCard />);
     expect(within(card()).getByText('Локальные работы · Общественный транспорт и пешком · смена 10:00–22:00 · недоступен с 13:00')).toBeInTheDocument();
-    expect(listItems('Почему такой маршрут')).toEqual(['В этом плане у инженера нет визитов.', 'Инженер недоступен с 13:00.']);
+    expect(within(card()).getByText('В этом плане у инженера нет визитов.')).toBeInTheDocument();
+    expect(action('Почему?')).toBeEnabled();
     expect(within(card()).queryByRole('table')).not.toBeInTheDocument();
   });
 

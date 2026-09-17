@@ -15,6 +15,7 @@ import { timelineStatusText } from '../lib/timeBar';
 import { dayScale, percent, timelineRow } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
 import { TimelineTicks, TimelineTrack } from './panel/TimelineTrack';
+import { WhyButton } from './WhyPanel';
 
 function slackText(stop: RouteStop): string {
   if (stop.slackMin === null) return '—';
@@ -27,8 +28,8 @@ function equipmentText(count: number): string {
 }
 
 /**
- * Страница бригады выбранного инженера: профиль и действия, личный таймлайн, итоги,
- * «Почему такой маршрут», визиты по порядку и применённые события бригады.
+ * Страница бригады выбранного инженера: профиль и действия, личный таймлайн, итоги с кнопкой «Почему?»,
+ * визиты по порядку и применённые события бригады. Разбор маршрута открывается в панели «Почему».
  */
 export function RouteCard() {
   const state = useAppStore((s) => s.state);
@@ -125,17 +126,16 @@ export function RouteCard() {
           />
         </div>
       </div>
-      {stops.length > 0 && (
-        <p className="muted">
-          {`Визитов: ${stops.length}${equipment} · пробег ${formatKm(summary.totalKm)} · в пути ${formatDuration(summary.travelMin)} · окончание работ ${summary.endOfWork}, конец смены ${engineer.shift_end}`}
-        </p>
-      )}
-      <h4>Почему такой маршрут</h4>
-      <ul className="factors" aria-label="Почему такой маршрут">
-        {summary.sentences.map((sentence) => (
-          <li key={sentence}>{sentence}</li>
-        ))}
-      </ul>
+      <div className="explanation__verdict">
+        {stops.length > 0 ? (
+          <p className="muted">
+            {`Визитов: ${stops.length}${equipment} · пробег ${formatKm(summary.totalKm)} · в пути ${formatDuration(summary.travelMin)} · окончание работ ${summary.endOfWork}, конец смены ${engineer.shift_end}`}
+          </p>
+        ) : (
+          <p className="muted">В этом плане у инженера нет визитов.</p>
+        )}
+        <WhyButton />
+      </div>
       {stops.length > 0 && (
         <table className="table table--compact">
           <thead>

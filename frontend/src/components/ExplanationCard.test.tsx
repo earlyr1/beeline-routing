@@ -22,15 +22,23 @@ beforeEach(() => {
 });
 
 describe('ExplanationCard', () => {
-  it('loads and shows the explanation for the selected request', async () => {
+  it('loads the explanation and shows only the short verdict with «Почему?»', async () => {
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
     render(<ExplanationCard />);
     expect(await screen.findByText(/Назначена Бригада Арташкин/)).toBeInTheDocument();
     expect(api.getExplanation).toHaveBeenCalledWith('d_test', '50104');
-    expect(screen.getByText('Временное окно')).toBeInTheDocument();
-    expect(screen.getByText('Не нужен дополнительный инженер')).toBeInTheDocument();
-    expect(screen.getByText('Бригада Белузин').closest('tr')).toHaveTextContent('+2,1 км');
     expect(screen.getByText(/окно 14:00–16:00 · 45 мин · Локальные работы/)).toBeInTheDocument();
+    expect(screen.getByText(/приезд 13:35, начало 14:00/)).toBeInTheDocument();
+    // Проверки, факторы и другие инженеры живут в панели «Почему», а не в карточке.
+    expect(screen.queryByText('Временное окно')).not.toBeInTheDocument();
+    expect(screen.queryByText('Не нужен дополнительный инженер')).not.toBeInTheDocument();
+    expect(screen.queryByRole('table')).not.toBeInTheDocument();
+
+    const why = within(card()).getByRole('button', { name: 'Почему?' });
+    expect(why).toHaveAttribute('aria-pressed', 'false');
+    fireEvent.click(why);
+    expect(useAppStore.getState().whyOpen).toBe(true);
+    expect(why).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('shows the error and closes', async () => {
@@ -114,14 +122,6 @@ describe('ExplanationCard', () => {
     const visit = (await screen.findByText(/приезд 13:35/)) as HTMLElement;
     fireEvent.click(within(visit).getByRole('button', { name: 'Бригада Арташкин' }));
     expect(useAppStore.getState()).toMatchObject({ selectedRequestId: null, selectedEngineerId: 'E01' });
-  });
-
-  it('opens the brigade page from the table of other engineers', async () => {
-    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
-    render(<ExplanationCard />);
-    const table = (await screen.findByRole('table')) as HTMLElement;
-    fireEvent.click(within(table).getByRole('button', { name: 'Бригада Комарь' }));
-    expect(useAppStore.getState()).toMatchObject({ selectedRequestId: null, selectedEngineerId: 'E03' });
   });
 
   it('links back to the brigade page the request card was opened from', async () => {

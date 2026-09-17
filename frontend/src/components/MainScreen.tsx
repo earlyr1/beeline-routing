@@ -10,6 +10,7 @@ import { MapView } from './map/MapView';
 import { MetricsStrip } from './MetricsStrip';
 import { RightPanel } from './panel/RightPanel';
 import { TimeBar } from './TimeBar';
+import { WhyPanel } from './WhyPanel';
 
 export function MainScreen() {
   const pickMode = useAppStore((s) => s.pickMode);
@@ -19,6 +20,8 @@ export function MainScreen() {
   const engineerDialog = useAppStore((s) => s.engineerDialog?.kind ?? null);
   // Срочная заявка и плавающий диалог открыты вместе: плавающий стоит левее, чтобы не закрыть срочную заявку.
   const toolbarDialogOpen = useAppStore((s) => s.toolbarDialog !== null);
+  // Панель «Почему» встаёт слева отдельной колонкой и сдвигает карту, а не закрывает маршрут.
+  const whyOpen = useAppStore((s) => s.whyOpen);
   // Подсказка называет диалог, который начал выбор точки: оба диалога могут быть открыты одновременно.
   const pickHint =
     pickFor === 'edit' && editingRequestId
@@ -34,7 +37,8 @@ export function MainScreen() {
       </header>
       <TimeBar />
       <DiffBanner />
-      <div className="workspace">
+      <div className={`workspace${whyOpen ? ' workspace--why' : ''}`}>
+        <WhyPanel />
         <section className={`map-area${pickMode ? ' map-area--picking' : ''}`} aria-label="Карта">
           {pickMode && <div className="map-hint">{pickHint}</div>}
           <MapView />
