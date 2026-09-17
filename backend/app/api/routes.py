@@ -256,6 +256,20 @@ def delete_timeline_event(dataset_id: str, entry_id: str, deps: Deps) -> Plannin
         ensure_precompute(record, ctx, deps.run_background)
 
 
+@router.delete("/datasets/{dataset_id}/timeline", response_model=PlanningState)
+def clear_timeline(dataset_id: str, deps: Deps) -> PlanningState:
+    """Сброс событий: шкала пустеет, план — утренний план дня без пересчёта, текущее время 00:00.
+
+    Нагрузка и обед остаются как у дня, решатель не запускается.
+    """
+    record = _record(deps, dataset_id)
+    with record.timeline_lock:
+        with record.lock:
+            _session(record)
+            record.start_day(record.base)
+        return planning_state(record)
+
+
 @router.get("/datasets/{dataset_id}/timeline/events/{entry_id}/variants", response_model=EventChoice)
 def get_timeline_variants(dataset_id: str, entry_id: str, deps: Deps) -> EventChoice:
     """Варианты исправления для «ломающего» события шкалы: для окна выбора и смены выбора."""

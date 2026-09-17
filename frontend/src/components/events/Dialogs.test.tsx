@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>();
-  return { ...actual, addTimelineEvent: vi.fn(), moveCursor: vi.fn(), postEvent: vi.fn() };
+  return { ...actual, addTimelineEvent: vi.fn(), moveCursor: vi.fn(), postEvent: vi.fn(), clearTimeline: vi.fn() };
 });
 
 import * as api from '../../api/client';
@@ -11,7 +11,7 @@ import type { PlanningState, ServiceRequest, Transport } from '../../api/types';
 import { BEFORE_SHIFTS_HINT, cancelEvent, unavailableEvent } from '../../lib/events';
 import { toMinutes } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
-import { makeAsapRequest, makeAsapState, makePlanningState } from '../../test/fixtures';
+import { makeAsapRequest, makeAsapState, makePlanningState, makeTimeline } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { EngineerDelayDialog } from './EngineerDelayDialog';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
@@ -987,7 +987,7 @@ describe('EventToolbar', () => {
     expect(screen.queryByLabelText('Время события')).not.toBeInTheDocument();
     expect(container.querySelector('input')).toBeNull();
     expect(screen.queryByText(/раньше текущего времени|не может быть раньше/)).not.toBeInTheDocument();
-    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Срочная заявка']);
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Сброс событий', 'Срочная заявка']);
   });
 
   it('keeps the open urgent request dialog in the store and closes it from the dialog', () => {
@@ -997,6 +997,43 @@ describe('EventToolbar', () => {
     fireEvent.click(within(screen.getByRole('dialog', { name: 'Срочная заявка' })).getByRole('button', { name: 'Отмена' }));
     expect(useAppStore.getState().toolbarDialog).toBeNull();
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('resets the events after a confirmation and puts the clock at the start of the day', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline: makeTimeline() }), clock: '15:00' });
+    vi.mocked(api.clearTimeline).mockResolvedValue(makePlanningState({ timeline: [], cursor: '00:00', version: 1 }));
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ timeline: [], cursor: '09:00', version: 1 }));
+    render(<EventToolbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сброс событий' }));
+    const confirm = within(screen.getByRole('dialog', { name: 'Сброс событий' }));
+    fireEvent.click(confirm.getByRole('button', { name: 'Отмена' }));
+    expect(screen.queryByRole('dialog', { name: 'Сброс событий' })).not.toBeInTheDocument();
+    expect(api.clearTimeline).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сброс событий' }));
+    fireEvent.click(within(screen.getByRole('dialog', { name: 'Сброс событий' })).getByRole('button', { name: 'Сбросить' }));
+
+    await waitFor(() => expect(useAppStore.getState().clock).toBe('09:00'));
+    expect(api.clearTimeline).toHaveBeenCalledWith('d_test');
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '09:00']]);
+    expect(useAppStore.getState().state?.timeline).toEqual([]);
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Сброс событий' })).not.toBeInTheDocument());
+    // Шкала пустая: сбрасывать нечего.
+    expect(screen.getByRole('button', { name: 'Сброс событий' })).toBeDisabled();
+  });
+
+  it('closes the reset confirmation on Escape and does not reset while the clock plays', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline: makeTimeline() }), clock: '15:00' });
+    const view = render(<EventToolbar />);
+    fireEvent.click(screen.getByRole('button', { name: 'Сброс событий' }));
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Сброс событий' })).not.toBeInTheDocument();
+    view.unmount();
+
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline: makeTimeline() }), clock: '15:00', playing: true });
+    render(<EventToolbar />);
+    expect(screen.getByRole('button', { name: 'Сброс событий' })).toBeDisabled();
   });
 
   it('disables the urgent request while showing the plan before the event or replanning', () => {

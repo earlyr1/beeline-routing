@@ -3,6 +3,7 @@ import {
   addTimelineEvent,
   ApiError,
   buildPlan,
+  clearTimeline,
   deleteTimelineEvent as removeTimelineEvent,
   getConfig,
   getDatasetStatus,
@@ -113,6 +114,8 @@ export interface AppActions {
   plan(): Promise<void>;
   /** Поставить событие на шкалу дня. Сначала сервер переводит план на время часов, чтобы событие у часов применилось сразу. */
   applyEvent(event: PlanEvent): Promise<boolean>;
+  /** Сброс событий: все события шкалы убираются, план — утренний, часы на начале дня. */
+  resetEvents(): Promise<boolean>;
   /** Убрать событие со шкалы дня. */
   deleteTimelineEvent(entryId: string): Promise<boolean>;
   /** Выбрать стратегию для открытого окна; часы возвращаются туда, откуда их остановило событие. */
@@ -361,7 +364,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       // Заявка пропала из плана, а бригада не выбрана: объяснять в панели «Почему» больше нечего.
       whyOpen: whyOpen && (exists(selectedRequestId) || selectedEngineerId !== null),
       editingRequestId: exists(editingRequestId) ? editingRequestId : null,
-      // Нагрузка и обед сессии на сервере: «Пересчитать с нуля» и восстановленный план продолжают с ними.
+      // Нагрузка и обед сессии на сервере: «Применить» и восстановленный план продолжают с ними.
       workloadLevel: clampWorkloadLevel(next.workload_level),
       lunchEnabled: lunchEnabledOf(next.lunch_enabled),
       ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
@@ -623,6 +626,28 @@ export const useAppStore = create<AppState>()((set, get) => {
         if (isCurrent(current)) set({ busy: false });
         // Сервер не остановил время на событии (или отклонил его): окно, ждавшее варианты, закрывается.
         if (isCurrent(current) && get().choiceLoading) set({ choiceLoading: false });
+      }
+    },
+
+    async resetEvents() {
+      const { datasetId } = get();
+      if (!datasetId) return false;
+      // Сброс ставит часы на начало дня: идущие часы останавливаются без фиксации, окно выбора закрывается.
+      get().stopPlayback();
+      const current = generation;
+      set({ busy: true, error: null, choice: null, choiceLoading: false, resumeAfterChoice: null, dismissedChoice: null });
+      try {
+        const state = await enqueue(current, () => clearTimeline(datasetId));
+        if (!isCurrent(current)) return false;
+        get().setPlanningState(state);
+        set({ clock: fromMinutes(dayScale(state, state.plan).from) });
+        await get().commitClock();
+        return true;
+      } catch (error) {
+        if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });
+        return false;
+      } finally {
+        if (isCurrent(current)) set({ busy: false });
       }
     },
 

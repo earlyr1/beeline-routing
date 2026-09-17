@@ -62,7 +62,7 @@ export function MetricsStrip() {
 
   const choose = (next: DayMode) => setDraft(next);
 
-  /** Пересчёт с нуля с тем, что показано в шапке: с новым выбором, если он есть, иначе с нагрузкой и обедом сессии. */
+  /** Пересчёт дня с нуля с выбранными в шапке нагрузкой и обедом. */
   const rebuild = () => {
     setWorkloadLevel(shown.level);
     setLunchEnabled(shown.lunch);
@@ -133,9 +133,6 @@ export function MetricsStrip() {
         </div>
       </div>
       <div className="metrics-strip__actions">
-        <button type="button" className="btn" onClick={rebuild} disabled={locked}>
-          Пересчитать с нуля
-        </button>
         <button
           type="button"
           className="btn btn-ghost"

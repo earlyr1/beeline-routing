@@ -503,6 +503,15 @@ h4 {
   gap: 8px;
 }
 
+/* Подтверждение сброса событий: узкий диалог под кнопками панели событий. */
+.event-toolbar__confirm {
+  width: 340px;
+}
+
+.event-toolbar__confirm p {
+  margin: 0;
+}
+
 .diff-banner {
   display: flex;
   align-items: center;

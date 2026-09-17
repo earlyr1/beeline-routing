@@ -111,6 +111,10 @@ export const getTimelineVariants = (datasetId: string, entryId: string) =>
 export const setTimelineVariant = (datasetId: string, entryId: string, variant: EventVariant) =>
   request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}/variant`, putJson({ variant }));
 
+/** Сброс событий: шкала пустеет, план — утренний план дня без пересчёта. */
+export const clearTimeline = (datasetId: string) =>
+  request<PlanningState>(`${dataset(datasetId)}/timeline`, { method: 'DELETE' });
+
 /** План на время дня: применены все события шкалы не позже этого времени. */
 export const moveCursor = (datasetId: string, time: HHMM) =>
   request<PlanningState>(`${dataset(datasetId)}/cursor`, postJson({ time } satisfies CursorRequest));

@@ -41,7 +41,8 @@ describe('MetricsStrip', () => {
     useAppStore.setState({ busy: true });
     render(<MetricsStrip />);
     expect(screen.getByRole('button', { name: 'Другой файл' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Пересчитать с нуля' })).toBeDisabled();
+    // Пересчёта с нуля в шапке нет: день пересчитывает «Применить», события сбрасывает панель событий.
+    expect(screen.queryByRole('button', { name: 'Пересчитать с нуля' })).not.toBeInTheDocument();
   });
 
   it('shows the workload level and the lunch of the session, not the choice of the store', () => {
@@ -135,18 +136,6 @@ describe('MetricsStrip', () => {
     expect(api.buildPlan).not.toHaveBeenCalled();
   });
 
-  it('rebuilds from scratch with the choice shown in the header', async () => {
-    vi.mocked(api.buildPlan).mockResolvedValue(makePlanningState({ workload_level: 2, version: 5 }));
-    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ workload_level: 2, version: 6, cursor: '09:00' }));
-    render(<MetricsStrip />);
-    fireEvent.change(workload(), { target: { value: '2' } });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Пересчитать с нуля' }));
-
-    await waitFor(() => expect(useAppStore.getState().state?.version).toBe(6));
-    expect(api.buildPlan).toHaveBeenCalledWith('d_test', { workload_level: 2, lunch: true });
-  });
-
   it('does nothing when the level already on screen is chosen again', () => {
     useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 2, lunch_enabled: false }));
     useAppStore.getState().setWorkloadLevel(0);
@@ -169,7 +158,8 @@ describe('MetricsStrip', () => {
     vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ workload_level: 2, version: 6, cursor: '09:00' }));
     render(<MetricsStrip />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Пересчитать с нуля' }));
+    fireEvent.change(workload(), { target: { value: '2' } });
+    fireEvent.click(apply());
     await waitFor(() => expect(useAppStore.getState().state?.version).toBe(6));
     expect(vi.mocked(api.moveCursor).mock.calls).toEqual([['d_test', '09:00']]);
     expect(useAppStore.getState().clock).toBe('09:00');
@@ -186,10 +176,9 @@ describe('MetricsStrip', () => {
     ['a calculation is running', { busy: true }],
     ['the clock plays', { playing: true }],
     ['the plan is being moved to the clock', { committing: true }],
-  ])('blocks the rebuild, the workload level and the lunch while %s', (_, patch) => {
+  ])('blocks the workload level and the lunch while %s', (_, patch) => {
     useAppStore.setState(patch);
     render(<MetricsStrip />);
-    expect(screen.getByRole('button', { name: 'Пересчитать с нуля' })).toBeDisabled();
     expect(workload()).toBeDisabled();
     expect(lunch()).toBeDisabled();
   });
@@ -197,10 +186,9 @@ describe('MetricsStrip', () => {
   it.each([
     ['the clock plays', { playing: true }],
     ['the plan is being moved to the clock', { committing: true }],
-  ])('does not rebuild the day from scratch while %s', (_, patch) => {
+  ])('keeps «Другой файл» available while %s', (_, patch) => {
     useAppStore.setState(patch);
     render(<MetricsStrip />);
-    expect(screen.getByRole('button', { name: 'Пересчитать с нуля' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Другой файл' })).toBeEnabled();
   });
 });

@@ -67,8 +67,8 @@ describe('App', () => {
     const banner = within(screen.getByRole('banner'));
     expect(banner.getAllByRole('button').map((button) => button.textContent)).toEqual([
       'с обедом',
-      'Пересчитать с нуля',
       'Другой файл',
+      'Сброс событий',
       'Срочная заявка',
     ]);
     expect(banner.getByRole('combobox', { name: 'Нагрузка инженеров' })).toHaveValue('1');

@@ -459,6 +459,32 @@ def test_plan_rebuild_clears_the_timeline_and_keeps_it_without_rebuild(tmp_path,
     assert statuses(added(client, base, cancel("R2", "14:00"))) == [("tl_2", "pending")]
 
 
+def test_clearing_the_timeline_returns_to_the_morning_plan_without_solving(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    morning = state_of(client, base)
+    added(client, base, cancel("R2", "14:00"))
+    at(client, base, "15:00")
+    background.run()
+    solves.clear()
+
+    response = client.delete(f"{base}/timeline")
+
+    assert response.status_code == 200, response.text
+    cleared = response.json()
+    assert (cleared["timeline"], cleared["cursor"], cleared["events"], cleared["pending_choice"]) == (
+        [],
+        "00:00",
+        [],
+        None,
+    )
+    assert cleared["plan"] == morning["plan"] and cleared["requests"] == morning["requests"]
+    assert solves == []
+    # «Построить план» с теми же значениями после сброса ничего не пересобирает.
+    assert client.post(f"{base}/plan").json()["plan"] == morning["plan"] and solves == []
+    assert statuses(added(client, base, cancel("R2", "14:00"))) == [("tl_2", "pending")]
+    assert client.delete("/api/datasets/d_missing/timeline").status_code == 404
+
+
 def test_versions_stay_unique_when_events_are_removed_and_added_again(tmp_path, solves):
     client, _, base, _ = dataset(tmp_path, solves)
     at(client, base, "15:00")
