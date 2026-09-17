@@ -844,6 +844,78 @@ describe('choice of a variant for an event that breaks the plan', () => {
     expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
   });
 
+  it('forgets a closed choice once the clock goes back before the event: play and a forward move stop at it again', async () => {
+    vi.useFakeTimers();
+    const pendingAhead = awaitingState('13:00').timeline!.map((item) => ({ ...item, status: 'pending' as const }));
+    const moveBack = async (time: string) => {
+      vi.mocked(api.moveCursor).mockResolvedValueOnce(at(time, { timeline: pendingAhead }));
+      useAppStore.getState().startDrag();
+      useAppStore.getState().setClock(time);
+      useAppStore.getState().endDrag();
+      await vi.advanceTimersByTimeAsync(0);
+    };
+    useAppStore.getState().setPlanningState(awaitingState('13:00'));
+    useAppStore.getState().closeChoice();
+    await moveBack('12:58');
+    expect(useAppStore.getState()).toMatchObject({ clock: '12:58', dismissedChoice: null });
+
+    vi.mocked(api.moveCursor).mockResolvedValueOnce(awaitingState('13:00'));
+    useAppStore.getState().play();
+    await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 30);
+    expect(useAppStore.getState()).toMatchObject({ playing: false, clock: '13:00', resumeAfterChoice: { time: '13:00', play: true } });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+
+    // Отпущенный за событием ползунок тоже останавливается на нём.
+    useAppStore.getState().closeChoice();
+    await moveBack('12:00');
+    vi.mocked(api.moveCursor).mockResolvedValueOnce(awaitingState('13:00'));
+    useAppStore.getState().startDrag();
+    useAppStore.getState().setClock('17:00');
+    useAppStore.getState().endDrag();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:00', resumeAfterChoice: { time: '17:00', play: false } });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+  });
+
+  it('after a slider release past two events at the same minute asks for both and then commits the released time', async () => {
+    useAppStore.getState().setPlanningState(at('09:00'));
+    const awaitingSecond = at('13:00', { pending_choice: makeEventChoice({ entry_id: 'tl_3' }) });
+    vi.mocked(api.moveCursor).mockResolvedValueOnce(awaitingState('13:00')).mockResolvedValueOnce(at('17:00'));
+    useAppStore.getState().startDrag();
+    useAppStore.getState().setClock('17:00');
+    useAppStore.getState().endDrag();
+    await vi.waitFor(() => expect(useAppStore.getState().choice?.entry_id).toBe('tl_2'));
+
+    vi.mocked(api.setTimelineVariant).mockResolvedValueOnce(awaitingSecond).mockResolvedValueOnce(at('13:00'));
+    expect(await useAppStore.getState().chooseVariant('keep')).toBe(true);
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:00', resumeAfterChoice: { time: '17:00', play: false } });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_3');
+    expect(api.moveCursor).toHaveBeenCalledTimes(1);
+
+    await useAppStore.getState().chooseVariant('stable');
+    expect(vi.mocked(api.moveCursor).mock.calls).toEqual([
+      ['d_test', '17:00'],
+      ['d_test', '17:00'],
+    ]);
+    expect(useAppStore.getState()).toMatchObject({ clock: '17:00', choice: null });
+    expect(useAppStore.getState().state?.cursor).toBe('17:00');
+  });
+
+  it('does not reopen a loading choice the dispatcher closed before the event was added', async () => {
+    useAppStore.getState().setPlanningState(at('12:00'));
+    const response = deferred<PlanningState>();
+    vi.mocked(api.addTimelineEvent).mockReturnValue(response.promise);
+    const adding = useAppStore.getState().applyEvent({ type: 'engineer_unavailable', time: '12:00', request: null, request_id: null, engineer_id: 'E02' });
+    await vi.waitFor(() => expect(useAppStore.getState().choiceLoading).toBe(true));
+    useAppStore.getState().closeChoice();
+    response.resolve(awaitingState('12:00'));
+    expect(await adding).toBe(true);
+    expect(useAppStore.getState()).toMatchObject({ choice: null, choiceLoading: false, dismissedChoice: 'tl_2', clock: '12:00' });
+
+    useAppStore.getState().play();
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+  });
+
   it('opens a loading choice while a breaking event at the clock is added', async () => {
     useAppStore.getState().setPlanningState(at('12:00'));
     const response = deferred<PlanningState>();

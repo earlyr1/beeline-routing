@@ -44,6 +44,13 @@ export function TimeBar() {
   // Часы идут, только пока шкала на экране.
   useEffect(() => () => useAppStore.getState().stopPlayback(), []);
 
+  // Список событий отметки и меню лежат выше окна выбора: открылось окно — они закрываются.
+  useEffect(() => {
+    if (!choosing) return;
+    setOpenMinute(null);
+    setMenuOpen(false);
+  }, [choosing]);
+
   useEffect(() => {
     if (openMinute === null && !menuOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -66,8 +73,8 @@ export function TimeBar() {
   const engineers = byId(state.engineers);
   // События меняют текущий план: в плане до события и во время расчёта их не добавляют, как и с карты.
   const menuLocked = busy || showPrevious;
-  // Удаление пересчитывает план: не во время расчёта, фиксации часов и проигрывания.
-  const deleteLocked = busy || committing || playing;
+  // Удаление и смена варианта пересчитывают план: не во время расчёта, фиксации часов, проигрывания и открытого окна выбора.
+  const deleteLocked = busy || committing || playing || choosing;
   const status = committing ? 'Пересчитываем план…' : state.timeline_ready === false ? 'Готовим события…' : null;
 
   // pointerup, pointercancel и lostpointercapture приходят вместе: план пересчитывается один раз.

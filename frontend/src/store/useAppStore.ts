@@ -368,6 +368,8 @@ export const useAppStore = create<AppState>()((set, get) => {
     });
     // Время плана остановилось на «ломающем» событии без выбора: часы ждут на нём, открывается окно выбора.
     const pending = next.pending_choice ?? null;
+    // Закрытое окно помнится, только пока план стоит на том же событии: часы ушли назад — дойдя до него, снова спросят.
+    if (get().dismissedChoice !== (pending?.entry_id ?? null)) set({ dismissedChoice: null });
     const { choice, dismissedChoice } = get();
     if (pending && pending.entry_id !== choice?.entry_id && pending.entry_id !== dismissedChoice) {
       stopTicking();
@@ -609,6 +611,9 @@ export const useAppStore = create<AppState>()((set, get) => {
         await get().commitClock();
         const state = await enqueue(current, () => addTimelineEvent(datasetId, event));
         if (!isCurrent(current)) return false;
+        // Окно «Считаем варианты…» закрыли до ответа: как закрытое без выбора, оно откроется на «Запустить» или сдвиге вперёд.
+        const { choice, choiceLoading } = get();
+        if (asks && !choiceLoading && choice === null) set({ dismissedChoice: state.pending_choice?.entry_id ?? null });
         get().setPlanningState(state);
         return true;
       } catch (error) {
@@ -656,7 +661,14 @@ export const useAppStore = create<AppState>()((set, get) => {
       } finally {
         if (isCurrent(current)) set({ busy: false });
       }
-      if (!chosen || !isCurrent(current) || !resumeAfterChoice) return chosen;
+      if (!chosen || !isCurrent(current)) return chosen;
+      // Ответ уже остановился на следующем событии и открыл его окно: часы вернутся туда же, но после этого выбора.
+      const opened = get().resumeAfterChoice;
+      if (get().choice !== null) {
+        if (resumeAfterChoice && opened) set({ resumeAfterChoice: { time: laterOf(resumeAfterChoice.time, opened.time), play: resumeAfterChoice.play } });
+        return true;
+      }
+      if (!resumeAfterChoice) return true;
       // Часы шли до события — идут дальше; ползунок отпустили за событием — план догоняет отпущенное время.
       if (resumeAfterChoice.play) {
         get().play();

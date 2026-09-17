@@ -183,6 +183,7 @@ describe('TimeBar', () => {
     ['replanning', { busy: true }],
     ['moving the plan to the clock', { committing: true }],
     ['playing', { playing: true }],
+    ['the choice of a variant is open', { choiceLoading: true }],
   ])('does not delete an event while %s', (_, patch) => {
     resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }), ...patch });
     render(<TimeBar />);
@@ -211,6 +212,21 @@ describe('TimeBar', () => {
     render(<TimeBar />);
     expect(screen.getByRole('button', { name: 'Запустить' })).toBeDisabled();
     expect(screen.getByRole('slider', { name: 'Текущее время' })).toBeDisabled();
+  });
+
+  it('closes the events of a pin and the «Добавить событие» menu when the choice opens above them', () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }) });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByTitle(/^Задержка: Бригада Арташкин/));
+    expect(screen.getByRole('group', { name: 'События 15:00' })).toBeInTheDocument();
+    act(() => useAppStore.setState({ choice: makeEventChoice() }));
+    expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
+
+    act(() => useAppStore.setState({ choice: null }));
+    fireEvent.click(screen.getByRole('button', { name: 'Добавить событие' }));
+    expect(screen.getByRole('menu', { name: 'Добавить событие' })).toBeInTheDocument();
+    act(() => useAppStore.setState({ choiceLoading: true }));
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
   it('opens the event dialogs from «Добавить событие»: engineer dialogs pick the busiest engineer themselves', () => {
