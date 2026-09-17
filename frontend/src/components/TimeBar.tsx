@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { describeEvent } from '../lib/events';
+import { describeEvent, eventRequestId } from '../lib/events';
 import { fromMinutes } from '../lib/format';
 import { byId, displayedPlan } from '../lib/planView';
 import { pinLeft, sliderRange, sliderValue, timelineItemTitle, timelinePins, timelineStatusText } from '../lib/timeBar';
@@ -35,6 +35,7 @@ export function TimeBar() {
   const endDrag = useAppStore((s) => s.endDrag);
   const deleteTimelineEvent = useAppStore((s) => s.deleteTimelineEvent);
   const openChoice = useAppStore((s) => s.openChoice);
+  const selectRequest = useAppStore((s) => s.selectRequest);
   // Пока открыто окно выбора варианта, часы стоят на событии: ни запуска, ни ползунка.
   const choosing = useAppStore((s) => s.choice !== null || s.choiceLoading);
   /** Минута отметки, чьи события открыты; null — список закрыт. */
@@ -170,9 +171,27 @@ export function TimeBar() {
               </button>
             </div>
             <ul className="time-bar__events">
-              {openPin.items.map((item) => (
+              {openPin.items.map((item) => {
+                const requestId = eventRequestId(item.event);
+                // Заявку события можно открыть, когда она уже есть в плане: срочная заявка впереди ещё не добавлена.
+                const openable = requestId !== null && state.requests.some((request) => request.id === requestId);
+                return (
                 <li key={item.id} className="time-bar__event">
-                  <span>{describeEvent(item.event, engineers)}</span>
+                  {openable ? (
+                    <button
+                      type="button"
+                      className="link-button time-bar__event-link"
+                      title="Открыть заявку"
+                      onClick={() => {
+                        setOpenMinute(null);
+                        selectRequest(requestId);
+                      }}
+                    >
+                      {describeEvent(item.event, engineers)}
+                    </button>
+                  ) : (
+                    <span>{describeEvent(item.event, engineers)}</span>
+                  )}
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
                   {item.choosable && (
                     <>
@@ -194,7 +213,8 @@ export function TimeBar() {
                     Удалить событие
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           </div>
         )}

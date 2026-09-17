@@ -420,6 +420,20 @@ export function lateVisitsTitle(forecast: DelayForecast): string {
     .join('\n');
 }
 
+/** Заявка, о которой событие: у срочной заявки — новая заявка, у отмены, возврата и изменения — изменённая. */
+export function eventRequestId(event: PlanEvent): string | null {
+  switch (event.type) {
+    case 'urgent':
+      return event.request?.id ?? null;
+    case 'cancel':
+    case 'restore':
+    case 'request_updated':
+      return event.request_id ?? event.request?.id ?? null;
+    default:
+      return null;
+  }
+}
+
 export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>): string {
   switch (event.type) {
     case 'engineer_delayed': {

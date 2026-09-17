@@ -191,6 +191,34 @@ describe('TimeBar', () => {
     expect(within(screen.getByRole('group', { name: 'События 15:00' })).getByRole('button', { name: 'Удалить событие' })).toBeDisabled();
   });
 
+  it('opens the request card from an event about a request that is already in the plan', () => {
+    const [, , urgent] = makeTimeline();
+    const ahead = makeTimelineItem({
+      id: 'tl_6',
+      event: { ...urgent.event, time: '18:00', request: { ...urgent.event.request!, id: 'URG-404' } },
+      status: 'pending',
+    });
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: [...makeTimeline(), ahead] }), selectedEngineerId: 'E01' });
+    render(<TimeBar />);
+
+    fireEvent.click(screen.getByTitle(/^Инженер недоступен: Бригада Комарь с 13:00/));
+    const popover = screen.getByRole('group', { name: 'События 13:00' });
+    // Событие об инженере ссылкой не становится.
+    expect(within(popover).queryByRole('button', { name: /^Инженер недоступен/ })).not.toBeInTheDocument();
+    fireEvent.click(within(popover).getByRole('button', { name: 'Срочная заявка URG-001 в 13:00' }));
+    expect(useAppStore.getState()).toMatchObject({ selectedRequestId: 'URG-001', selectedEngineerId: 'E01' });
+    expect(screen.queryByRole('group', { name: 'События 13:00' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 74198/));
+    expect(within(screen.getByRole('group', { name: 'События 16:30' })).getByRole('button', { name: 'Отмена заявки 74198 в 16:30' })).toBeInTheDocument();
+
+    // Срочной заявки впереди ещё нет в плане: открыть нечего.
+    fireEvent.click(screen.getByTitle(/^Срочная заявка URG-404/));
+    const later = screen.getByRole('group', { name: 'События 18:00' });
+    expect(within(later).getByText('Срочная заявка URG-404 в 18:00')).toBeInTheDocument();
+    expect(within(later).queryByRole('button', { name: /^Срочная заявка/ })).not.toBeInTheDocument();
+  });
+
   it('offers «Варианты…» for an event that breaks the plan and shows its choice', () => {
     const openChoice = vi.fn().mockResolvedValue(undefined);
     const timeline = [

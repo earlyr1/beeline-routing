@@ -755,6 +755,11 @@ h4 {
   gap: 2px;
 }
 
+/* Событие о заявке открывает её карточку: текст события ссылкой, в одну строку с остальными событиями. */
+.time-bar__event-link {
+  text-align: left;
+}
+
 .time-bar__event-status {
   font-size: 12px;
   color: var(--muted);
