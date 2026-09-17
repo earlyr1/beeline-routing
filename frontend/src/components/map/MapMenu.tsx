@@ -17,10 +17,14 @@ export function MapMenu() {
   useEffect(() => {
     if (!point) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeMapMenu();
+      if (event.key !== 'Escape') return;
+      // Esc закрывает только меню карты: панель «Почему» под ним остаётся открытой.
+      event.preventDefault();
+      closeMapMenu();
     };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
+    // Перехват раньше обычных слушателей документа, чтобы они увидели, что Esc уже занят.
+    document.addEventListener('keydown', closeOnEscape, true);
+    return () => document.removeEventListener('keydown', closeOnEscape, true);
   }, [point, closeMapMenu]);
 
   if (!point) return null;

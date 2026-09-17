@@ -224,7 +224,8 @@ export const LOST_SESSION_MESSAGE = 'Прежний план недоступе�
 
 function savedDatasetId(): string | null {
   try {
-    return localStorage.getItem(SESSION_DATASET_KEY);
+    // Раньше план помнила только вкладка (sessionStorage): открытая до обновления вкладка продолжает свой план.
+    return localStorage.getItem(SESSION_DATASET_KEY) ?? sessionStorage.getItem(SESSION_DATASET_KEY);
   } catch {
     return null;
   }
@@ -232,6 +233,7 @@ function savedDatasetId(): string | null {
 
 function saveDatasetId(datasetId: string | null): void {
   try {
+    sessionStorage.removeItem(SESSION_DATASET_KEY);
     if (datasetId === null) localStorage.removeItem(SESSION_DATASET_KEY);
     else localStorage.setItem(SESSION_DATASET_KEY, datasetId);
   } catch {
@@ -505,6 +507,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         state: null,
         selectedRequestId: null,
         selectedEngineerId: null,
+        whyOpen: false,
         ...NO_FLOATING_DIALOG,
         ...NO_CLOCK_ACTIVITY,
         toolbarDialog: null,
@@ -539,7 +542,12 @@ export const useAppStore = create<AppState>()((set, get) => {
         get().setPlanningState(state);
         // Новый день начинается со своего начала: часы встают на начало шкалы дня, и это время уходит на сервер,
         // чтобы курсор плана совпал с часами. Шкала дня после пересчёта пуста, и перевод курсора ничего не считает.
-        set({ selectedRequestId: null, clock: fromMinutes(dayScale(state, state.plan).from) });
+        // Карточка заявки закрывается; панель «Почему» остаётся, только если открыта бригада.
+        set({
+          selectedRequestId: null,
+          whyOpen: get().whyOpen && get().selectedEngineerId !== null,
+          clock: fromMinutes(dayScale(state, state.plan).from),
+        });
         await get().commitClock();
       } catch (error) {
         if (isCurrent(current) && !(error instanceof StaleSession)) set({ error: errorMessage(error) });

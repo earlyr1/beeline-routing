@@ -44,11 +44,14 @@ export function TimeBar() {
     if (openMinute === null && !menuOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      // Esc закрывает только это меню: панель «Почему» под ним остаётся открытой.
+      event.preventDefault();
       setOpenMinute(null);
       setMenuOpen(false);
     };
-    document.addEventListener('keydown', closeOnEscape);
-    return () => document.removeEventListener('keydown', closeOnEscape);
+    // Перехват раньше обычных слушателей документа, чтобы они увидели, что Esc уже занят.
+    document.addEventListener('keydown', closeOnEscape, true);
+    return () => document.removeEventListener('keydown', closeOnEscape, true);
   }, [openMinute, menuOpen]);
 
   if (!state) return null;

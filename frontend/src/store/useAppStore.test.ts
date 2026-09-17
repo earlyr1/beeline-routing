@@ -879,6 +879,16 @@ describe('session after a page reload or a closed browser', () => {
     expect(useAppStore.getState().state?.version).toBe(7);
   });
 
+  it('continues the plan a tab remembered in session storage before the update and moves it to local storage', async () => {
+    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    vi.mocked(api.getPlanningState).mockResolvedValue(makePlanningState());
+    await useAppStore.getState().restoreSession();
+    expect(api.getPlanningState).toHaveBeenCalledWith('d_test');
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
+    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    sessionStorage.clear();
+  });
+
   it('forgets a dataset lost with a backend restart and says so', async () => {
     localStorage.setItem(SESSION_DATASET_KEY, 'd_gone');
     vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(404, 'Набор данных не найден'));

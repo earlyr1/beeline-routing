@@ -21,7 +21,8 @@ export function MainScreen() {
   // Срочная заявка и плавающий диалог открыты вместе: плавающий стоит левее, чтобы не закрыть срочную заявку.
   const toolbarDialogOpen = useAppStore((s) => s.toolbarDialog !== null);
   // Панель «Почему» встаёт слева отдельной колонкой и сдвигает карту, а не закрывает маршрут.
-  const whyOpen = useAppStore((s) => s.whyOpen);
+  // Колонка есть, только когда панели есть что показать: пустая колонка сдвинула бы карту и правую панель.
+  const whyOpen = useAppStore((s) => s.whyOpen && (s.selectedRequestId !== null || s.selectedEngineerId !== null));
   // Подсказка называет диалог, который начал выбор точки: оба диалога могут быть открыты одновременно.
   const pickHint =
     pickFor === 'edit' && editingRequestId

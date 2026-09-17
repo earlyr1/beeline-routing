@@ -782,7 +782,7 @@ h4 {
 
 /* Панель «Почему» открыта: слева от карты колонка с подробным объяснением, карта сужается. */
 .workspace--why {
-  grid-template-columns: minmax(320px, 26%) minmax(0, 1fr) minmax(440px, 42%);
+  grid-template-columns: minmax(340px, 26%) minmax(0, 1fr) minmax(440px, 42%);
 }
 
 .why-panel {
@@ -852,6 +852,39 @@ h4 {
   grid-template-columns: 18px 110px 1fr;
   padding: 4px 0;
   border-bottom: 1px solid #f0f2f5;
+}
+
+.why-panel__head h3:focus {
+  outline: none;
+}
+
+.why-panel__head h3:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* Другие инженеры: строка с именем, возможностью, началом и пробегом, комментарий под ней. */
+.alternatives {
+  margin: 8px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.alternative {
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f2f5;
+}
+
+.alternative__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+}
+
+.alternative__reason {
+  margin: 2px 0 0;
+  font-size: 13px;
 }
 
 .map-area--picking {
@@ -1661,6 +1694,11 @@ h4 {
 @media (max-width: 1180px) {
   .workspace {
     grid-template-columns: minmax(0, 1fr) 420px;
+  }
+
+  /* Панель «Почему» открыта и на узком экране: три колонки, иначе правая панель уходит под карту. */
+  .workspace.workspace--why {
+    grid-template-columns: 300px minmax(0, 1fr) 420px;
   }
 
   .report__grid {

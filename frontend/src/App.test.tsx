@@ -104,6 +104,25 @@ describe('App', () => {
     expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
   });
 
+  it('opens the «Почему» panel next to the map from the request card and closes it', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104' });
+    const { container } = render(<App />);
+    const card = screen.getByRole('region', { name: 'Объяснение по заявке' });
+    fireEvent.click(await within(card).findByRole('button', { name: 'Почему?' }));
+
+    const panel = screen.getByRole('complementary', { name: 'Почему' });
+    expect(await within(panel).findByText('Проверки')).toBeInTheDocument();
+    const workspace = container.querySelector('.workspace') as HTMLElement;
+    expect(workspace).toHaveClass('workspace--why');
+    expect(workspace.firstElementChild).toBe(panel);
+
+    fireEvent.click(within(card).getByRole('button', { name: 'Закрыть объяснение' }));
+    expect(screen.queryByRole('complementary', { name: 'Почему' })).not.toBeInTheDocument();
+    expect(container.querySelector('.workspace')).not.toHaveClass('workspace--why');
+    expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
+  });
+
   it('opens one request edit dialog from the explanation card and closes it', async () => {
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
     resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104' });
