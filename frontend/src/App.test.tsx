@@ -45,7 +45,7 @@ async function openMapMenu(container: HTMLElement): Promise<HTMLElement> {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  sessionStorage.clear();
+  localStorage.clear();
   vi.mocked(api.getConfig).mockResolvedValue({ yandex_maps_api_key: null, llm_enabled: false, osrm_available: true });
   resetStore();
 });
@@ -278,19 +278,22 @@ describe('App', () => {
     });
   });
 
-  it('reopens the saved plan after a page reload', async () => {
-    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+  it('reopens the saved plan after a closed browser without showing the upload screen', async () => {
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_test');
     vi.mocked(api.getPlanningState).mockResolvedValue(makePlanningState());
     render(<App />);
+    expect(screen.queryByRole('heading', { name: 'Планирование маршрутов выездных инженеров' })).not.toBeInTheDocument();
+    expect(screen.getByText('Открываем прежний план…')).toBeInTheDocument();
     expect(await screen.findByText('Сейчас 13:00')).toBeInTheDocument();
     expect(api.getPlanningState).toHaveBeenCalledWith('d_test');
   });
 
   it('stays on the upload screen when the saved dataset is gone', async () => {
-    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_gone');
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_gone');
     vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(404, 'Набор данных не найден'));
     render(<App />);
-    await vi.waitFor(() => expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull());
-    expect(screen.getByRole('heading', { name: 'Планирование маршрутов выездных инженеров' })).toBeInTheDocument();
+    await vi.waitFor(() => expect(localStorage.getItem(SESSION_DATASET_KEY)).toBeNull());
+    expect(await screen.findByRole('heading', { name: 'Планирование маршрутов выездных инженеров' })).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent('Прежний план недоступен: сервис перезапускался');
   });
 });

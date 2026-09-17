@@ -22,7 +22,7 @@ import type { DatasetStatus, PlanningState, ReverseGeocode, TimelineItem } from 
 import { cancelEvent } from '../lib/events';
 import { makeDatasetStatus, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
-import { PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
+import { LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
 
 /** План на время дня cursor. */
 const at = (cursor: string, patch: Partial<PlanningState> = {}) => makePlanningState({ cursor, ...patch });
@@ -45,7 +45,7 @@ const processing = () => makeDatasetStatus({ status: 'processing', stage: 'parsi
 
 beforeEach(() => {
   vi.resetAllMocks();
-  sessionStorage.clear();
+  localStorage.clear();
   resetStore();
 });
 
@@ -212,7 +212,7 @@ describe('useAppStore', () => {
     await pending;
 
     expect(useAppStore.getState()).toMatchObject({ state: null, datasetId: null, busy: false });
-    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
   });
 
   it('ignores an event response that arrives after a new upload started', async () => {
@@ -840,49 +840,94 @@ describe('events being prepared on the server', () => {
   });
 });
 
-describe('session after a page reload', () => {
-  it('remembers the dataset of the shown plan and forgets it on reset or a new upload', async () => {
+describe('session after a page reload or a closed browser', () => {
+  it('remembers the dataset of the shown plan, forgets it on reset and remembers a new upload at once', async () => {
     useAppStore.getState().setPlanningState(makePlanningState());
-    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
     useAppStore.getState().reset();
-    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
 
     useAppStore.getState().setPlanningState(makePlanningState());
     useAppStore.getState().openEngineerDialog('unavailable', 'E01');
     useAppStore.getState().openMapMenu({ lat: 55.71, lon: 37.8 });
     vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus({ dataset_id: 'd_new' }));
     await useAppStore.getState().upload(new File(['x'], 'south.csv'));
-    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    // Новый файл запоминается сразу после загрузки, ещё до готового плана.
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBe('d_new');
     expect(useAppStore.getState()).toMatchObject({ engineerDialog: null, mapMenu: null });
   });
 
-  it('restores the saved plan', async () => {
-    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
-    vi.mocked(api.getPlanningState).mockResolvedValue(makePlanningState({ version: 7 }));
-    await useAppStore.getState().restoreSession();
+  it('forgets an upload that failed to process', async () => {
+    vi.mocked(api.uploadFile).mockResolvedValue(
+      makeDatasetStatus({ status: 'failed', stage: 'parsing', report: null, error: 'В файле нет колонок: Адрес' }),
+    );
+    await useAppStore.getState().upload(new File(['x'], 'bad.csv'));
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+  });
+
+  it('restores the saved plan and marks the store as restoring until the answer', async () => {
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    const response = deferred<PlanningState>();
+    vi.mocked(api.getPlanningState).mockReturnValue(response.promise);
+    const restoring = useAppStore.getState().restoreSession();
+    expect(useAppStore.getState().restoring).toBe(true);
+
+    response.resolve(makePlanningState({ version: 7 }));
+    await restoring;
     expect(api.getPlanningState).toHaveBeenCalledWith('d_test');
-    expect(useAppStore.getState().datasetId).toBe('d_test');
+    expect(useAppStore.getState()).toMatchObject({ datasetId: 'd_test', restoring: false });
     expect(useAppStore.getState().state?.version).toBe(7);
   });
 
-  it.each([404, 409])('forgets the saved dataset and stays on upload when the backend answers %i', async (status) => {
-    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_gone');
-    vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(status, 'Набор данных не найден'));
+  it('forgets a dataset lost with a backend restart and says so', async () => {
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_gone');
+    vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(404, 'Набор данных не найден'));
     await useAppStore.getState().restoreSession();
-    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
-    expect(useAppStore.getState()).toMatchObject({ state: null, datasetId: null, error: null, busy: false });
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    expect(useAppStore.getState()).toMatchObject({ state: null, datasetId: null, error: LOST_SESSION_MESSAGE, busy: false, restoring: false });
+  });
+
+  it('continues a file that was still processing when the browser was closed', async () => {
+    vi.useFakeTimers();
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(409, 'Датасет ещё обрабатывается, план не готов.'));
+    vi.mocked(api.getDatasetStatus)
+      .mockResolvedValueOnce(makeDatasetStatus({ status: 'processing', stage: 'matrix', report: null }))
+      .mockResolvedValueOnce(makeDatasetStatus());
+
+    const restoring = useAppStore.getState().restoreSession();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useAppStore.getState()).toMatchObject({ datasetId: 'd_test', busy: true, restoring: false });
+    expect(useAppStore.getState().datasetStatus?.stage).toBe('matrix');
+
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await restoring;
+    expect(useAppStore.getState()).toMatchObject({ datasetId: 'd_test', busy: false, error: null, state: null });
+    expect(useAppStore.getState().datasetStatus?.status).toBe('ready');
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
+  });
+
+  it('forgets a file whose processing failed while the browser was closed', async () => {
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(409, 'Предподсчёт завершился ошибкой'));
+    vi.mocked(api.getDatasetStatus).mockResolvedValue(
+      makeDatasetStatus({ status: 'failed', stage: 'parsing', report: null, error: 'В файле нет колонок: Адрес' }),
+    );
+    await useAppStore.getState().restoreSession();
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBeNull();
+    expect(useAppStore.getState()).toMatchObject({ error: 'В файле нет колонок: Адрес', busy: false, restoring: false });
   });
 
   it('keeps the saved dataset when the server is temporarily unreachable', async () => {
-    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_test');
     vi.mocked(api.getPlanningState).mockRejectedValue(new api.ApiError(0, 'Сервер недоступен. Проверьте, что backend запущен.'));
     await useAppStore.getState().restoreSession();
-    expect(sessionStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
     expect(useAppStore.getState()).toMatchObject({ state: null, error: 'Сервер недоступен. Проверьте, что backend запущен.' });
   });
 
   it('ignores a restored plan when the dispatcher already started another upload', async () => {
-    sessionStorage.setItem(SESSION_DATASET_KEY, 'd_test');
+    localStorage.setItem(SESSION_DATASET_KEY, 'd_test');
     const response = deferred<PlanningState>();
     vi.mocked(api.getPlanningState).mockReturnValue(response.promise);
     const restoring = useAppStore.getState().restoreSession();

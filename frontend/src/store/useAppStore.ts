@@ -22,7 +22,7 @@ import { DEFAULT_LUNCH_ENABLED, DEFAULT_WORKLOAD_LEVEL, clampWorkloadLevel, lunc
 export const POLL_INTERVAL_MS = 1000;
 /** Сколько раз повторить опрос статуса после сбоя сети или ответа 5xx, прежде чем сдаться. */
 export const POLL_RETRIES = 3;
-/** Ключ sessionStorage с набором данных открытого плана: план переживает перезагрузку страницы. */
+/** Ключ localStorage с набором данных открытого плана: план переживает перезагрузку страницы и закрытие браузера. */
 export const SESSION_DATASET_KEY = 'routing.datasetId';
 /** Шаг проигрывания дня: минута плана за 100 мс, то есть час дня за 6 секунд. */
 export const PLAY_TICK_MS = 100;
@@ -51,6 +51,8 @@ export interface AppData {
   config: ClientConfig | null;
   datasetId: string | null;
   datasetStatus: DatasetStatus | null;
+  /** Открываем прежний план после перезагрузки или закрытия браузера: экран загрузки не показывается. */
+  restoring: boolean;
   state: PlanningState | null;
   selectedRequestId: string | null;
   selectedEngineerId: string | null;
@@ -162,6 +164,7 @@ export const initialAppData: AppData = {
   config: null,
   datasetId: null,
   datasetStatus: null,
+  restoring: false,
   state: null,
   selectedRequestId: null,
   selectedEngineerId: null,
@@ -216,9 +219,12 @@ const isTransient = (error: unknown) => error instanceof ApiError && (error.stat
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** Прежний план пропал: backend перезапускали, а наборы данных живут в его памяти. */
+export const LOST_SESSION_MESSAGE = 'Прежний план недоступен: сервис перезапускался. Загрузите файл заново.';
+
 function savedDatasetId(): string | null {
   try {
-    return sessionStorage.getItem(SESSION_DATASET_KEY);
+    return localStorage.getItem(SESSION_DATASET_KEY);
   } catch {
     return null;
   }
@@ -226,8 +232,8 @@ function savedDatasetId(): string | null {
 
 function saveDatasetId(datasetId: string | null): void {
   try {
-    if (datasetId === null) sessionStorage.removeItem(SESSION_DATASET_KEY);
-    else sessionStorage.setItem(SESSION_DATASET_KEY, datasetId);
+    if (datasetId === null) localStorage.removeItem(SESSION_DATASET_KEY);
+    else localStorage.setItem(SESSION_DATASET_KEY, datasetId);
   } catch {
     // Хранилище недоступно (приватный режим или запрет браузера): просто не запоминаем план.
   }
@@ -335,6 +341,63 @@ export const useAppStore = create<AppState>()((set, get) => {
   }
 
   /** Пока сервер считает планы после событий шкалы, их статусы спрашиваются раз в POLL_INTERVAL_MS. */
+  /**
+   * Опрос статуса загруженного файла до готовности. Сбой обработки и потерянный набор забываются, чтобы следующее
+   * открытие страницы не пыталось их вернуть.
+   */
+  async function followUpload(datasetId: string, first: DatasetStatus, current: number): Promise<void> {
+    let status = first;
+    let failures = 0;
+    while (status.status === 'processing') {
+      await sleep(POLL_INTERVAL_MS);
+      if (!isCurrent(current)) return;
+      try {
+        status = await getDatasetStatus(datasetId);
+      } catch (error) {
+        if (!isCurrent(current)) return;
+        if (isTransient(error) && failures < POLL_RETRIES) {
+          failures += 1;
+          continue;
+        }
+        // Сбрасываем статус, чтобы кнопка загрузки снова стала доступна.
+        saveDatasetId(null);
+        set({ datasetId: null, datasetStatus: null, error: `${withPeriod(errorMessage(error))} Загрузите файл ещё раз.` });
+        return;
+      }
+      failures = 0;
+      if (!isCurrent(current)) return;
+      set({ datasetStatus: status });
+    }
+    if (status.status === 'failed') {
+      saveDatasetId(null);
+      set({ error: status.error ?? 'Не удалось обработать файл' });
+    }
+  }
+
+  /** Браузер закрыли, пока файл обрабатывался: показываем экран загрузки с тем же статусом и ждём готовности. */
+  async function resumeUpload(datasetId: string, current: number): Promise<void> {
+    let status: DatasetStatus;
+    try {
+      status = await getDatasetStatus(datasetId);
+    } catch (error) {
+      if (!isCurrent(current)) return;
+      if (error instanceof ApiError && error.status === 404) {
+        saveDatasetId(null);
+        set({ error: LOST_SESSION_MESSAGE });
+      } else {
+        set({ error: errorMessage(error) });
+      }
+      return;
+    }
+    if (!isCurrent(current)) return;
+    set({ datasetId, datasetStatus: status, busy: status.status === 'processing', restoring: false });
+    try {
+      await followUpload(datasetId, status, current);
+    } finally {
+      if (isCurrent(current)) set({ busy: false });
+    }
+  }
+
   function schedulePoll(): void {
     if (pollTimer !== null || pollInFlight === generation) return;
     const current = generation;
@@ -418,6 +481,8 @@ export const useAppStore = create<AppState>()((set, get) => {
 
   return {
     ...initialAppData,
+    // Сохранённый план откроется сразу: до первого ответа сервера экран загрузки не мелькает.
+    restoring: savedDatasetId() !== null,
 
     async loadConfig() {
       try {
@@ -436,6 +501,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         error: null,
         datasetId: null,
         datasetStatus: null,
+        restoring: false,
         state: null,
         selectedRequestId: null,
         selectedEngineerId: null,
@@ -446,31 +512,13 @@ export const useAppStore = create<AppState>()((set, get) => {
         ...NO_ADDRESS_LOOKUP,
       });
       try {
-        let status = await uploadFile(file);
+        const status = await uploadFile(file);
         if (!isCurrent(current)) return;
         const datasetId = status.dataset_id;
+        // Набор запоминается сразу: закрытый во время расчёта браузер при следующем открытии дождётся готовности.
+        saveDatasetId(datasetId);
         set({ datasetId, datasetStatus: status });
-        let failures = 0;
-        while (status.status === 'processing') {
-          await sleep(POLL_INTERVAL_MS);
-          if (!isCurrent(current)) return;
-          try {
-            status = await getDatasetStatus(datasetId);
-          } catch (error) {
-            if (!isCurrent(current)) return;
-            if (isTransient(error) && failures < POLL_RETRIES) {
-              failures += 1;
-              continue;
-            }
-            // Сбрасываем статус, чтобы кнопка загрузки снова стала доступна.
-            set({ datasetId: null, datasetStatus: null, error: `${withPeriod(errorMessage(error))} Загрузите файл ещё раз.` });
-            return;
-          }
-          failures = 0;
-          if (!isCurrent(current)) return;
-          set({ datasetStatus: status });
-        }
-        if (status.status === 'failed') set({ error: status.error ?? 'Не удалось обработать файл' });
+        await followUpload(datasetId, status, current);
       } catch (error) {
         if (isCurrent(current)) set({ error: errorMessage(error) });
       } finally {
@@ -540,16 +588,29 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     async restoreSession() {
       const datasetId = savedDatasetId();
-      if (!datasetId || get().state) return;
+      if (!datasetId || get().state) {
+        if (get().restoring) set({ restoring: false });
+        return;
+      }
       const current = generation;
+      set({ restoring: true });
       try {
         const state = await getPlanningState(datasetId);
         if (isCurrent(current)) get().setPlanningState(state);
       } catch (error) {
         if (!isCurrent(current)) return;
-        // 404: backend перезапущен и набора больше нет; 409: план ещё не построен. Остаёмся на экране загрузки.
-        if (error instanceof ApiError && (error.status === 404 || error.status === 409)) saveDatasetId(null);
-        else set({ error: errorMessage(error) });
+        if (error instanceof ApiError && error.status === 404) {
+          // Backend перезапущен, набора в его памяти больше нет.
+          saveDatasetId(null);
+          set({ error: LOST_SESSION_MESSAGE });
+        } else if (error instanceof ApiError && error.status === 409) {
+          // Файл ещё обрабатывается или обработка упала: возвращаемся к экрану загрузки с его статусом.
+          await resumeUpload(datasetId, current);
+        } else {
+          set({ error: errorMessage(error) });
+        }
+      } finally {
+        if (isCurrent(current)) set({ restoring: false });
       }
     },
 
