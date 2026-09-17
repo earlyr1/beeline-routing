@@ -1,6 +1,7 @@
 import { useAppStore } from '../store/useAppStore';
 import { DiffBanner } from './DiffBanner';
 import { ErrorToast } from './ErrorToast';
+import { ChoiceDialog } from './events/ChoiceDialog';
 import { EngineerDelayDialog } from './events/EngineerDelayDialog';
 import { EngineerUnavailableDialog } from './events/EngineerUnavailableDialog';
 import { EventToolbar } from './events/EventToolbar';
@@ -51,6 +52,7 @@ export function MainScreen() {
       {delayDialogOpen && <EngineerDelayDialog />}
       {engineerDialog === 'transport' && <TransportChangeDialog />}
       {engineerDialog === 'unavailable' && <EngineerUnavailableDialog />}
+      <ChoiceDialog />
       <ErrorToast />
     </div>
   );

@@ -18,7 +18,7 @@ import * as api from '../api/client';
 import type { PlanningState } from '../api/types';
 import { pinLeft } from '../lib/timeBar';
 import { PLAY_TICK_MS, useAppStore } from '../store/useAppStore';
-import { makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
+import { makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { TimeBar } from './TimeBar';
 
@@ -188,6 +188,29 @@ describe('TimeBar', () => {
     render(<TimeBar />);
     fireEvent.click(screen.getByTitle(/^Задержка: Бригада Арташкин/));
     expect(within(screen.getByRole('group', { name: 'События 15:00' })).getByRole('button', { name: 'Удалить событие' })).toBeDisabled();
+  });
+
+  it('offers «Варианты…» for an event that breaks the plan and shows its choice', () => {
+    const openChoice = vi.fn().mockResolvedValue(undefined);
+    const timeline = [
+      makeTimelineItem({ id: 'tl_2', event: makeEventChoice().event, status: 'applied', choosable: true, variant: 'stable' }),
+      makeTimelineItem({ id: 'tl_3', status: 'applied' }),
+    ];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }), openChoice });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByRole('button', { name: /Недоступен/ }));
+    const events = screen.getByRole('group', { name: 'События 13:00' });
+    expect(within(events).getByText('Вариант: Минимум перестановок')).toBeInTheDocument();
+    fireEvent.click(within(events).getByRole('button', { name: 'Варианты…' }));
+    expect(openChoice).toHaveBeenCalledWith('tl_2');
+    expect(screen.queryByRole('group', { name: 'События 13:00' })).not.toBeInTheDocument();
+  });
+
+  it('blocks play and the slider while the choice is open', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), choice: makeEventChoice() });
+    render(<TimeBar />);
+    expect(screen.getByRole('button', { name: 'Запустить' })).toBeDisabled();
+    expect(screen.getByRole('slider', { name: 'Текущее время' })).toBeDisabled();
   });
 
   it('opens the event dialogs from «Добавить событие»: engineer dialogs pick the busiest engineer themselves', () => {

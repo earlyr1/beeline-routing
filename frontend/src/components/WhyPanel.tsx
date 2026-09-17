@@ -159,8 +159,8 @@ export function WhyPanel() {
     const closeOnEscape = (event: KeyboardEvent) => {
       // Esc закрывает только верхний слой: меню часов и карты гасят его сами, диалог и поле ввода важнее панели.
       if (event.key !== 'Escape' || event.defaultPrevented || isEditable(event.target)) return;
-      const { mapMenu, toolbarDialog, editingRequestId, delayDialogOpen, engineerDialog } = useAppStore.getState();
-      if (mapMenu || toolbarDialog || editingRequestId || delayDialogOpen || engineerDialog) return;
+      const { mapMenu, toolbarDialog, editingRequestId, delayDialogOpen, engineerDialog, choice, choiceLoading } = useAppStore.getState();
+      if (mapMenu || toolbarDialog || editingRequestId || delayDialogOpen || engineerDialog || choice || choiceLoading) return;
       closeWhy();
     };
     document.addEventListener('keydown', closeOnEscape);

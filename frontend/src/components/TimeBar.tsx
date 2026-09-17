@@ -4,6 +4,7 @@ import { fromMinutes } from '../lib/format';
 import { byId, displayedPlan } from '../lib/planView';
 import { pinLeft, sliderRange, sliderValue, timelineItemTitle, timelinePins, timelineStatusText } from '../lib/timeBar';
 import { dayScale, hourTicks } from '../lib/timeline';
+import { VARIANT_TITLES } from '../lib/variants';
 import { useAppStore } from '../store/useAppStore';
 
 /** Пункты меню «Добавить событие»: открывают те же диалоги, что страница бригады, со временем на часах. */
@@ -33,6 +34,9 @@ export function TimeBar() {
   const startDrag = useAppStore((s) => s.startDrag);
   const endDrag = useAppStore((s) => s.endDrag);
   const deleteTimelineEvent = useAppStore((s) => s.deleteTimelineEvent);
+  const openChoice = useAppStore((s) => s.openChoice);
+  // Пока открыто окно выбора варианта, часы стоят на событии: ни запуска, ни ползунка.
+  const choosing = useAppStore((s) => s.choice !== null || s.choiceLoading);
   /** Минута отметки, чьи события открыты; null — список закрыт. */
   const [openMinute, setOpenMinute] = useState<number | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -83,6 +87,7 @@ export function TimeBar() {
           className={`btn time-bar__play${playing ? ' time-bar__play--playing' : ''}`}
           aria-label={playing ? 'Пауза' : 'Запустить'}
           title={playing ? 'Остановить часы' : 'Запустить часы: час дня за 6 секунд'}
+          disabled={choosing}
           onClick={() => (playing ? pause() : play())}
         >
           <span aria-hidden="true">{playing ? '❚❚' : '▶'}</span>
@@ -120,6 +125,7 @@ export function TimeBar() {
           max={range.max}
           step={1}
           value={sliderValue(clock, range)}
+          disabled={choosing}
           onPointerDown={(event) => {
             // Указатель, отпущенный за пределами ползунка, иначе не вернул бы pointerup, и перетаскивание не закончилось бы.
             try {
@@ -161,6 +167,22 @@ export function TimeBar() {
                 <li key={item.id} className="time-bar__event">
                   <span>{describeEvent(item.event, engineers)}</span>
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
+                  {item.choosable && (
+                    <>
+                      <span className="muted">{item.variant ? `Вариант: ${VARIANT_TITLES[item.variant]}` : 'Вариант не выбран'}</span>
+                      <button
+                        type="button"
+                        className="btn btn-small"
+                        disabled={deleteLocked || item.status === 'rejected'}
+                        onClick={() => {
+                          setOpenMinute(null);
+                          void openChoice(item.id);
+                        }}
+                      >
+                        Варианты…
+                      </button>
+                    </>
+                  )}
                   <button type="button" className="btn btn-small" disabled={deleteLocked} onClick={() => void remove(item.id)}>
                     Удалить событие
                   </button>

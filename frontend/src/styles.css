@@ -1665,18 +1665,159 @@ h4 {
   margin-top: 12px;
 }
 
+/* Окно выбора варианта исправления: поверх всего экрана, три карточки в ряд. */
+.choice-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(16, 24, 40, 0.35);
+}
+
+.choice {
+  width: min(1100px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  background: var(--surface);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  padding: 20px 22px 22px;
+}
+
+.choice__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.choice__head h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.choice__eyebrow {
+  margin: 0 0 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--primary);
+}
+
+.choice__cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.variant {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.variant--recommended {
+  border: 2px solid var(--primary);
+  background: #f7f9ff;
+}
+
+.variant__head h3 {
+  margin: 4px 0 2px;
+  font-size: 17px;
+}
+
+.variant__head p {
+  margin: 0;
+}
+
+.variant__numbers {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.variant__number dt {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.variant__number dd {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.variant__number strong {
+  font-size: 20px;
+}
+
+.variant__delta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.variant__pros,
+.variant__cons {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13px;
+}
+
+.variant__pros {
+  color: var(--ok);
+}
+
+.variant__cons {
+  color: var(--danger);
+}
+
+.variant__choose {
+  margin-top: auto;
+}
+
+.time-bar__pin--awaiting {
+  box-shadow: 0 0 0 2px var(--warn);
+  animation: pin-awaiting 1.2s ease-in-out infinite;
+}
+
+@keyframes pin-awaiting {
+  50% {
+    box-shadow: 0 0 0 4px var(--warn-soft);
+  }
+}
+
+@media (max-width: 1180px) {
+  .choice__cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .error-list {
   color: var(--danger);
   margin: 8px 0 0;
   padding-left: 18px;
 }
 
+/* Сообщение об ошибке выше окна выбора варианта: неудачный выбор оставляет окно открытым, ошибку должно быть видно. */
 .toast {
   position: fixed;
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 60;
+  z-index: 80;
   display: flex;
   align-items: center;
   gap: 12px;
