@@ -28,6 +28,7 @@ from app.llm.client import LlmClient, OpenAiLlmClient
 from app.llm.store import ProposalStore
 from app.planning.session import PlanningContext
 from app.settings import BACKEND_DIR, Settings
+from app.solvers.portfolio import SolverPool
 from app.synth.config import SynthConfig
 
 
@@ -89,6 +90,11 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         with lock:
             return reverse_geocode(lat, lon, reverse_geocoder, reverse_cache)
 
+    # Пул процессов OR-Tools запускается заранее в фоне: первый расчёт не ждёт запуска процессов.
+    solver_pool = SolverPool(settings.solver_workers) if settings.solver_workers > 1 else None
+    if solver_pool is not None:
+        threading.Thread(target=solver_pool.warm_up, name="solver-pool-warm-up", daemon=True).start()
+
     planning = PlanningContext(
         model=TravelModel(),
         traffic=TrafficProfile.load(BACKEND_DIR / "config" / "traffic_profile.yaml"),
@@ -97,6 +103,7 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         # Матрицы 2ГИС по регионам читаются один раз при старте. Каталога нет или файл не читается — сервис
         # работает как без него, а минуты по парам точек дня из матриц берёт make_problem.
         transit=load_transit_matrices(settings.transit_dir),
+        solver_pool=solver_pool,
         time_limit_s=settings.solver_time_limit_s,
         time_limit_lunch_s=settings.solver_time_limit_lunch_s,
         geocode=geocode,

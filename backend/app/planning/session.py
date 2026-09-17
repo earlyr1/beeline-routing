@@ -23,6 +23,7 @@ from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workloa
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
+from app.solvers.portfolio import SolverPool
 from app.solvers.problem import EngineerState, Problem, make_problem
 
 
@@ -59,6 +60,8 @@ class PlanningContext:
     # файлы рядом. make_problem берёт из них минуты по парам точек, привязывая точку дня к ближайшей точке матрицы
     # в 150 м: после срочной заявки пары прежних точек остаются из 2ГИС, а пары с новой точкой считает модель.
     transit: Sequence[TransitMatrix] = ()
+    # Пул процессов для поисков OR-Tools (app/solvers/portfolio.py); None — поиск в текущем процессе.
+    solver_pool: SolverPool | None = None
     # Лимит OR-Tools на день без обеда и на перепланирование по событию.
     time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S
     # Лимит OR-Tools на весь день с обедом.
@@ -123,17 +126,27 @@ def _day_problem(
 
 
 def _solve(
-    problem: Problem, workload_level: int, time_limit_s: int, variant: EventVariant = "optimal"
+    problem: Problem,
+    workload_level: int,
+    time_limit_s: int,
+    variant: EventVariant = "optimal",
+    pool: SolverPool | None = None,
+    share: int = 1,
 ) -> tuple[Plan, Plan]:
     """Оптимизированный план с весами уровня нагрузки и базовый FCFS. Стоимость инженера FCFS не использует.
 
     variant="stable" делает перенос заявки к другому инженеру очень дорогим (вариант «Минимум перестановок»).
+    С пулом процессов поиск идёт сразу несколькими стратегиями и берётся лучший план; share — сколько поисков
+    делят пул одновременно (варианты события считаются вместе).
     """
     weights = workload_weights(workload_level)
     if variant == "stable":
         weights = replace(weights, reassignment=STABLE_REASSIGNMENT)
-    optimizer = OrToolsSolver(time_limit_s=time_limit_s, weights=weights)
-    return optimizer.solve(problem), FcfsSolver().solve(problem)
+    if pool is not None:
+        plan = pool.solve(problem, weights, time_limit_s, pool.strategies(share))
+    else:
+        plan = OrToolsSolver(time_limit_s=time_limit_s, weights=weights).solve(problem)
+    return plan, FcfsSolver().solve(problem)
 
 
 def warn_stale_transit(region: str, problem: Problem, transit: Sequence[TransitMatrix]) -> None:
@@ -176,7 +189,9 @@ def start_session(
     """План всего дня с нуля: предподсчёт загрузки и пересборка дня. Лимит OR-Tools зависит от обеда."""
     problem = _day_problem(requests, engineers, ctx, workload_level, lunch_enabled)
     warn_stale_transit(region, problem, ctx.transit)
-    plan, baseline = _solve(problem, workload_level, ctx.day_time_limit_s(lunch_enabled))
+    plan, baseline = _solve(
+        problem, workload_level, ctx.day_time_limit_s(lunch_enabled), pool=ctx.solver_pool
+    )
     return PlanningSession(
         dataset_id=dataset_id,
         region=region,
@@ -554,7 +569,11 @@ def apply_event(
         unassigned_before = {item.request_id for item in session.plan.unassigned}
         plan, baseline = keep_plan(problem, unassigned_before), FcfsSolver().solve(problem)
     else:
-        plan, baseline = _solve(problem, session.workload_level, ctx.time_limit_s, strategy)
+        # Варианты «ломающего» события считаются одновременно: «Оптимально» и «Минимум перестановок» делят пул.
+        share = 2 if is_choosable(stored_event) else 1
+        plan, baseline = _solve(
+            problem, session.workload_level, ctx.time_limit_s, strategy, pool=ctx.solver_pool, share=share
+        )
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}
     diff = compute_diff(session.plan, plan, cancelled)
     if stored_event.type == EventType.ENGINEER_DELAYED:

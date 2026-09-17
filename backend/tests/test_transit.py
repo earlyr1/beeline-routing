@@ -509,7 +509,7 @@ def test_urgent_event_keeps_2gis_minutes_between_the_points_already_in_the_day()
 
 
 def test_settings_and_build_deps_take_the_matrices_from_the_directory(tmp_path):
-    settings = Settings.from_env({"DATA_DIR": str(tmp_path), "GEOCODER": "cache-only"})
+    settings = Settings.from_env({"DATA_DIR": str(tmp_path), "GEOCODER": "cache-only", "SOLVER_WORKERS": "1"})
     assert settings.transit_dir == tmp_path / "transit"
     assert list(build_deps(settings).ingest.planning.transit) == []
 

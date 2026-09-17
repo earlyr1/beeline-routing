@@ -16,6 +16,8 @@ DEFAULT_SOLVER_TIME_LIMIT_S = 5
 # Лимит OR-Tools на весь день с обедом: перерывы в модели замедляют поиск. С этим лимитом посчитаны бандлы и
 # таблица результатов в README.
 DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S = 30
+# Сколько поисков OR-Tools идут одновременно в отдельных процессах: по умолчанию до 4, но не больше ядер.
+MAX_DEFAULT_SOLVER_WORKERS = 4
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,8 @@ class Settings:
     solver_time_limit_s: int
     solver_time_limit_lunch_s: int = DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
     llm_tool_mode: str = "auto"
+    # 1 — поиск в текущем процессе без пула (так в тестах); больше — пул процессов и несколько стратегий.
+    solver_workers: int = 1
 
     @property
     def bundles_dir(self) -> Path:
@@ -59,6 +63,11 @@ class Settings:
         geocoder = optional("GEOCODER") or "nominatim"
         if geocoder not in GEOCODERS:
             raise ValueError(f"GEOCODER должен быть одним из: {', '.join(GEOCODERS)}")
+        solver_workers = int(
+            optional("SOLVER_WORKERS") or min(MAX_DEFAULT_SOLVER_WORKERS, os.cpu_count() or 1)
+        )
+        if solver_workers < 1:
+            raise ValueError("SOLVER_WORKERS должен быть не меньше 1")
         llm_tool_mode = optional("LLM_TOOL_MODE") or "auto"
         if llm_tool_mode not in LLM_TOOL_MODES:
             raise ValueError(f"LLM_TOOL_MODE должен быть одним из: {', '.join(LLM_TOOL_MODES)}")
@@ -77,4 +86,5 @@ class Settings:
                 optional("SOLVER_TIME_LIMIT_LUNCH_S") or DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
             ),
             llm_tool_mode=llm_tool_mode,
+            solver_workers=solver_workers,
         )

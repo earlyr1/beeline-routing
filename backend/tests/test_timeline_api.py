@@ -657,6 +657,27 @@ def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(tmp_path, solv
     assert again.status_code == 200 and again.json()["current"] == "optimal"
 
 
+def test_with_a_solver_pool_both_variants_of_an_event_are_solved_at_once(tmp_path, solves, monkeypatch):
+    client, deps, base, background = dataset(tmp_path, solves)
+    busy = busy_of(client, base)
+    deps.ingest.planning.solver_pool = object()
+    # Обе стратегии должны дойти до барьера одновременно, иначе через 10 секунд он ломается.
+    together = threading.Barrier(2, timeout=10)
+
+    def solve(problem, workload_level, time_limit_s, variant="optimal", pool=None, share=1):
+        assert (pool, share) == (deps.ingest.planning.solver_pool, 2)
+        together.wait()
+        return solves.solve(problem, workload_level, time_limit_s, variant)
+
+    monkeypatch.setattr("app.planning.session._solve", solve)
+    added(client, base, unavailable(busy, "13:00"))
+    background.run()
+    assert sorted(solves.variants) == ["optimal", "stable"]
+    stopped = cursor_to(client, base, "17:00")
+    assert (stopped["cursor"], stopped["pending_choice"]["entry_id"]) == ("13:00", "tl_1")
+    assert len(stopped["pending_choice"]["variants"]) == 3
+
+
 def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(tmp_path, solves):
     client, _, base, _ = dataset(tmp_path, solves)
     busy = busy_of(client, base)

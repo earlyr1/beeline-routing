@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 
 from app.api.registry import DatasetRecord
 from app.api.schemas import PlanningState, TimelineItem, to_planning_state
@@ -83,17 +84,31 @@ def _replay_variants(record: DatasetRecord, ctx: PlanningContext, walk: Walk, en
     """Под record.timeline_lock: шаги события entry для всех стратегий после прохода walk, без record.lock.
 
     Посчитанные стратегии не пересчитываются. Отклонение не зависит от стратегии: после отклонённого optimal
-    остальные не считаются. Все стратегии получают один номер плана: в цепочку попадёт только выбранная.
+    остальные не сохраняются. Все стратегии получают один номер плана: в цепочку попадёт только выбранная.
+    С пулом процессов недостающие стратегии считаются одновременно, без него — по очереди до первого отклонения.
     """
     version = record.next_version()
+    with record.lock:
+        known = {variant: record.timeline.step(walk, entry, variant) for variant in VARIANTS}
+    missing = [variant for variant in VARIANTS if known[variant] is None]
+    rejected = known["optimal"] is not None and known["optimal"].reason is not None
     fresh: dict[EventVariant, TimelineStep] = {}
-    for variant in VARIANTS:
-        with record.lock:
-            step = record.timeline.step(walk, entry, variant)
-        if step is None:
-            step = fresh[variant] = replay_step(walk.session, entry, ctx, version, variant)
-        if step.reason is not None:
-            break
+    if ctx.solver_pool is not None and len(missing) > 1 and not rejected:
+        with ThreadPoolExecutor(max_workers=len(missing)) as threads:
+            futures = {
+                variant: threads.submit(replay_step, walk.session, entry, ctx, version, variant)
+                for variant in missing
+            }
+            fresh = {variant: future.result() for variant, future in futures.items()}
+        if "optimal" in fresh and fresh["optimal"].reason is not None:
+            fresh = {"optimal": fresh["optimal"]}
+    else:
+        for variant in VARIANTS:
+            step = known[variant]
+            if step is None:
+                step = fresh[variant] = replay_step(walk.session, entry, ctx, version, variant)
+            if step.reason is not None:
+                break
     with record.lock:
         for variant, step in fresh.items():
             record.timeline.store(walk, entry, step, variant)

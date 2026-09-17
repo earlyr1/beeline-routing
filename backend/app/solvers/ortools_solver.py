@@ -38,14 +38,33 @@ class ObjectiveWeights:
     asap_late_per_min: int = 200
 
 
+@dataclass(frozen=True)
+class SearchStrategy:
+    """Стратегия поиска OR-Tools: как строится первое решение и какой метаэвристикой оно улучшается.
+
+    При перепланировании поиск стартует от прежнего плана, и первое решение не строится: различаются только
+    метаэвристики.
+    """
+
+    first_solution: int = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    metaheuristic: int = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+
+
+DEFAULT_STRATEGY = SearchStrategy()
+
+
 class OrToolsSolver:
     name = "ortools"
 
     def __init__(
-        self, time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S, weights: ObjectiveWeights | None = None
+        self,
+        time_limit_s: int = DEFAULT_SOLVER_TIME_LIMIT_S,
+        weights: ObjectiveWeights | None = None,
+        strategy: SearchStrategy = DEFAULT_STRATEGY,
     ) -> None:
         self.time_limit_s = time_limit_s
         self.weights = weights or ObjectiveWeights()
+        self.strategy = strategy
 
     def solve(self, problem: Problem) -> Plan:
         return build_plan(problem, self.name, self.sequences(problem))
@@ -146,8 +165,8 @@ class OrToolsSolver:
             time_dimension.SetBreakIntervalsOfVehicle([lunch], v, visit_transits)
 
         params = pywrapcp.DefaultRoutingSearchParameters()
-        params.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-        params.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+        params.first_solution_strategy = self.strategy.first_solution
+        params.local_search_metaheuristic = self.strategy.metaheuristic
         params.time_limit.FromSeconds(self.time_limit_s)
         routing.CloseModelWithParameters(params)
 

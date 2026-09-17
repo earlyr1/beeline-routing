@@ -35,7 +35,7 @@ class FcfsSolves(list):
         self.gates[time] = (entered, release)
         return entered, release
 
-    def solve(self, problem, workload_level, time_limit_s, variant="optimal"):
+    def solve(self, problem, workload_level, time_limit_s, variant="optimal", pool=None, share=1):
         time = fmt_hhmm(problem.now)
         self.append(time)
         self.variants.append(variant)
