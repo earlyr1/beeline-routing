@@ -15,6 +15,8 @@ from app.planning.variants import (
     build_choice,
     is_choosable,
     late_visits,
+    variant_summary,
+    variant_title,
 )
 from tests.helpers import eng, req
 from tests.planning_helpers import busy_engineer, context, new_session, routes
@@ -37,6 +39,7 @@ def test_only_events_that_break_the_plan_are_choosable():
         EventType.ENGINEER_UNAVAILABLE,
         EventType.ENGINEER_TRANSPORT_CHANGED,
         EventType.ENGINEER_DELAYED,
+        EventType.REQUEST_REASSIGNED,
     }
     for event_type in EventType:
         event = Event.model_construct(type=event_type, time=780)
@@ -266,3 +269,19 @@ def test_choice_ties_go_to_the_earlier_strategy():
     assert [option.variant for option in choice.variants if option.recommended] == ["optimal"]
     assert choice.current == "stable"
     assert all(option.pros == [] and option.cons == [] for option in choice.variants)
+
+
+def test_choice_for_a_reassignment_offers_to_insert_into_the_route():
+    before = _plan(0, 5, 100.0)
+    outcomes = [Outcome(variant, before, _diff(before, before, 1)) for variant in VARIANTS]
+    event = Event(type=EventType.REQUEST_REASSIGNED, time="12:00", request_id="R1", engineer_id="E2")
+
+    choice = build_choice("tl_3", event, before, outcomes, None)
+
+    assert [(option.title, option.summary) for option in choice.variants] == [
+        ("Оптимально по дню", "Пересчитать остаток дня целиком"),
+        ("Минимум перестановок", "Чужие маршруты почти не трогаем"),
+        ("Вставить в маршрут", "Бригада пропускает, на что не успевает, остальные маршруты как есть"),
+    ]
+    assert variant_title("keep", EventType.URGENT) == "Ничего не менять"
+    assert variant_summary("keep", EventType.URGENT) == "Оставить маршруты как есть"

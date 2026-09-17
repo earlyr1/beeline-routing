@@ -33,6 +33,7 @@ describe('time bar', () => {
       cancel: 'Отмена',
       restore: 'Возврат',
       request_updated: 'Изменение',
+      request_reassigned: 'Назначение',
     };
     expect(EVENT_SHORT_LABELS).toEqual(labels);
   });

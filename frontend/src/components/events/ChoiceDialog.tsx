@@ -3,6 +3,7 @@ import type { EventVariant, Metrics, VariantOption } from '../../api/types';
 import { describeEvent } from '../../lib/events';
 import { formatKm, formatSigned } from '../../lib/format';
 import { byId } from '../../lib/planView';
+import { choiceEvent } from '../../lib/variants';
 import { useAppStore } from '../../store/useAppStore';
 
 interface NumberProps {
@@ -106,7 +107,8 @@ export function ChoiceDialog() {
 
   if (!open) return null;
   const engineers = byId(state?.engineers ?? []);
-  const title = choice ? describeEvent(choice.event, engineers) : 'Событие дня';
+  // У переназначения заголовок называет и бригаду, от которой уходит заявка.
+  const title = choice ? describeEvent(state ? choiceEvent(choice, state) : choice.event, engineers) : 'Событие дня';
 
   return (
     <div className="choice-overlay">

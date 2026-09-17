@@ -13,7 +13,8 @@ export type EventType =
   | 'engineer_unavailable'
   | 'engineer_transport_changed'
   | 'request_updated'
-  | 'engineer_delayed';
+  | 'engineer_delayed'
+  | 'request_reassigned';
 export type ReasonCode =
   | 'no_skill'
   | 'no_transport'
@@ -55,6 +56,11 @@ export interface ServiceRequest {
    * На заявку приходится не больше одной единицы; на расчёт плана флаг не влияет, это информация для бригады.
    */
   needs_equipment: boolean;
+  /**
+   * Бригада, которую диспетчер выбрал для заявки вручную; null — заявку распределяет оптимизатор.
+   * Выбор держится и после следующих событий, пока бригада может взять заявку.
+   */
+  fixed_engineer_id?: string | null;
 }
 
 export interface Engineer {
@@ -92,6 +98,11 @@ export interface PlanEvent {
   previous_request?: ServiceRequest | null;
   /** На сколько минут задерживается инженер у engineer_delayed, от 5 до 480. */
   delay_min?: number | null;
+  /**
+   * Бригада заявки до переназначения у request_reassigned; null — заявка была без бригады.
+   * Заполняет сервер у применённого события, клиентское значение игнорируется.
+   */
+  previous_engineer_id?: string | null;
 }
 
 export interface Visit {

@@ -1,8 +1,8 @@
 """Варианты исправления плана на «ломающее» событие дня: стратегии, сравнение итогов и рекомендация.
 
 Спецификация: docs/superpowers/specs/2026-09-17-event-variants-design.md. «Ломающие» события — те, после которых
-есть разные способы спасти день: недоступность, смена транспорта, задержка инженера и срочная заявка. Отмена,
-возврат и изменение заявки применяются одним планом, как раньше.
+есть разные способы спасти день: недоступность, смена транспорта, задержка инженера, срочная заявка и
+переназначение заявки диспетчером. Отмена, возврат и изменение заявки применяются одним планом, как раньше.
 """
 
 from __future__ import annotations
@@ -10,11 +10,12 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
-from app.domain.enums import TRANSPORT_RU, EventType, ReasonCode
-from app.domain.models import Event, Plan, Unassigned
+from app.domain.enums import TRANSPORT_RU, EventType, Priority, ReasonCode
+from app.domain.models import Event, Plan, Request, Unassigned, Visit
 from app.planning.models import EventChoice, EventVariant, PlanDiff, VariantOption
 from app.solvers.assemble import build_plan
-from app.solvers.problem import Problem
+from app.solvers.problem import EngineerState, Problem
+from app.solvers.simulate import simulate_route
 
 VARIANTS: tuple[EventVariant, ...] = ("optimal", "stable", "keep")
 BREAKING_EVENTS = frozenset(
@@ -23,6 +24,7 @@ BREAKING_EVENTS = frozenset(
         EventType.ENGINEER_UNAVAILABLE,
         EventType.ENGINEER_TRANSPORT_CHANGED,
         EventType.ENGINEER_DELAYED,
+        EventType.REQUEST_REASSIGNED,
     }
 )
 # «Минимум перестановок»: условные 500 км за перенос заявки к другому инженеру вместо 20. Снять заявку всё равно
@@ -38,12 +40,31 @@ VARIANT_SUMMARIES: dict[EventVariant, str] = {
     "stable": "Чужие маршруты почти не трогаем",
     "keep": "Оставить маршруты как есть",
 }
+# У переназначения заявки «keep» не оставляет всё как есть, а вставляет заявку в маршрут выбранной бригады.
+EVENT_VARIANT_TITLES: dict[EventType, dict[EventVariant, str]] = {
+    EventType.REQUEST_REASSIGNED: {"keep": "Вставить в маршрут"},
+}
+EVENT_VARIANT_SUMMARIES: dict[EventType, dict[EventVariant, str]] = {
+    EventType.REQUEST_REASSIGNED: {
+        "keep": "Бригада пропускает, на что не успевает, остальные маршруты как есть"
+    },
+}
 KEEP_TEXT = "Вариант «Ничего не менять»: план не пересчитан, заявку никто не забрал."
+INSERT_TITLE = EVENT_VARIANT_TITLES[EventType.REQUEST_REASSIGNED]["keep"]
+INSERT_TEXT = f"Вариант «{INSERT_TITLE}»: план не пересчитан, заявку никто не забрал."
 MAX_LINES = 3
 
 
 def is_choosable(event: Event) -> bool:
     return event.type in BREAKING_EVENTS
+
+
+def variant_title(variant: EventVariant, event_type: EventType) -> str:
+    return EVENT_VARIANT_TITLES.get(event_type, {}).get(variant, VARIANT_TITLES[variant])
+
+
+def variant_summary(variant: EventVariant, event_type: EventType) -> str:
+    return EVENT_VARIANT_SUMMARIES.get(event_type, {}).get(variant, VARIANT_SUMMARIES[variant])
 
 
 def late_visits(plan: Plan) -> int:
@@ -61,8 +82,106 @@ def keep_plan(problem: Problem, unassigned_before: Collection[str] = ()) -> Plan
     не попадает. unassigned_before — заявки без инженера в плане до события: их причину считает build_plan,
     как обычно, а не пишет этот вариант.
     """
+    sequences, fixed = _previous_routes(problem, KEEP_TEXT)
+    return _routes_plan(problem, sequences, fixed, unassigned_before, KEEP_TEXT)
+
+
+def insert_plan(
+    problem: Problem, request_id: str, engineer_id: str, unassigned_before: Collection[str] = ()
+) -> Plan:
+    """«Вставить в маршрут» для переназначения заявки: без решателя, меняется только маршрут выбранной бригады.
+
+    Заявка request_id уходит из прежнего маршрута и встаёт в оставшийся маршрут бригады engineer_id. Для каждого
+    места вставки маршрут идёт по порядку «заявки до места, новая заявка, заявки после места». Бригада берёт новую
+    заявку и добавляет к ней свои: сначала закреплённые диспетчером, затем срочные, затем обычные, в каждой группе —
+    по прежнему порядку. Заявка берётся, если маршрут со всеми взятыми остаётся не хуже прежнего (_no_worse), иначе
+    бригада её пропускает. Из мест берётся то, где пропущено меньше закреплённых заявок, затем срочных, затем всех,
+    затем короче маршрут; при равенстве — место раньше. Пропущенные заявки остаются без инженера. Маршруты
+    остальных бригад прежние, заявки без инженера до события сохраняют свою причину, как в keep_plan.
+    """
+    routes, fixed = _previous_routes(problem, INSERT_TEXT)
+    sequences = {eid: [rid for rid in sequence if rid != request_id] for eid, sequence in routes.items()}
+    fixed.pop(request_id, None)
+    state = problem.state(engineer_id)
+    route = sequences.get(engineer_id, [])
+    fits = _no_worse(problem, state, route)
+    # sorted устойчив: внутри группы остаётся прежний порядок.
+    by_importance = sorted(route, key=lambda rid: _importance(problem.request(rid)))
+    best: tuple[tuple[int, int, int, float], list[str], list[str]] | None = None
+    for position in range(len(route) + 1) if fits([request_id]) else ():
+        sequence = [*route[:position], request_id, *route[position:]]
+        taken = {request_id}
+        for candidate in by_importance:
+            if fits([rid for rid in sequence if rid in taken or rid == candidate]):
+                taken.add(candidate)
+        kept = [rid for rid in sequence if rid in taken]
+        skipped = [rid for rid in route if rid not in taken]
+        requests = [problem.request(rid) for rid in skipped]
+        key = (
+            sum(1 for request in requests if request.fixed_engineer_id is not None),
+            sum(1 for request in requests if request.priority == Priority.URGENT),
+            len(skipped),
+            sum(visit.leg_km for visit in simulate_route(problem, state, kept).visits),
+        )
+        if best is None or key < best[0]:
+            best = (key, kept, skipped)
+    if best is not None:
+        _, kept, skipped = best
+        sequences[engineer_id] = kept
+        text = f"Вариант «{INSERT_TITLE}»: {state.engineer.name} пропускает заявку, чтобы успеть к заявке {request_id}."
+        for rid in skipped:
+            fixed[rid] = Unassigned(request_id=rid, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text)
+    # Если заявку не вставить никуда, её причину считает build_plan.
+    return _routes_plan(problem, sequences, fixed, [*unassigned_before, request_id], INSERT_TEXT)
+
+
+def _importance(request: Request) -> int:
+    """Очередь заявки при вставке: закреплённая диспетчером — 0, срочная — 1, обычная — 2. Меньше — берётся раньше."""
+    if request.fixed_engineer_id is not None:
+        return 0
+    return 1 if request.priority == Priority.URGENT else 2
+
+
+def _no_worse(
+    problem: Problem, state: EngineerState, route: Sequence[str]
+) -> Callable[[Sequence[str]], bool]:
+    """Проверка маршрута бригады при вставке: не хуже ли он прежнего маршрута route.
+
+    Допустимый маршрут подходит. Недопустимый подходит, если нарушений не прибавилось: ни одна заявка не опаздывает
+    и не заканчивается после смены больше, чем в прежнем маршруте (новая заявка — вовремя и в смену), а обед, если в
+    прежнем маршруте он помещался, не пропадает и не перестаёт помещаться. Визиты сравниваются в том виде, в каком их
+    покажет план, — обычной симуляцией. Так бригада не пропускает заявку, к которой опаздывала и без вставки.
+    """
+    before = simulate_route(problem, state, route)
+    allowed = {visit.request_id: (visit.late_min, _overtime(visit, state)) for visit in before.visits}
+
+    def fits(request_ids: Sequence[str]) -> bool:
+        result = simulate_route(problem, state, request_ids)
+        if result.feasible:
+            return True
+        lunch_lost = result.lunch_conflict or (result.lunch is None and before.lunch is not None)
+        if lunch_lost and not before.lunch_conflict:
+            return False
+        return all(
+            visit.late_min <= allowed.get(visit.request_id, (0, 0))[0]
+            and _overtime(visit, state) <= allowed.get(visit.request_id, (0, 0))[1]
+            for visit in result.visits
+        )
+
+    return fits
+
+
+def _overtime(visit: Visit, state: EngineerState) -> int:
+    return max(0, visit.end - state.available_until)
+
+
+def _previous_routes(problem: Problem, text: str) -> tuple[dict[str, list[str]], dict[str, Unassigned]]:
+    """Прежние маршруты на задаче после события и заявки, которые из них выпадают, с причиной варианта text.
+
+    Выпадают заявки инженера, которому больше нельзя работать, и заявки, которым нужен транспорт, которого у
+    инженера теперь нет.
+    """
     open_ids = set(problem.open_request_ids)
-    before = set(unassigned_before)
     sequences: dict[str, list[str]] = {}
     fixed: dict[str, Unassigned] = {}
     for state in problem.states:
@@ -74,25 +193,37 @@ def keep_plan(problem: Problem, unassigned_before: Collection[str] = ()) -> Plan
             request = problem.request(request_id)
             if state.available_from >= state.available_until:
                 fixed[request_id] = Unassigned(
-                    request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=KEEP_TEXT
+                    request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text
                 )
             elif request.transport_required is not None and request.transport_required != engineer.transport:
                 fixed[request_id] = Unassigned(
                     request_id=request_id,
                     reason_code=ReasonCode.NO_TRANSPORT,
                     reason_text=(
-                        f"{KEEP_TEXT} Нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
+                        f"{text} Нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
                         f"у {engineer.name} «{TRANSPORT_RU[engineer.transport]}»."
                     ),
                 )
             else:
                 kept.append(request_id)
         sequences[engineer.id] = kept
+    return sequences, fixed
+
+
+def _routes_plan(
+    problem: Problem,
+    sequences: dict[str, list[str]],
+    fixed: dict[str, Unassigned],
+    unassigned_before: Collection[str],
+    text: str,
+) -> Plan:
+    """План варианта без решателя. Открытые заявки вне маршрутов получают причину text, кроме бывших без инженера."""
+    before = set(unassigned_before)
     placed = {request_id for sequence in sequences.values() for request_id in sequence}
     for request_id in problem.open_request_ids:
         if request_id not in placed and request_id not in fixed and request_id not in before:
             fixed[request_id] = Unassigned(
-                request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=KEEP_TEXT
+                request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text
             )
     return build_plan(problem, "ortools", sequences, fixed_unassigned=fixed)
 
@@ -189,8 +320,8 @@ def build_choice(
     options = [
         VariantOption(
             variant=outcome.variant,
-            title=VARIANT_TITLES[outcome.variant],
-            summary=VARIANT_SUMMARIES[outcome.variant],
+            title=variant_title(outcome.variant, event.type),
+            summary=variant_summary(outcome.variant, event.type),
             metrics=outcome.plan.metrics,
             late=late_visits(outcome.plan),
             moved=len(outcome.diff.moved),

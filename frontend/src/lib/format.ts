@@ -47,6 +47,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   engineer_transport_changed: 'Смена транспорта',
   request_updated: 'Изменение заявки',
   engineer_delayed: 'Задержка инженера',
+  request_reassigned: 'Переназначение заявки',
 };
 
 /** Форма русского существительного для числа: одна заявка, две заявки, пять заявок. */

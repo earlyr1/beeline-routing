@@ -7,7 +7,7 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 import * as api from '../api/client';
-import { cancelEvent, restoreEvent } from '../lib/events';
+import { cancelEvent, reassignEvent, restoreEvent } from '../lib/events';
 import { useAppStore } from '../store/useAppStore';
 import { makeAsapState, makeExplanation, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
@@ -182,6 +182,20 @@ describe('ExplanationCard', () => {
     render(<ExplanationCard />);
     await screen.findByText(/Назначена Бригада Арташкин/);
     expect(within(card()).queryByText('В работе')).not.toBeInTheDocument();
+  });
+
+  it('shows the brigade of the request under its details and reassigns it at the time on the clock', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '13:30', applyEvent });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    const picker = within(card()).getByRole('button', { name: 'Бригада: Бригада Арташкин' });
+    // Строка выбора бригады стоит сразу после описания заявки.
+    expect(card().querySelector('.explanation__head')?.nextElementSibling).toHaveClass('brigade-picker');
+    fireEvent.click(picker);
+    fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: /Бригада Белузин/ }));
+    expect(applyEvent).toHaveBeenCalledWith(reassignEvent('50104', 'E02', '13:30'));
   });
 
   it('renders nothing without a selection', () => {

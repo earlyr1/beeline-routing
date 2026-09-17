@@ -33,6 +33,9 @@ class Request(BaseModel):
     # Нужно привезти единицу оборудования: роутер, приставку или колонку. Подсказка инженеру, что взять с собой
     # утром; на план она не влияет. В старых бандлах поля нет — тогда оборудование не нужно.
     needs_equipment: bool = False
+    # Диспетчер закрепил заявку за этой бригадой («Переназначение заявки»): солверы не отдают её другим. Закрепление
+    # снимается, когда бригада больше не может взять заявку. Заполняет backend по событию, у заявок дня поле пустое.
+    fixed_engineer_id: str | None = None
 
     @model_validator(mode="after")
     def _window_order(self) -> Request:
@@ -93,6 +96,9 @@ class Event(BaseModel):
     previous_request: Request | None = None
     # Задержка инженера: на сколько минут задерживается инженер engineer_id.
     delay_min: int | None = None
+    # Переназначение заявки: request_id уходит бригаде engineer_id. previous_engineer_id (бригада заявки в плане до
+    # события, null — заявка была без инженера) заполняет backend.
+    previous_engineer_id: str | None = None
 
     @model_validator(mode="after")
     def _payload(self) -> Event:
@@ -116,6 +122,8 @@ class Event(BaseModel):
                 raise ValueError("для изменения заявки нужны request_id и request")
             if self.request.id != self.request_id:
                 raise ValueError("номер заявки в request_id и request.id не совпадает")
+        if self.type == EventType.REQUEST_REASSIGNED and (not self.request_id or not self.engineer_id):
+            raise ValueError("для переназначения заявки нужны request_id и engineer_id")
         return self
 
 

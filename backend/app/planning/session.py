@@ -7,7 +7,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from app.domain.enums import TRANSPORT_RU, EventType, Priority, RequestStatus
+from app.domain.enums import SKILL_RU, TRANSPORT_RU, EventType, Priority, RequestStatus
 from app.domain.models import Engineer, Event, Lunch, Office, Plan, Request, Visit
 from app.domain.timeutil import fmt_hhmm
 from app.geo.kvcache import KVCache
@@ -18,13 +18,14 @@ from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
 from app.planning.models import AppliedEvent, EventVariant, PlanDiff
-from app.planning.variants import STABLE_REASSIGNMENT, is_choosable, keep_plan
+from app.planning.variants import STABLE_REASSIGNMENT, insert_plan, is_choosable, keep_plan
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.portfolio import SolverPool
 from app.solvers.problem import EngineerState, Problem, make_problem
+from app.solvers.simulate import simulate_route
 
 
 class EventRejected(ValueError):
@@ -386,12 +387,56 @@ def window_order_text(request_id: str) -> str:
     return f"Конец окна заявки {request_id} должен быть позже начала."
 
 
+def _planned_engineer(plan: Plan, request_id: str) -> str | None:
+    return next(
+        (
+            route.engineer_id
+            for route in plan.routes
+            for visit in route.visits
+            if visit.request_id == request_id
+        ),
+        None,
+    )
+
+
+def _release_pins(requests: list[Request], engineers: list[Engineer]) -> list[Request]:
+    """Снимает закрепление заявок за бригадой, которая больше не может их взять: заявка возвращается в общий пул.
+
+    Бригада не может взять заявку, если её нет в дне, она недоступна, у неё нет навыка заявки или нет транспорта,
+    который нужен заявке. Время на бригаде здесь не проверяется: не успевает — заявка остаётся без инженера.
+    """
+    by_id = {engineer.id: engineer for engineer in engineers}
+    released: list[Request] = []
+    for request in requests:
+        engineer = by_id.get(request.fixed_engineer_id or "")
+        if request.fixed_engineer_id is not None and (
+            engineer is None
+            or not engineer.available
+            or request.skill not in engineer.skills
+            or request.transport_required not in (None, engineer.transport)
+        ):
+            request = request.model_copy(update={"fixed_engineer_id": None})
+        released.append(request)
+    return released
+
+
 def _apply_to_inputs(
     session: PlanningSession, event: Event, ctx: PlanningContext
 ) -> tuple[list[Request], list[Engineer], Event]:
+    """Заявки, инженеры и сохраняемое событие после события. После любого события снимаются закрепления заявок,
+    которые бригада больше не может взять."""
+    requests, engineers, stored = _changed_inputs(session, event, ctx)
+    return _release_pins(requests, engineers), engineers, stored
+
+
+def _changed_inputs(
+    session: PlanningSession, event: Event, ctx: PlanningContext
+) -> tuple[list[Request], list[Engineer], Event]:
     now = event.time
-    # previous_transport и previous_request заполняет только backend.
-    event = event.model_copy(update={"previous_transport": None, "previous_request": None})
+    # previous_transport, previous_request и previous_engineer_id заполняет только backend.
+    event = event.model_copy(
+        update={"previous_transport": None, "previous_request": None, "previous_engineer_id": None}
+    )
     requests = [request.model_copy() for request in session.requests]
     engineers = [engineer.model_copy() for engineer in session.engineers]
     by_id = {request.id: request for request in requests}
@@ -479,6 +524,35 @@ def _apply_to_inputs(
         engineer.transport = event.transport
         return requests, engineers, event.model_copy(update={"previous_transport": previous})
 
+    if event.type == EventType.REQUEST_REASSIGNED:
+        request = by_id.get(event.request_id or "")
+        if request is None:
+            raise EventRejected(f"Заявка {event.request_id} не найдена.")
+        if request.status == RequestStatus.CANCELLED:
+            raise EventRejected(f"Заявка {request.id} отменена, назначить её нельзя.")
+        if request.id in started:
+            raise EventRejected(
+                f"Заявка {request.id} уже в работе с {fmt_hhmm(started[request.id].start)}, переназначить её нельзя."
+            )
+        engineer = _find_engineer(engineers, event.engineer_id)
+        if not engineer.available:
+            raise EventRejected(
+                f"{engineer.name} недоступен с {fmt_hhmm(_unavailable_since(engineer))}, назначить заявку нельзя."
+            )
+        if request.skill not in engineer.skills:
+            raise EventRejected(f"У {engineer.name} нет навыка «{SKILL_RU[request.skill]}».")
+        if request.transport_required not in (None, engineer.transport):
+            raise EventRejected(
+                f"Заявке {request.id} нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
+                f"у {engineer.name} «{TRANSPORT_RU[engineer.transport]}»."
+            )
+        previous = _planned_engineer(session.plan, request.id)
+        if previous == engineer.id:
+            raise EventRejected(f"Заявка {request.id} уже у {engineer.name}.")
+        # Успевает ли бригада к заявке, проверяет apply_event по задаче после события.
+        request.fixed_engineer_id = engineer.id
+        return requests, engineers, event.model_copy(update={"previous_engineer_id": previous})
+
     if event.type == EventType.ENGINEER_UNAVAILABLE:
         engineer = _find_engineer(engineers, event.engineer_id)
         if not engineer.available:
@@ -489,7 +563,9 @@ def _apply_to_inputs(
         engineer.unavailable_from = now
         return requests, engineers, event
 
-    new = event.request.model_copy(update={"priority": Priority.URGENT, "status": RequestStatus.ACTIVE})
+    new = event.request.model_copy(
+        update={"priority": Priority.URGENT, "status": RequestStatus.ACTIVE, "fixed_engineer_id": None}
+    )
     if new.id in by_id:
         raise EventRejected(f"Заявка с номером {new.id} уже есть в плане.")
     if new.asap:
@@ -512,8 +588,8 @@ def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Pr
     def pin(released: Collection[str]) -> Problem:
         return keep_delays(pin_problem(base, session.plan, event.time, released), until)
 
-    if event.type == EventType.REQUEST_UPDATED:
-        # Изменённую заявку солвер планирует заново, даже если инженер уже едет к ней.
+    if event.type in (EventType.REQUEST_UPDATED, EventType.REQUEST_REASSIGNED):
+        # Изменённую и переназначенную заявку солвер планирует заново, даже если инженер уже едет к ней.
         return pin([event.request_id])
     problem = pin(())
     if event.type != EventType.ENGINEER_DELAYED:
@@ -523,6 +599,31 @@ def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Pr
         # С задержкой инженер не успеет в окно заявки, к которой едет: кому её отдать, решает солвер.
         problem = pin([missed])
     return delay_engineer(problem, event.engineer_id, event.delay_min)
+
+
+def _check_reachable(problem: Problem, event: Event) -> None:
+    """Переназначение: бригада успевает к заявке хотя бы без других несделанных заявок. Иначе EventRejected.
+
+    Проверка по задаче после события (закреплённая работа, задержки) и до выбора стратегии: отказ от неё не зависит.
+    """
+    request_id = event.request_id or ""
+    if not problem.has_request(request_id):
+        raise EventRejected(f"У заявки {request_id} нет точки на карте, назначить её нельзя.")
+    state = problem.state(event.engineer_id or "")
+    name = state.engineer.name
+    if not state.active:
+        raise EventRejected(f"У {name} не осталось рабочего времени сегодня.")
+    alone = simulate_route(problem, state, [request_id])
+    if alone.feasible:
+        return
+    request, visit = problem.request(request_id), alone.visits[0]
+    # Без обеда бригада успела бы: не помещается именно обед.
+    lunch_note = " и с учётом обеда" if alone.lunch_conflict else ""
+    raise EventRejected(
+        f"{name} не успевает к заявке {request_id} даже без других заявок{lunch_note}: начнёт не раньше "
+        f"{fmt_hhmm(visit.start)}, окно {fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}, "
+        f"смена до {fmt_hhmm(state.available_until)}."
+    )
 
 
 def early_event_text(time: int, now: int) -> str:
@@ -564,10 +665,18 @@ def apply_event(
     requests, engineers, stored_event = _apply_to_inputs(session, event, ctx)
     base = _day_problem(requests, engineers, ctx, session.workload_level, session.lunch_enabled)
     problem = _pinned_problem(base, session, stored_event)
+    reassigned = stored_event.type == EventType.REQUEST_REASSIGNED
+    if reassigned:
+        _check_reachable(problem, stored_event)
     strategy: EventVariant = variant if is_choosable(stored_event) else "optimal"
     if strategy == "keep":
         unassigned_before = {item.request_id for item in session.plan.unassigned}
-        plan, baseline = keep_plan(problem, unassigned_before), FcfsSolver().solve(problem)
+        if reassigned:
+            # У переназначения «keep» — «Вставить в маршрут»: заявка встаёт в маршрут выбранной бригады.
+            plan = insert_plan(problem, stored_event.request_id, stored_event.engineer_id, unassigned_before)
+        else:
+            plan = keep_plan(problem, unassigned_before)
+        baseline = FcfsSolver().solve(problem)
     else:
         # Варианты «ломающего» события считаются одновременно: «Оптимально» и «Минимум перестановок» делят пул.
         share = 2 if is_choosable(stored_event) else 1

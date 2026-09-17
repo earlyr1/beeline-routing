@@ -43,6 +43,7 @@ class EventType(StrEnum):
     ENGINEER_TRANSPORT_CHANGED = "engineer_transport_changed"
     REQUEST_UPDATED = "request_updated"
     ENGINEER_DELAYED = "engineer_delayed"
+    REQUEST_REASSIGNED = "request_reassigned"
 
 
 class ReasonCode(StrEnum):

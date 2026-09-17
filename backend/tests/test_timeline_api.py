@@ -322,6 +322,14 @@ def test_timeline_event_checks_ids_and_time_range(tmp_path, solves):
         (body(cancel("URG-1", "14:00")), "Заявка URG-1 не найдена."),
         (body(cancel("NOPE", "13:00")), "Заявка NOPE не найдена."),
         ({"type": "engineer_unavailable", "time": "13:00", "engineer_id": "E9"}, "Инженер E9 не найден."),
+        (
+            {"type": "request_reassigned", "time": "13:00", "request_id": "R1", "engineer_id": "E9"},
+            "Инженер E9 не найден.",
+        ),
+        (
+            {"type": "request_reassigned", "time": "13:00", "request_id": "NOPE", "engineer_id": "E1"},
+            "Заявка NOPE не найдена.",
+        ),
         ({**urgent, "time": "17:00"}, "Заявка с номером URG-1 уже есть в плане."),
         ({**urgent, "request": {**urgent["request"], "id": "R1"}}, "Заявка с номером R1 уже есть в плане."),
         (body(cancel("R2", "24:00")), "Время события должно быть от 00:00 до 23:59."),
@@ -719,6 +727,58 @@ def test_legacy_event_after_an_event_without_a_choice_is_409_and_not_kept(tmp_pa
     assert response.json()["detail"] == "Сначала выберите вариант для события в 13:00."
     state = state_of(client, base)
     assert (state["cursor"], statuses(state)) == ("00:00", [("tl_1", "pending")])
+
+
+def reassigned(request_id, engineer_id, time):
+    return Event(type=EventType.REQUEST_REASSIGNED, time=time, request_id=request_id, engineer_id=engineer_id)
+
+
+def route_ids(state, engineer_id):
+    route = next(route for route in state["plan"]["routes"] if route["engineer_id"] == engineer_id)
+    return [visit["request_id"] for visit in route["visits"]]
+
+
+def test_request_reassignment_waits_for_a_variant_and_pins_the_request(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    assert route_ids(state_of(client, base), "E1") == ["R1", "R2", "R3"]
+    added(client, base, reassigned("R3", "E2", "12:00"))
+    background.run()
+
+    stopped = cursor_to(client, base, "17:00")
+
+    assert (stopped["cursor"], stopped["timeline"][0]["status"], stopped["timeline"][0]["choosable"]) == (
+        "12:00",
+        "awaiting",
+        True,
+    )
+    choice = stopped["pending_choice"]
+    assert [(option["variant"], option["title"]) for option in choice["variants"]] == [
+        ("optimal", "Оптимально по дню"),
+        ("stable", "Минимум перестановок"),
+        ("keep", "Вставить в маршрут"),
+    ]
+    assert (
+        choice["variants"][2]["summary"]
+        == "Бригада пропускает, на что не успевает, остальные маршруты как есть"
+    )
+
+    chosen = choose(client, base, "tl_1", "keep")
+
+    assert (chosen["cursor"], chosen["timeline"][0]["status"], chosen["timeline"][0]["variant"]) == (
+        "12:00",
+        "applied",
+        "keep",
+    )
+    assert chosen["timeline"][0]["event"]["previous_engineer_id"] == "E1"
+    assert (
+        next(request for request in chosen["requests"] if request["id"] == "R3")["fixed_engineer_id"] == "E2"
+    )
+    assert (route_ids(chosen, "E1"), route_ids(chosen, "E2")) == (["R1", "R2"], ["R3"])
+
+    # Отказ одинаков для всех вариантов: выбора не требует, на шкале событие не остаётся.
+    rejected = add(client, base, reassigned("R3", "E2", "12:00"))
+    assert (rejected.status_code, rejected.json()["detail"]) == (422, "Заявка R3 уже у Инженер E2.")
+    assert statuses(state_of(client, base)) == [("tl_1", "applied")]
 
 
 def delayed(engineer_id, time, minutes):

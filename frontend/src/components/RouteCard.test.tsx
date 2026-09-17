@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { unavailableEvent } from '../lib/events';
 import { percent } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
-import { makeAsapState, makeDelayEvent, makePlanningState, makeTimelineItem, makeTransportChangeEvent } from '../test/fixtures';
+import { makeAsapState, makeDelayEvent, makePlanningState, makeReassignEvent, makeTimelineItem, makeTransportChangeEvent } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { RouteCard } from './RouteCard';
 
@@ -232,6 +232,19 @@ describe('RouteCard', () => {
     ]);
     expect(within(card()).getByText('· отклонено: Инженер уже недоступен.')).toHaveClass('brigade-events__status', 'brigade-events__status--rejected');
     expect(within(card()).getByText('· впереди')).toHaveClass('brigade-events__status--pending');
+  });
+
+  it('lists a reassignment on the page of the brigade that got the request and of the one that lost it', () => {
+    const state = { ...makePlanningState(), timeline: [makeTimelineItem({ id: 'tl_1', event: makeReassignEvent() })] };
+    const reassigned = '13:30 Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:30 · применено';
+    resetStore({ datasetId: 'd_test', state, selectedEngineerId: 'E01' });
+    const view = render(<RouteCard />);
+    expect(listItems('События бригады')).toEqual([reassigned]);
+    view.unmount();
+
+    resetStore({ datasetId: 'd_test', state, selectedEngineerId: 'E02' });
+    render(<RouteCard />);
+    expect(listItems('События бригады')).toEqual([reassigned]);
   });
 
   it('draws the now line of the personal timeline at the clock of the day', () => {

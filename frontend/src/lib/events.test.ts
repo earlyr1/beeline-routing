@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceRequest } from '../api/types';
-import { makeAsapRequest, makeDelayEvent, makeDelayForecast, makePlanningState, makeRequestUpdateEvent } from '../test/fixtures';
+import { makeAsapRequest, makeDelayEvent, makeDelayForecast, makePlanningState, makeReassignEvent, makeRequestUpdateEvent } from '../test/fixtures';
 import {
   BEFORE_SHIFTS_HINT,
   beforeShiftsHint,
+  brigadeIneligibility,
+  brigadeOptions,
   buildUrgentEvent,
   busiestEngineerId,
   cancelEvent,
@@ -14,10 +16,13 @@ import {
   delayEvent,
   describeEvent,
   earliestShiftStart,
+  eventRequestId,
   forecastLines,
   isWorkStarted,
   latestShiftEnd,
   newUrgentId,
+  reassignEvent,
+  reassignState,
   requestActionState,
   requestChanges,
   requestEditForm,
@@ -493,5 +498,86 @@ describe('engineer delay', () => {
     expect(forecastLines(makeDelayForecast({ late_without_replan: [], overtime_without_replan_min: 25 }), requests, engineers)).toEqual([
       'Без перепланирования была бы переработка 25 мин',
     ]);
+  });
+});
+
+describe('request reassignment', () => {
+  const state = makePlanningState();
+  const engineers = byId(state.engineers);
+  const requestOf = (id: string) => state.requests.find((request) => request.id === id) as ServiceRequest;
+  const engineerOf = (id: string) => engineers.get(id)!;
+
+  it('builds a reassignment event for the brigade at the time on the clock', () => {
+    expect(reassignEvent('50104', 'E02', '13:30')).toEqual({
+      type: 'request_reassigned',
+      time: '13:30',
+      request: null,
+      request_id: '50104',
+      engineer_id: 'E02',
+    });
+    expect(EVENT_LABELS.request_reassigned).toBe('Переназначение заявки');
+  });
+
+  it('describes a reassignment from the previous brigade and one without it', () => {
+    expect(describeEvent(makeReassignEvent(), engineers)).toBe('Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:30');
+    // Заявка была без бригады или событие ещё не применено: прежней бригады нет, имя новой не склоняется.
+    expect(describeEvent(makeReassignEvent({ previous_engineer_id: null }), engineers)).toBe('Переназначение заявки 50104 → Бригада Белузин с 13:30');
+    expect(describeEvent(reassignEvent('18754', 'E01', '14:00'), engineers)).toBe('Переназначение заявки 18754 → Бригада Арташкин с 14:00');
+    expect(describeEvent(makeReassignEvent({ engineer_id: 'E99', previous_engineer_id: 'E98' }), engineers)).toBe(
+      'Переназначение заявки 50104: E98 → E99 с 13:30',
+    );
+  });
+
+  it('links request events to their request and leaves engineer events without one', () => {
+    expect(eventRequestId(makeReassignEvent())).toBe('50104');
+    expect(eventRequestId(cancelEvent('10135', '09:30'))).toBe('10135');
+    expect(eventRequestId(makeRequestUpdateEvent())).toBe('50104');
+    expect(eventRequestId(state.events[2].event)).toBe('URG-001');
+    expect(eventRequestId(unavailableEvent('E03', '13:00'))).toBeNull();
+    expect(eventRequestId(makeDelayEvent())).toBeNull();
+  });
+
+  it('names why a brigade cannot take the request, like the server', () => {
+    const back = { ...engineerOf('E03'), available: true, unavailable_from: null };
+    expect(brigadeIneligibility(requestOf('50104'), engineerOf('E02'))).toBeNull();
+    expect(brigadeIneligibility(requestOf('50104'), engineerOf('E03'))).toBe('недоступна с 13:00');
+    expect(brigadeIneligibility(requestOf('50104'), { ...engineerOf('E03'), unavailable_from: null })).toBe('недоступна');
+    expect(brigadeIneligibility(requestOf('18754'), back)).toBe('нет навыка «Работы на подключение и дозаказы»');
+    expect(brigadeIneligibility(requestOf('46393'), back)).toBe('нужен транспорт «Автомобиль»');
+    expect(brigadeIneligibility(requestOf('50104'), back)).toBeNull();
+  });
+
+  it('lists every brigade with the current one, the reasons and the visits in the current plan', () => {
+    expect(brigadeOptions(requestOf('50104'), state.engineers, state.plan).map(({ engineer, ...option }) => ({ id: engineer.id, ...option }))).toEqual([
+      { id: 'E01', current: true, disabled: false, note: 'в плане' },
+      { id: 'E02', current: false, disabled: false, note: '2 заявки' },
+      { id: 'E03', current: false, disabled: true, note: 'недоступна с 13:00' },
+    ]);
+    const unassigned = brigadeOptions(requestOf('18754'), state.engineers, state.plan);
+    expect(unassigned.map((option) => [option.current, option.note])).toEqual([
+      [false, '4 заявки'],
+      [false, '2 заявки'],
+      [false, 'недоступна с 13:00'],
+    ]);
+    // Бригада текущего плана доступна для выбора, даже если по правилам уже не подошла бы: выбор просто закрывает список.
+    const sick = state.engineers.map((engineer) => (engineer.id === 'E02' ? { ...engineer, available: false, unavailable_from: '15:00' } : engineer));
+    expect(brigadeOptions(requestOf('84627'), sick, state.plan)[1]).toMatchObject({ current: true, disabled: false, note: 'в плане' });
+  });
+
+  it('allows the reassignment by the rule of the request buttons and refuses cancelled requests and requests off the map', () => {
+    const visits = assignmentIndex(state.plan);
+    const idle = { busy: false, showPrevious: false, clock: '13:30' };
+    const lockOf = (request: ServiceRequest, patch = {}) => reassignState(request, visits.get(request.id)?.visit, { ...idle, ...patch });
+    expect(lockOf(requestOf('50104'))).toEqual({ disabled: false, title: undefined });
+    expect(lockOf(requestOf('18754'))).toEqual({ disabled: false, title: undefined });
+    expect(lockOf(requestOf('74198'))).toEqual({ disabled: true, title: 'Работа уже началась, переназначить нельзя' });
+    expect(lockOf(requestOf('50104'), { clock: '14:30' })).toEqual({ disabled: true, title: 'Работа уже началась, переназначить нельзя' });
+    expect(lockOf(requestOf('10135'))).toEqual({ disabled: true, title: 'Заявка отменена' });
+    expect(lockOf({ ...requestOf('18754'), lat: null, lon: null })).toEqual({
+      disabled: true,
+      title: 'Адрес не найден на карте, назначить бригаду нельзя',
+    });
+    expect(lockOf(requestOf('50104'), { busy: true })).toEqual({ disabled: true, title: undefined });
+    expect(lockOf(requestOf('50104'), { showPrevious: true })).toEqual({ disabled: true, title: undefined });
   });
 });

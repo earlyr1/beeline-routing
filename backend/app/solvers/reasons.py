@@ -10,14 +10,22 @@ from app.solvers.simulate import simulate_route
 
 
 def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, list[str]]) -> Unassigned:
+    """Причина по всем инженерам, а у заявки, закреплённой диспетчером, только по её бригаде."""
     request = problem.request(request_id)
     skill = SKILL_RU[request.skill]
     window = f"{fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}"
+    states = problem.states
+    lead_in = ""
+    fixed = [s for s in states if s.engineer.id == request.fixed_engineer_id]
+    if fixed:
+        # Другие бригады заявку не возьмут: причина — в закреплённой бригаде. Если её нет в дне, считаем по всем.
+        states = fixed
+        lead_in = f"Заявку закрепил диспетчер за {fixed[0].engineer.name}. "
 
     def result(code: ReasonCode, text: str) -> Unassigned:
-        return Unassigned(request_id=request_id, reason_code=code, reason_text=text)
+        return Unassigned(request_id=request_id, reason_code=code, reason_text=lead_in + text)
 
-    skilled = [s for s in problem.states if request.skill in s.engineer.skills]
+    skilled = [s for s in states if request.skill in s.engineer.skills]
     if not skilled:
         return result(ReasonCode.NO_SKILL, f"Нет инженера с навыком «{skill}».")
     with_transport = [

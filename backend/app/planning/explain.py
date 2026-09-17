@@ -55,12 +55,22 @@ def best_insertion(
     return best
 
 
+def _engineer_name(problem: Problem, engineer_id: str | None) -> str:
+    return next((s.engineer.name for s in problem.states if s.engineer.id == engineer_id), str(engineer_id))
+
+
 def _alternative(
     problem: Problem, plan: Plan, state: EngineerState, request: Request
 ) -> tuple[Alternative, bool]:
     """Возвращает альтернативу и признак «инженер сейчас без заявок»."""
     engineer = state.engineer
     reason = exclusion(request, state)
+    if reason == Exclusion.FIXED_TO_OTHER:
+        return Alternative(
+            engineer_id=engineer.id,
+            feasible=False,
+            reason=f"Заявку закрепил диспетчер за {_engineer_name(problem, request.fixed_engineer_id)}",
+        ), False
     if reason == Exclusion.NO_SKILL:
         return Alternative(
             engineer_id=engineer.id, feasible=False, reason=f"Нет навыка «{SKILL_RU[request.skill]}»"
@@ -314,6 +324,10 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
     infeasible = [pair for pair in evaluated if not pair[0].feasible]
 
     factors: list[str] = []
+    if request.fixed_engineer_id == engineer_id:
+        factors.append(
+            f"Заявку закрепил диспетчер за {engineer.name}: другим бригадам планировщик её не отдаёт."
+        )
     if request.priority == Priority.URGENT:
         factors.append("Срочная заявка: при нехватке времени планировщик назначает её в первую очередь.")
     if request.asap:

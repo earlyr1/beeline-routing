@@ -140,3 +140,34 @@ def test_alternative_with_negative_extra_km_reads_as_almost_no_extra_mileage():
     assert alternative.feasible and alternative.extra_km == 0.0
     assert alternative.reason == "Может взять: пробег почти не растёт, начало 14:00"
     assert explanation.summary.endswith("заявка добавляет к маршруту 1.6 км.")
+
+
+def test_request_fixed_by_the_dispatcher_names_its_brigade_to_the_others():
+    fixed = req("R3", -1, 0, "15:00", "17:00").model_copy(update={"fixed_engineer_id": "E2"})
+    problem = problem_of(
+        [*day_requests()[:2], fixed], [eng("E1"), eng("E2"), eng("E3", skills=[Skill.EMERGENCY])]
+    )
+
+    assigned = build_explanation(
+        problem, build_plan(problem, "ortools", {"E1": ["R1", "R2"], "E2": ["R3"]}), fixed
+    )
+
+    assert assigned.factors[:2] == [
+        "Заявку закрепил диспетчер за Инженер E2: другим бригадам планировщик её не отдаёт.",
+        "Другие инженеры взять заявку не могут: причины указаны в списке альтернатив.",
+    ]
+    # Закрепление проверяется первым: у E3 нет и навыка, но причина — закрепление.
+    assert [(a.engineer_id, a.feasible, a.reason) for a in assigned.alternatives] == [
+        ("E1", False, "Заявку закрепил диспетчер за Инженер E2"),
+        ("E3", False, "Заявку закрепил диспетчер за Инженер E2"),
+    ]
+
+    unassigned = build_explanation(problem, build_plan(problem, "ortools", {"E1": ["R1", "R2"]}), fixed)
+
+    assert unassigned.status == "unassigned"
+    assert [(a.engineer_id, a.feasible) for a in unassigned.alternatives] == [
+        ("E1", False),
+        ("E2", True),
+        ("E3", False),
+    ]
+    assert unassigned.summary.startswith("Заявку закрепил диспетчер за Инженер E2. ")

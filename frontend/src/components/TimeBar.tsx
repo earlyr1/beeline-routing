@@ -4,7 +4,7 @@ import { fromMinutes } from '../lib/format';
 import { byId, displayedPlan } from '../lib/planView';
 import { pinLeft, sliderRange, sliderValue, timelineItemTitle, timelinePins, timelineStatusText } from '../lib/timeBar';
 import { dayScale, hourTicks } from '../lib/timeline';
-import { VARIANT_TITLES } from '../lib/variants';
+import { variantTitle } from '../lib/variants';
 import { useAppStore } from '../store/useAppStore';
 
 /** Пункты меню «Добавить событие»: открывают те же диалоги, что страница бригады, со временем на часах. */
@@ -195,7 +195,7 @@ export function TimeBar() {
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
                   {item.choosable && (
                     <>
-                      <span className="muted">{item.variant ? `Вариант: ${VARIANT_TITLES[item.variant]}` : 'Вариант не выбран'}</span>
+                      <span className="muted">{item.variant ? `Вариант: ${variantTitle(item.variant, item.event.type)}` : 'Вариант не выбран'}</span>
                       <button
                         type="button"
                         className="btn btn-small"

@@ -66,6 +66,18 @@ export function proposalDetails(proposal: Proposal, state: PlanningState): strin
   }
 
   const request = requests.get(event.request_id ?? '');
+
+  if (event.type === 'request_reassigned') {
+    const name = (engineerId: string) => engineers.get(engineerId)?.name ?? engineerId;
+    // У применённого события прежняя бригада записана сервером, а в текущем плане заявка уже у новой.
+    const current = state.plan.routes.find((route) => route.visits.some((visit) => visit.request_id === event.request_id));
+    const previous = event.previous_engineer_id ?? current?.engineer_id ?? null;
+    const target = event.engineer_id ?? '';
+    const from = previous !== null && previous !== target ? name(previous) : 'Без бригады';
+    const move = `${from} → ${name(target)} с ${event.time}`;
+    return request ? [`${shortAddress(request.address)} · ${requestWindowPhrase(request)}`, move] : [move];
+  }
+
   if (!request) return [];
   const details = [`${shortAddress(request.address)} · ${requestWindowPhrase(request)}`];
   for (const route of state.plan.routes) {

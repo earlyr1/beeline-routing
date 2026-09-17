@@ -1,8 +1,8 @@
 """Оптимизированный план: OR-Tools RoutingModel (VRPTW с навыками, транспортом и сменами).
 
-Цель лексикографическая через веса: сначала назначить все заявки (срочные важнее),
-затем задействовать меньше инженеров, затем меньше километров. Насколько дорог новый инженер, задаёт
-нагрузка дня (app/planning/workload.py): в спокойный день он дешевле, на пределе дороже. При перепланировании
+Цель лексикографическая через веса: сначала назначить все заявки (закреплённые диспетчером важнее всех,
+срочные важнее обычных), затем задействовать меньше инженеров, затем меньше километров. Насколько дорог
+новый инженер, задаёт нагрузка дня (app/planning/workload.py): в спокойный день он дешевле, на пределе дороже. При перепланировании
 добавляется штраф за перенос заявки к другому инженеру, а у инженеров с закреплёнными
 визитами фиксированная стоимость нулевая. Срочная заявка «как можно скорее» ждёт до 4 часов бесплатно,
 дальше каждая минута ожидания слегка штрафуется.
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from app.domain.enums import Priority
-from app.domain.models import ASAP_FREE_WAIT_MIN, LUNCH_MIN, Plan
+from app.domain.models import ASAP_FREE_WAIT_MIN, LUNCH_MIN, Plan, Request
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.assemble import build_plan
 from app.solvers.eligibility import exclusion
@@ -32,10 +32,20 @@ class ObjectiveWeights:
     vehicle_fixed_cost: int = 1_000_000
     drop_normal: int = 10_000_000
     drop_urgent: int = 100_000_000
+    # Заявка, которую диспетчер закрепил за бригадой: его выбор важнее любой другой заявки, поэтому решатель скорее
+    # снимет с бригады обычные и срочные заявки, чем оставит закреплённую без инженера.
+    drop_fixed: int = 1_000_000_000
     reassignment: int = 20_000  # условные 20 км за перенос заявки к другому инженеру
     # Условные 0.2 км за минуту ожидания срочной заявки «как можно скорее» сверх 4 часов: лишний час стоит 12 км,
     # намного дешевле ещё одного инженера и снятия срочной заявки.
     asap_late_per_min: int = 200
+
+
+def drop_penalty(request: Request, weights: ObjectiveWeights) -> int:
+    """Штраф за заявку без инженера: закреплённая диспетчером дороже срочной, срочная дороже обычной."""
+    if request.fixed_engineer_id is not None:
+        return weights.drop_fixed
+    return weights.drop_urgent if request.priority == Priority.URGENT else weights.drop_normal
 
 
 @dataclass(frozen=True)
@@ -134,8 +144,7 @@ class OrToolsSolver:
             allowed = [v for v, state in enumerate(vehicles) if exclusion(request, state) is None]
             # SetAllowedVehiclesForIndex не принимает list в Python-обёртке 9.15, поэтому VehicleVar
             routing.VehicleVar(index).SetValues([-1] + allowed)
-            penalty = weights.drop_urgent if request.priority == Priority.URGENT else weights.drop_normal
-            routing.AddDisjunction([index], penalty)
+            routing.AddDisjunction([index], drop_penalty(request, weights))
             if request.priority == Priority.URGENT and request.asap and weights.asap_late_per_min:
                 # Жёсткое окно до конца смен остаётся, а начало позже 4 часов ожидания штрафуется слегка.
                 time_dimension.SetCumulVarSoftUpperBound(
@@ -213,13 +222,19 @@ def _keep_feasible_prefix(problem: Problem, state: EngineerState, sequence: list
 def repair_unassigned(problem: Problem, sequences: dict[str, list[str]]) -> dict[str, list[str]]:
     """Страховка от недосмотра поиска за лимит времени: жадно вставляет оставшиеся заявки.
 
-    Срочные заявки идут первыми. Для каждой берётся допустимая позиция с наименьшим приростом
-    километров, причём инженеры, у которых уже есть работа сегодня, предпочтительнее простаивающих.
+    Первыми идут закреплённые диспетчером заявки, за ними срочные. Для каждой берётся допустимая позиция
+    с наименьшим приростом километров, причём инженеры, у которых уже есть работа сегодня, предпочтительнее
+    простаивающих.
     """
     result = {engineer_id: list(sequence) for engineer_id, sequence in sequences.items()}
     placed = {request_id for sequence in result.values() for request_id in sequence}
     pending = [request_id for request_id in problem.open_request_ids if request_id not in placed]
-    pending.sort(key=lambda request_id: problem.request(request_id).priority != Priority.URGENT)
+    pending.sort(
+        key=lambda request_id: (
+            problem.request(request_id).fixed_engineer_id is None,
+            problem.request(request_id).priority != Priority.URGENT,
+        )
+    )
     for request_id in pending:
         request = problem.request(request_id)
         best: tuple[tuple[int, float], str, list[str]] | None = None

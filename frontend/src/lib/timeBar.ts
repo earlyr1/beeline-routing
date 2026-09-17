@@ -15,6 +15,7 @@ export const EVENT_SHORT_LABELS: Record<EventType, string> = {
   cancel: 'Отмена',
   restore: 'Возврат',
   request_updated: 'Изменение',
+  request_reassigned: 'Назначение',
 };
 
 /** Статус события языком диспетчера: «применено», «впереди», «ждёт выбора варианта» или «отклонено: причина». */

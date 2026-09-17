@@ -2,6 +2,7 @@ import { REQUEST_CLOCK_LABELS, requestClockStatus } from '../lib/clock';
 import { brigadeName, formatKm, requestWindowPhrase, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
 import { assignmentIndex, byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
+import { BrigadePicker } from './BrigadePicker';
 import { EngineerLink } from './EngineerLink';
 import { EquipmentBadge } from './EquipmentBadge';
 import { RequestActions } from './RequestActions';
@@ -69,6 +70,9 @@ export function ExplanationCard() {
           </button>
         </div>
       </header>
+      {/* Бригада заявки в текущем плане; выбор другой ставит событие «Переназначение заявки» на время часов.
+          Ключ по заявке: открытый список не переезжает в карточку другой заявки. */}
+      {request && <BrigadePicker key={request.id} request={request} />}
       {showPrevious && <p className="note">Объяснение относится к текущему плану, после события.</p>}
       {loading && <p className="muted">Загружаем объяснение…</p>}
       {error && <p className="error-text">{error}</p>}

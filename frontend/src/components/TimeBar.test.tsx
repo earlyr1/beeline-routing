@@ -18,7 +18,7 @@ import * as api from '../api/client';
 import type { PlanningState } from '../api/types';
 import { pinLeft } from '../lib/timeBar';
 import { PLAY_TICK_MS, useAppStore } from '../store/useAppStore';
-import { makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
+import { makeEventChoice, makePlanningState, makeReassignEvent, makeTimeline, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { TimeBar } from './TimeBar';
 
@@ -233,6 +233,17 @@ describe('TimeBar', () => {
     fireEvent.click(within(events).getByRole('button', { name: 'Варианты…' }));
     expect(openChoice).toHaveBeenCalledWith('tl_2');
     expect(screen.queryByRole('group', { name: 'События 13:00' })).not.toBeInTheDocument();
+  });
+
+  it('names the kept variant of a reassignment as the insertion into the route and opens its request', () => {
+    const timeline = [makeTimelineItem({ id: 'tl_4', event: makeReassignEvent(), status: 'applied', choosable: true, variant: 'keep' })];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByRole('button', { name: 'Назначение' }));
+    const events = screen.getByRole('group', { name: 'События 13:30' });
+    expect(within(events).getByText('Вариант: Вставить в маршрут')).toBeInTheDocument();
+    fireEvent.click(within(events).getByRole('button', { name: 'Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:30' }));
+    expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
   it('blocks play and the slider while the choice is open', () => {

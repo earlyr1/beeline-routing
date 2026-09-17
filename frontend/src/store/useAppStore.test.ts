@@ -21,7 +21,7 @@ vi.mock('../api/client', async (importOriginal) => {
 
 import * as api from '../api/client';
 import type { DatasetStatus, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
-import { cancelEvent } from '../lib/events';
+import { cancelEvent, reassignEvent } from '../lib/events';
 import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
@@ -925,6 +925,18 @@ describe('choice of a variant for an event that breaks the plan', () => {
     response.resolve(awaitingState('12:00'));
     await adding;
     expect(useAppStore.getState()).toMatchObject({ choiceLoading: false });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+  });
+
+  it('asks for a variant when a request is reassigned at the clock', async () => {
+    useAppStore.getState().setPlanningState(at('12:00'));
+    const response = deferred<PlanningState>();
+    vi.mocked(api.addTimelineEvent).mockReturnValue(response.promise);
+    const adding = useAppStore.getState().applyEvent(reassignEvent('50104', 'E02', '12:00'));
+    await vi.waitFor(() => expect(useAppStore.getState().choiceLoading).toBe(true));
+    response.resolve(awaitingState('12:00'));
+    await adding;
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', reassignEvent('50104', 'E02', '12:00'));
     expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
   });
 

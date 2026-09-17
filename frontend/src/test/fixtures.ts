@@ -320,6 +320,19 @@ export function makeRequestUpdateEvent(overrides: Partial<PlanEvent> = {}): Plan
   };
 }
 
+/** Переназначение заявки 50104 от Бригады Арташкин к Бригаде Белузин в 13:30, как его возвращает сервер после применения. */
+export function makeReassignEvent(overrides: Partial<PlanEvent> = {}): PlanEvent {
+  return {
+    type: 'request_reassigned',
+    time: '13:30',
+    request: null,
+    request_id: '50104',
+    engineer_id: 'E02',
+    previous_engineer_id: 'E01',
+    ...overrides,
+  };
+}
+
 /** Срочная заявка «как можно скорее», добавленная в 13:00: сервер поставил окно от времени события до конца смен в 22:00. */
 export function makeAsapRequest(overrides: Partial<ServiceRequest> = {}): ServiceRequest {
   return request('URG-002', 'Город Москва, ул.Перовская, д. 42 к 1', 55.751, 37.787, 'emergency', '13:00', '22:00', 60, {

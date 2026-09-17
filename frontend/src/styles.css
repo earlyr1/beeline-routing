@@ -1291,6 +1291,145 @@ h4 {
   margin: 8px 0;
 }
 
+/* Бригада заявки в карточке: своя строка под описанием заявки, кнопка сжимается под ширину панели. */
+.brigade-picker {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin-top: 8px;
+  min-width: 0;
+}
+
+.brigade-picker__label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.brigade-picker__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.brigade-picker__trigger:hover:not(:disabled) {
+  border-color: #c5cad3;
+}
+
+.brigade-picker__trigger:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.brigade-picker__trigger[aria-expanded='true'] {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+.brigade-picker__trigger:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.brigade-picker__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brigade-picker__caret {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.brigade-picker__fixed {
+  font-size: 12px;
+}
+
+/* Список привязан к окну: карточка заявки прокручивается и обрезала бы его. Поверх карты, как меню часов. */
+.brigade-picker__list {
+  position: fixed;
+  z-index: 1100;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* Фокус списка виден по активной строке. */
+.brigade-picker__list:focus {
+  outline: none;
+}
+
+.brigade-picker__option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 5px;
+  border-left: 3px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.brigade-picker__name {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Причина, почему бригада не подходит, бывает длинной: переносится у правого края, а не обрезается. */
+.brigade-picker__note {
+  flex: 1;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+}
+
+/* Бригада текущего плана: мягкий фон и полоса акцентного цвета. */
+.brigade-picker__option--current {
+  background: var(--primary-soft);
+  border-left-color: var(--primary);
+  font-weight: 600;
+}
+
+.brigade-picker__option--current .brigade-picker__note {
+  color: var(--primary);
+}
+
+.brigade-picker__option--active {
+  box-shadow: inset 0 0 0 2px var(--primary);
+}
+
+.brigade-picker__option--active:not(.brigade-picker__option--current) {
+  background: #f7f8fa;
+}
+
+.brigade-picker__option[aria-disabled='true'] {
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.brigade-picker__option[aria-disabled='true'] .dot {
+  opacity: 0.5;
+}
+
 .why-button {
   flex: none;
 }

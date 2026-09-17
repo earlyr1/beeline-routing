@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../store/useAppStore';
-import { makeEventChoice, makePlanningState } from '../../test/fixtures';
+import { reassignEvent } from '../../lib/events';
+import { makeEventChoice, makePlanningState, makeTimelineItem } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { ChoiceDialog } from './ChoiceDialog';
 
@@ -48,6 +49,15 @@ describe('ChoiceDialog', () => {
     fireEvent.click(within(dialog()).getByRole('button', { name: 'Закрыть выбор' }));
     fireEvent.keyDown(document.body, { key: 'Escape' });
     expect(closeChoice).toHaveBeenCalledTimes(2);
+  });
+
+  it('names the brigade that loses a reassigned request in the title', () => {
+    // Время стоит на переназначении: план ещё до события, заявка 50104 у Бригады Арташкин.
+    const event = reassignEvent('50104', 'E02', '13:00');
+    const timeline = [makeTimelineItem({ id: 'tl_7', event, status: 'awaiting', choosable: true })];
+    useAppStore.setState({ state: makePlanningState({ timeline }), choice: makeEventChoice({ entry_id: 'tl_7', event }) });
+    render(<ChoiceDialog />);
+    expect(screen.getByRole('dialog', { name: 'Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:00' })).toBeInTheDocument();
   });
 
   it('says that variants are being computed and renders nothing when closed', () => {

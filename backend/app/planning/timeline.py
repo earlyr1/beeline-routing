@@ -40,10 +40,18 @@ CURSOR_RANGE_TEXT = "время должно быть от 00:00 до 23:59"
 
 TimelineStatus = Literal["applied", "pending", "rejected", "awaiting"]
 
+# Переназначение заявки называет и заявку, и бригаду: проверяются оба номера.
 _ENGINEER_EVENTS = frozenset(
-    {EventType.ENGINEER_UNAVAILABLE, EventType.ENGINEER_TRANSPORT_CHANGED, EventType.ENGINEER_DELAYED}
+    {
+        EventType.ENGINEER_UNAVAILABLE,
+        EventType.ENGINEER_TRANSPORT_CHANGED,
+        EventType.ENGINEER_DELAYED,
+        EventType.REQUEST_REASSIGNED,
+    }
 )
-_REQUEST_EVENTS = frozenset({EventType.CANCEL, EventType.RESTORE, EventType.REQUEST_UPDATED})
+_REQUEST_EVENTS = frozenset(
+    {EventType.CANCEL, EventType.RESTORE, EventType.REQUEST_UPDATED, EventType.REQUEST_REASSIGNED}
+)
 
 
 @dataclass(frozen=True)
@@ -203,7 +211,9 @@ class Timeline:
     ) -> TimelineEntry:
         """Новое событие со следующим номером; в таймлайн его добавляет insert. variant — стратегия сразу."""
         self.last_number += 1
-        sent = event.model_copy(update={"previous_transport": None, "previous_request": None})
+        sent = event.model_copy(
+            update={"previous_transport": None, "previous_request": None, "previous_engineer_id": None}
+        )
         return TimelineEntry(
             id=f"tl_{self.last_number}",
             seq=self.last_number,

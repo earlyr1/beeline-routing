@@ -66,7 +66,10 @@ export function RouteCard() {
   const scale = dayScale(state, plan);
   const row = timelineRow(state, plan, scale, engineer);
   // События шкалы дня в порядке применения, а показываем с последнего: применённые, впереди и отклонённые.
-  const events = (state.timeline ?? []).filter((item) => item.event.engineer_id === engineer.id).reverse();
+  // Переназначение заявки видно и у бригады, от которой заявка ушла.
+  const events = (state.timeline ?? [])
+    .filter((item) => item.event.engineer_id === engineer.id || item.event.previous_engineer_id === engineer.id)
+    .reverse();
   const engineers = byId(state.engineers);
 
   return (

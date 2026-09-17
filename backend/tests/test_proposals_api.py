@@ -54,6 +54,7 @@ def test_chat_creates_proposals_and_approve_goes_through_event_pipeline(tmp_path
         "previous_transport": None,
         "previous_request": None,
         "delay_min": None,
+        "previous_engineer_id": None,
     }
     assert proposal["source_text"] == "Отмена по R2, а E9 не выйдет" and proposal["created_at_version"] == 1
     messages = provider.bodies()[0]["messages"]

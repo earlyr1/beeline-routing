@@ -22,7 +22,13 @@ from ortools.constraint_solver import routing_enums_pb2
 from app.domain.enums import Priority
 from app.domain.models import ASAP_FREE_WAIT_MIN, Plan
 from app.solvers.assemble import build_plan
-from app.solvers.ortools_solver import DEFAULT_STRATEGY, ObjectiveWeights, OrToolsSolver, SearchStrategy
+from app.solvers.ortools_solver import (
+    DEFAULT_STRATEGY,
+    ObjectiveWeights,
+    OrToolsSolver,
+    SearchStrategy,
+    drop_penalty,
+)
 from app.solvers.problem import Problem
 
 logger = logging.getLogger(__name__)
@@ -50,8 +56,7 @@ def plan_cost(problem: Problem, plan: Plan, weights: ObjectiveWeights) -> int:
     cost = 0
     for item in plan.unassigned:
         if problem.has_request(item.request_id):
-            urgent = problem.request(item.request_id).priority == Priority.URGENT
-            cost += weights.drop_urgent if urgent else weights.drop_normal
+            cost += drop_penalty(problem.request(item.request_id), weights)
     for route in plan.routes:
         pinned = problem.pinned.get(route.engineer_id, [])
         pinned_ids = {visit.request_id for visit in pinned}

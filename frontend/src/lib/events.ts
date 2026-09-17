@@ -201,6 +201,69 @@ export function requestActionState(
   };
 }
 
+/** Выбор бригады в карточке заявки: доступен ли он и почему нет. */
+export interface ReassignState {
+  disabled: boolean;
+  title: string | undefined;
+}
+
+/**
+ * Правило выбора бригады: как у кнопок заявки, и ещё отменённую заявку и заявку без точки на карте
+ * сервер никому не назначит.
+ */
+export function reassignState(request: ServiceRequest, visit: Visit | undefined, context: RequestActionContext): ReassignState {
+  if (request.status === 'cancelled') return { disabled: true, title: 'Заявка отменена' };
+  if (isWorkStarted(request, visit, context.clock)) return { disabled: true, title: 'Работа уже началась, переназначить нельзя' };
+  if (request.lat === null || request.lon === null) return { disabled: true, title: 'Адрес не найден на карте, назначить бригаду нельзя' };
+  return { disabled: requestActionState(request, visit, context).disabled, title: undefined };
+}
+
+/**
+ * Почему бригада не может взять заявку, коротко для списка бригад; null — может.
+ * Правила те же, что у сервера: доступность, навык и транспорт. Успеет ли бригада в окно и смену, проверяет только сервер.
+ */
+export function brigadeIneligibility(request: ServiceRequest, engineer: Engineer): string | null {
+  if (!engineer.available) return engineer.unavailable_from ? `недоступна с ${engineer.unavailable_from}` : 'недоступна';
+  if (!engineer.skills.includes(request.skill)) return `нет навыка «${SKILL_LABELS[request.skill]}»`;
+  if (request.transport_required !== null && request.transport_required !== engineer.transport) {
+    return `нужен транспорт «${TRANSPORT_LABELS[request.transport_required]}»`;
+  }
+  return null;
+}
+
+/** Бригада в списке выбора бригады заявки. */
+export interface BrigadeOption {
+  engineer: Engineer;
+  /** Заявка у этой бригады в текущем плане. */
+  current: boolean;
+  /** Бригада не может взять заявку. Бригада текущего плана доступна всегда: её выбор просто закрывает список. */
+  disabled: boolean;
+  /** Подпись справа: «в плане», почему бригада не подходит или сколько у неё заявок в плане. */
+  note: string;
+}
+
+/** Все бригады в порядке набора данных для выбора бригады заявки по текущему плану. */
+export function brigadeOptions(request: ServiceRequest, engineers: Engineer[], plan: Plan): BrigadeOption[] {
+  const visits = new Map(plan.routes.map((route) => [route.engineer_id, route.visits.length]));
+  const currentId = plan.routes.find((route) => route.visits.some((visit) => visit.request_id === request.id))?.engineer_id ?? null;
+  return engineers.map((engineer) => {
+    const current = engineer.id === currentId;
+    const reason = current ? null : brigadeIneligibility(request, engineer);
+    const count = visits.get(engineer.id) ?? 0;
+    const note = current ? 'в плане' : (reason ?? `${count} ${plural(count, 'заявка', 'заявки', 'заявок')}`);
+    return { engineer, current, disabled: reason !== null, note };
+  });
+}
+
+/** Переназначение заявки на бригаду: прежнюю бригаду сервер запишет сам. */
+export const reassignEvent = (requestId: string, engineerId: string, time: HHMM): PlanEvent => ({
+  type: 'request_reassigned',
+  time,
+  request: null,
+  request_id: requestId,
+  engineer_id: engineerId,
+});
+
 export function newUrgentId(timestamp: number): string {
   return `URG-${timestamp.toString(36).toUpperCase()}`;
 }
@@ -420,7 +483,7 @@ export function lateVisitsTitle(forecast: DelayForecast): string {
     .join('\n');
 }
 
-/** Заявка, о которой событие: у срочной заявки — новая заявка, у отмены, возврата и изменения — изменённая. */
+/** Заявка, о которой событие: у срочной заявки — новая заявка, у отмены, возврата, изменения и переназначения — изменённая. */
 export function eventRequestId(event: PlanEvent): string | null {
   switch (event.type) {
     case 'urgent':
@@ -428,6 +491,7 @@ export function eventRequestId(event: PlanEvent): string | null {
     case 'cancel':
     case 'restore':
     case 'request_updated':
+    case 'request_reassigned':
       return event.request_id ?? event.request?.id ?? null;
     default:
       return null;
@@ -463,5 +527,14 @@ export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>
       return `Возврат заявки ${event.request_id} в ${event.time}`;
     case 'engineer_unavailable':
       return `Инженер недоступен: ${engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id} с ${event.time}`;
+    case 'request_reassigned': {
+      const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
+      const title = `Переназначение заявки ${event.request_id ?? ''}`;
+      // Прежнюю бригаду сервер записывает у применённого события; у заявки без бригады и у события клиента её нет.
+      // Имя бригады не склоняем: стрелка показывает, к какой бригаде уходит заявка.
+      if (!event.previous_engineer_id) return `${title} → ${name} с ${event.time}`;
+      const previous = engineers.get(event.previous_engineer_id)?.name ?? event.previous_engineer_id;
+      return `${title}: ${previous} → ${name} с ${event.time}`;
+    }
   }
 }

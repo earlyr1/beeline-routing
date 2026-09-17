@@ -8,7 +8,7 @@ from app.domain.enums import EventType, Priority
 from app.domain.models import Event, Metrics, Plan, Route, Unassigned, Visit
 from app.planning.session import apply_event
 from app.planning.workload import workload_weights
-from app.solvers.ortools_solver import DEFAULT_STRATEGY, ObjectiveWeights
+from app.solvers.ortools_solver import DEFAULT_STRATEGY, ObjectiveWeights, drop_penalty
 from app.solvers.portfolio import PORTFOLIO, SolverPool, plan_cost
 from tests.helpers import req
 from tests.planning_helpers import busy_engineer, context, new_session
@@ -57,6 +57,26 @@ def test_plan_cost_follows_the_solver_objective():
     )
     broken = _plan([], violations=["R1: начало позже окна"])
     assert plan_cost(problem, broken, weights) == weights.drop_urgent
+
+
+def test_a_request_fixed_by_the_dispatcher_costs_more_to_drop_than_an_urgent_one():
+    weights = ObjectiveWeights()
+    normal = req("R1", 1, 0, "10:00", "12:00")
+    urgent = req("R2", 1, 0, "10:00", "12:00", priority=Priority.URGENT)
+    fixed = normal.model_copy(update={"fixed_engineer_id": "E2"})
+    assert [drop_penalty(request, weights) for request in (normal, urgent, fixed)] == [
+        10_000_000,
+        100_000_000,
+        1_000_000_000,
+    ]
+    assert drop_penalty(urgent.model_copy(update={"fixed_engineer_id": "E2"}), weights) == weights.drop_fixed
+
+    problem = new_session(context(), requests=[fixed, req("R3", -1, 0, "15:00", "17:00")]).problem
+    dropped = _plan(
+        [Route(engineer_id="E1", visits=[_visit("R3")], total_km=2, total_travel_min=10)],
+        unassigned=[Unassigned(request_id="R1", reason_code="no_free_engineer_in_window", reason_text="x")],
+    )
+    assert plan_cost(problem, dropped, weights) == weights.vehicle_fixed_cost + 2000 + weights.drop_fixed
 
 
 def test_pool_shares_the_portfolio_between_simultaneous_searches():

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makeAsapState, makeDelayEvent, makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
+import { makeAsapState, makeDelayEvent, makePlanningState, makeReassignEvent, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
 import { makeProposal, makeUrgentProposal } from '../test/proposalFixtures';
 import { formatKm } from './format';
 import { diffSummary, plural, proposalDetails, upsertProposal } from './proposals';
@@ -67,6 +67,33 @@ describe('proposals view helpers', () => {
     expect(proposalDetails(moved, state)).toEqual(['адрес ул.Грайвороновская, д. 10 к 2 → ул.Юности, д. 5', 'приоритет Обычная → Срочная']);
     const unknown = makeProposal({ event: makeRequestUpdateEvent({ previous_request: null, request_id: 'NOPE' }) });
     expect(proposalDetails(unknown, state)).toEqual([]);
+  });
+
+  it('describes a reassignment from the brigade of the current plan or the one recorded by the server', () => {
+    const proposal = makeProposal({ event: makeReassignEvent({ previous_engineer_id: null }) });
+    expect(proposalDetails(proposal, state)).toEqual(['ул.Грайвороновская, д. 10 к 2 · окно 14:00–16:00', 'Бригада Арташкин → Бригада Белузин с 13:30']);
+    const unassigned = makeProposal({ event: makeReassignEvent({ request_id: '18754', engineer_id: 'E01', previous_engineer_id: null }) });
+    expect(proposalDetails(unassigned, state)).toEqual(['ул.1-я Новокузьминская, д. 16 к 1 · окно 18:00–20:00', 'Без бригады → Бригада Арташкин с 13:30']);
+    // После применения заявка в плане уже у новой бригады: прежнюю записал сервер.
+    const moved = {
+      ...state,
+      plan: {
+        ...state.plan,
+        routes: state.plan.routes.map((route) =>
+          route.engineer_id === 'E01'
+            ? { ...route, visits: route.visits.filter((visit) => visit.request_id !== '50104') }
+            : route.engineer_id === 'E02'
+              ? { ...route, visits: [...route.visits, state.plan.routes[0].visits[2]] }
+              : route,
+        ),
+      },
+    };
+    expect(proposalDetails(makeProposal({ status: 'approved', event: makeReassignEvent() }), moved)).toEqual([
+      'ул.Грайвороновская, д. 10 к 2 · окно 14:00–16:00',
+      'Бригада Арташкин → Бригада Белузин с 13:30',
+    ]);
+    const unknown = makeProposal({ event: makeReassignEvent({ request_id: 'NOPE', previous_engineer_id: null }) });
+    expect(proposalDetails(unknown, state)).toEqual(['Без бригады → Бригада Белузин с 13:30']);
   });
 
   it('keeps the changes of an applied request update after the request changed', () => {
