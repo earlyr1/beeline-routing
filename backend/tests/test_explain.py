@@ -142,7 +142,7 @@ def test_alternative_with_negative_extra_km_reads_as_almost_no_extra_mileage():
     assert explanation.summary.endswith("заявка добавляет к маршруту 1.6 км.")
 
 
-def test_request_fixed_by_the_dispatcher_names_its_brigade_to_the_others():
+def test_request_fixed_by_the_dispatcher_explains_only_that_the_dispatcher_chose_the_brigade():
     fixed = req("R3", -1, 0, "15:00", "17:00").model_copy(update={"fixed_engineer_id": "E2"})
     problem = problem_of(
         [*day_requests()[:2], fixed], [eng("E1"), eng("E2"), eng("E3", skills=[Skill.EMERGENCY])]
@@ -152,22 +152,21 @@ def test_request_fixed_by_the_dispatcher_names_its_brigade_to_the_others():
         problem, build_plan(problem, "ortools", {"E1": ["R1", "R2"], "E2": ["R3"]}), fixed
     )
 
-    assert assigned.factors[:2] == [
-        "Заявку закрепил диспетчер за Инженер E2: другим бригадам планировщик её не отдаёт.",
-        "Другие инженеры взять заявку не могут: причины указаны в списке альтернатив.",
-    ]
-    # Закрепление проверяется первым: у E3 нет и навыка, но причина — закрепление.
-    assert [(a.engineer_id, a.feasible, a.reason) for a in assigned.alternatives] == [
-        ("E1", False, "Заявку закрепил диспетчер за Инженер E2"),
-        ("E3", False, "Заявку закрепил диспетчер за Инженер E2"),
+    # Разбора выбора нет: бригаду выбрал не планировщик, сравнивать её с другими незачем.
+    assert (
+        assigned.summary == "Бригаду выбрал диспетчер вручную: Инженер E2. Планировщик заявку не переносит."
+    )
+    assert (assigned.factors, assigned.alternatives) == ([], [])
+    # Проверки остаются: диспетчер видит, что ручное назначение не ломает окно и смену.
+    assert [(check.name, check.ok) for check in assigned.constraints] == [
+        ("Навык", True),
+        ("Транспорт", True),
+        ("Временное окно", True),
+        ("Смена", True),
     ]
 
     unassigned = build_explanation(problem, build_plan(problem, "ortools", {"E1": ["R1", "R2"]}), fixed)
 
     assert unassigned.status == "unassigned"
-    assert [(a.engineer_id, a.feasible) for a in unassigned.alternatives] == [
-        ("E1", False),
-        ("E2", True),
-        ("E3", False),
-    ]
+    assert unassigned.alternatives == []
     assert unassigned.summary.startswith("Заявку закрепил диспетчер за Инженер E2. ")

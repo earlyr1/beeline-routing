@@ -272,8 +272,12 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
     if assigned is None:
         item = next((u for u in plan.unassigned if u.request_id == request.id), None)
         located = problem.has_request(request.id)
+        # У закреплённой заявки разбирать альтернативы нечего: её выбрал диспетчер, и у всех бригад
+        # в списке была бы одна и та же причина — закрепление.
         alternatives = (
-            [_shown(_alternative(problem, plan, s, request)[0]) for s in problem.states] if located else []
+            [_shown(_alternative(problem, plan, s, request)[0]) for s in problem.states]
+            if located and request.fixed_engineer_id is None
+            else []
         )
         return Explanation(
             request_id=request.id,
@@ -312,6 +316,17 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
             visit=visit,
         )
 
+    if request.fixed_engineer_id == engineer_id:
+        # Бригаду выбрал диспетчер, планировщик её не выбирал: разбирать нечего, кроме самого факта и проверок.
+        return Explanation(
+            request_id=request.id,
+            status="assigned",
+            engineer_id=engineer_id,
+            summary=f"Бригаду выбрал диспетчер вручную: {engineer.name}. Планировщик заявку не переносит.",
+            constraints=constraints,
+            visit=visit,
+        )
+
     state = problem.state(engineer_id)
     own_sequence = _open_sequence(problem, plan, engineer_id)
     without = [rid for rid in own_sequence if rid != request.id]
@@ -324,10 +339,6 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
     infeasible = [pair for pair in evaluated if not pair[0].feasible]
 
     factors: list[str] = []
-    if request.fixed_engineer_id == engineer_id:
-        factors.append(
-            f"Заявку закрепил диспетчер за {engineer.name}: другим бригадам планировщик её не отдаёт."
-        )
     if request.priority == Priority.URGENT:
         factors.append("Срочная заявка: при нехватке времени планировщик назначает её в первую очередь.")
     if request.asap:
