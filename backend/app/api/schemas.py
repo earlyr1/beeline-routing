@@ -90,14 +90,15 @@ class TimelineItem(BaseModel):
     event: Event
     status: TimelineStatus
     reason: str | None = None
-    # Стратегия «ломающего» события; null — не выбрана или событие не «ломающее».
+    # Стратегия «ломающего» события («optimal», «stable», «keep» или «assign:<инженер>»); null — не выбрана
+    # или событие не «ломающее».
     variant: EventVariant | None = None
     # «Ломающее» событие: для него сервер предлагает варианты исправления.
     choosable: bool = False
 
 
 class VariantRequest(BaseModel):
-    """Тело PUT …/timeline/events/{id}/variant."""
+    """Тело PUT …/timeline/events/{id}/variant. Стратегию проверяет обработчик (check_variant)."""
 
     variant: EventVariant
 

@@ -244,12 +244,18 @@ export interface BrigadeOption {
   note: string;
 }
 
-/** Все бригады в порядке набора данных для выбора бригады заявки по текущему плану. */
-export function brigadeOptions(request: ServiceRequest, engineers: Engineer[], plan: Plan): BrigadeOption[] {
+/**
+ * Все бригады в порядке набора данных для выбора бригады заявки по текущему плану.
+ * currentId задаёт бригаду заявки, когда она не из этого плана: например, из варианта «Оптимально по дню».
+ */
+export function brigadeOptions(request: ServiceRequest, engineers: Engineer[], plan: Plan, currentId?: string | null): BrigadeOption[] {
   const visits = new Map(plan.routes.map((route) => [route.engineer_id, route.visits.length]));
-  const currentId = plan.routes.find((route) => route.visits.some((visit) => visit.request_id === request.id))?.engineer_id ?? null;
+  const holderId =
+    currentId !== undefined
+      ? currentId
+      : (plan.routes.find((route) => route.visits.some((visit) => visit.request_id === request.id))?.engineer_id ?? null);
   return engineers.map((engineer) => {
-    const current = engineer.id === currentId;
+    const current = engineer.id === holderId;
     const reason = current ? null : brigadeIneligibility(request, engineer);
     const count = visits.get(engineer.id) ?? 0;
     const note = current ? 'в плане' : (reason ?? `${count} ${plural(count, 'заявка', 'заявки', 'заявок')}`);

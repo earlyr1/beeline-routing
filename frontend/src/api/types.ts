@@ -315,10 +315,19 @@ export interface TimelineItem {
   choosable: boolean;
 }
 
-/** Стратегия исправления плана на «ломающее» событие. */
-export type EventVariant = 'optimal' | 'stable' | 'keep';
+/** Три стратегии, которые сервер считает для «ломающего» события заранее. */
+export type BaseVariant = 'optimal' | 'stable' | 'keep';
 
-/** Вариант исправления: итоги и отличия от рекомендованного. */
+/**
+ * «Отдать заявку выбранной бригаде»: assign:<инженер>. Сервер считает такой план только по запросу диспетчера
+ * и только у срочной заявки.
+ */
+export type AssignVariant = `assign:${string}`;
+
+/** Стратегия исправления плана на «ломающее» событие. */
+export type EventVariant = BaseVariant | AssignVariant;
+
+/** Вариант исправления: итоги и отличия от варианта, с которым его сравнили. */
 export interface VariantOption {
   variant: EventVariant;
   title: string;
@@ -331,6 +340,10 @@ export interface VariantOption {
   pros: string[];
   cons: string[];
   recommended: boolean;
+  /** Бригада, у которой заявка события в плане варианта; null — заявка без бригады или событие не про одну заявку. */
+  request_engineer_id: string | null;
+  /** Вариант, с которым сравнивают плюсы и минусы; у «отдать бригаде» это всегда «Оптимально по дню». */
+  compared_to: EventVariant | null;
 }
 
 /** Варианты исправления для «ломающего» события шкалы. */
@@ -341,6 +354,8 @@ export interface EventChoice {
   late_before: number;
   variants: VariantOption[];
   current: EventVariant | null;
+  /** Диспетчер может отдать заявку конкретной бригаде: только у срочной заявки. */
+  assignable: boolean;
 }
 
 /** Тело POST /api/datasets/{id}/cursor. */

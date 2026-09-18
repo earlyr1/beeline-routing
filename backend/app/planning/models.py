@@ -95,11 +95,14 @@ class AppliedEvent(BaseModel):
     version: int
 
 
-EventVariant = Literal["optimal", "stable", "keep"]
+BaseVariant = Literal["optimal", "stable", "keep"]
+# Стратегия «ломающего» события: одна из трёх базовых или «assign:<инженер>» — отдать заявку выбранной
+# бригаде (только у срочной заявки, см. app/planning/variants.py). Строка проверяется на границе API.
+EventVariant = str
 
 
 class VariantOption(BaseModel):
-    """Один вариант исправления плана на событие: итоги и отличия от рекомендованного."""
+    """Один вариант исправления плана на событие: итоги и отличия от варианта, с которым он сравнивается."""
 
     variant: EventVariant
     title: str
@@ -110,10 +113,20 @@ class VariantOption(BaseModel):
     pros: list[str] = Field(default_factory=list)
     cons: list[str] = Field(default_factory=list)
     recommended: bool = False
+    # Бригада, у которой заявка события в плане этого варианта; null — заявка без инженера или событие не об
+    # одной заявке. Заполнено у срочной заявки и переназначения.
+    request_engineer_id: str | None = None
+    # Вариант, с которым посчитаны pros/cons; null — сравнивать не с чем. У «отдать бригаде» всегда «optimal»:
+    # диспетчер видит цену своего решения относительно оптимума дня.
+    compared_to: EventVariant | None = None
 
 
 class EventChoice(BaseModel):
-    """Выбор варианта для «ломающего» события шкалы: три варианта от одного плана до события."""
+    """Выбор варианта для «ломающего» события шкалы: варианты от одного плана до события.
+
+    Три базовых варианта считаются заранее; у срочной заявки к ним добавляется четвёртый, «отдать заявку
+    названной бригаде», — его считают, только когда диспетчер назвал бригаду.
+    """
 
     entry_id: str
     event: Event
@@ -121,3 +134,5 @@ class EventChoice(BaseModel):
     late_before: int
     variants: list[VariantOption]
     current: EventVariant | None = None
+    # Срочная заявка: диспетчер может отдать её конкретной бригаде (вариант «assign:<инженер>»).
+    assignable: bool = False

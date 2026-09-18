@@ -7,6 +7,7 @@ import pytest
 from app.domain.enums import EventType, Priority
 from app.domain.models import Event, Metrics, Plan, Route, Unassigned, Visit
 from app.planning.session import apply_event
+from app.planning.variants import assign_variant
 from app.planning.workload import workload_weights
 from app.solvers.ortools_solver import DEFAULT_STRATEGY, ObjectiveWeights, drop_penalty
 from app.solvers.portfolio import PORTFOLIO, SolverPool, plan_cost
@@ -188,3 +189,13 @@ def test_solve_uses_the_pool_with_the_share_of_the_event(monkeypatch):
     )
     apply_event(base, Event(type=EventType.CANCEL, time="09:30", request_id="R2"), ctx)
     assert calls == [2, (1, 2, 500_000), 1, (1, 4, 20_000)]
+    calls.clear()
+
+    urgent = Event(type=EventType.URGENT, time="12:00", request=req("U1", 0, 0, "13:00", "17:00"))
+    apply_event(base, urgent, ctx)
+    optimal = list(calls)
+    calls.clear()
+    apply_event(base, urgent, ctx, variant=assign_variant("E2"))
+    # «Отдать бригаде» ищут теми же стратегиями, что «Оптимально по дню»: цену решения диспетчер сравнивает
+    # с ним, и более широкий поиск занижал бы её.
+    assert calls == optimal == [2, (1, 2, 20_000)]

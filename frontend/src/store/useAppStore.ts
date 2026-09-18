@@ -78,6 +78,8 @@ export interface AppData {
   choice: EventChoice | null;
   /** Окно выбора открыто и ждёт варианты от сервера. */
   choiceLoading: boolean;
+  /** Карточка «отдать бригаде» ждёт план с выбранной бригадой; остальные карточки окна остаются доступными. */
+  assignLoading: boolean;
   /** Куда вернуть часы после выбора: время и шли ли часы до остановки на событии. */
   resumeAfterChoice: { time: HHMM; play: boolean } | null;
   /** Событие, окно которого закрыли без выбора: ответы сервера его не открывают, пока часы не пойдут дальше. */
@@ -122,6 +124,8 @@ export interface AppActions {
   chooseVariant(variant: EventVariant): Promise<boolean>;
   /** Открыть окно выбора для события шкалы (смена выбора с метки). */
   openChoice(entryId: string): Promise<void>;
+  /** Посчитать для открытого окна ещё один вариант: заявку берёт выбранная бригада. */
+  previewAssign(engineerId: string): Promise<void>;
   /** Закрыть окно без выбора: часы стоят на событии. */
   closeChoice(): void;
   /** Вернуть план, открытый до перезагрузки страницы. */
@@ -198,6 +202,7 @@ export const initialAppData: AppData = {
   timelineMove: NO_TIMELINE_MOVE,
   choice: null,
   choiceLoading: false,
+  assignLoading: false,
   resumeAfterChoice: null,
   dismissedChoice: null,
   busy: false,
@@ -231,7 +236,13 @@ const NO_ADDRESS_LOOKUP = { urgentAddressLookup: 'idle', urgentSuggestedAddress:
 const NO_CLOCK_ACTIVITY = { dragging: false, playing: false, committing: false } satisfies Partial<AppData>;
 
 /** Окно выбора варианта закрыто и ничего не ждёт. */
-const NO_CHOICE = { choice: null, choiceLoading: false, resumeAfterChoice: null, dismissedChoice: null } satisfies Partial<AppData>;
+const NO_CHOICE = {
+  choice: null,
+  choiceLoading: false,
+  assignLoading: false,
+  resumeAfterChoice: null,
+  dismissedChoice: null,
+} satisfies Partial<AppData>;
 
 const OFFLINE_CONFIG: ClientConfig = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: false };
 
@@ -382,6 +393,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         clock: next.cursor,
         choice: pending,
         choiceLoading: false,
+        assignLoading: false,
         resumeAfterChoice: { time: laterOf(clock, next.cursor), play: wasPlaying },
       });
     }
@@ -609,7 +621,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       const current = generation;
       // «Ломающее» событие на время часов или раньше: сервер сразу попросит выбрать вариант, окно ждёт его ответа.
       const asks = CHOOSABLE_EVENTS.has(event.type) && isValidTime(event.time) && isValidTime(clock) && toMinutes(event.time) <= toMinutes(clock);
-      set({ busy: true, error: null, ...(asks ? { choice: null, choiceLoading: true, dismissedChoice: null } : {}) });
+      set({ busy: true, error: null, ...(asks ? { choice: null, choiceLoading: true, assignLoading: false, dismissedChoice: null } : {}) });
       try {
         // Диспетчер видит на часах их время и ждёт, что событие в это время применится сразу.
         await get().commitClock();
@@ -636,7 +648,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       // Сброс ставит часы на начало дня: идущие часы останавливаются без фиксации, окно выбора закрывается.
       get().stopPlayback();
       const current = generation;
-      set({ busy: true, error: null, choice: null, choiceLoading: false, resumeAfterChoice: null, dismissedChoice: null });
+      set({ busy: true, error: null, ...NO_CHOICE });
       try {
         const state = await enqueue(current, () => clearTimeline(datasetId));
         if (!isCurrent(current)) return false;
@@ -709,7 +721,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       const { datasetId } = get();
       if (!datasetId) return;
       const current = generation;
-      set({ choice: null, choiceLoading: true, resumeAfterChoice: null, error: null });
+      set({ choice: null, choiceLoading: true, assignLoading: false, resumeAfterChoice: null, error: null });
       try {
         const choice = await getTimelineVariants(datasetId, entryId);
         // Окно закрыли, пока варианты считались: ответ его заново не открывает.
@@ -719,8 +731,24 @@ export const useAppStore = create<AppState>()((set, get) => {
       }
     },
 
+    async previewAssign(engineerId) {
+      const { datasetId, choice } = get();
+      if (!datasetId || !choice) return;
+      const current = generation;
+      set({ assignLoading: true, error: null });
+      try {
+        const next = await getTimelineVariants(datasetId, choice.entry_id, engineerId);
+        // Окно успели закрыть или оно уже про другое событие: посчитанный вариант его не возвращает.
+        if (isCurrent(current) && get().choice?.entry_id === choice.entry_id) set({ choice: next });
+      } catch (error) {
+        if (isCurrent(current)) set({ error: errorMessage(error) });
+      } finally {
+        if (isCurrent(current)) set({ assignLoading: false });
+      }
+    },
+
     closeChoice() {
-      set({ dismissedChoice: get().choice?.entry_id ?? null, choice: null, choiceLoading: false, resumeAfterChoice: null });
+      set({ dismissedChoice: get().choice?.entry_id ?? null, choice: null, choiceLoading: false, assignLoading: false, resumeAfterChoice: null });
     },
 
     async restoreSession() {

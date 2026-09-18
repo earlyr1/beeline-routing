@@ -6,6 +6,7 @@ import {
   deleteTimelineEvent,
   getReverseGeocode,
   getRouteGeometry,
+  getTimelineVariants,
   moveCursor,
   postEvent,
   uploadFile,
@@ -52,6 +53,15 @@ describe('api client', () => {
     expect(init.method).toBe('POST');
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
     expect(JSON.parse(init.body as string)).toEqual(cancel);
+  });
+
+  it('asks for the variants of an event, and for one more with the request given to a brigade', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply(200, { entry_id: 'tl_2' }));
+    vi.stubGlobal('fetch', fetchMock);
+    await getTimelineVariants('d1', 'tl/2');
+    expect(fetchMock.mock.calls[0]).toEqual(['/api/datasets/d1/timeline/events/tl%2F2/variants', undefined]);
+    await getTimelineVariants('d1', 'tl_2', 'E 7');
+    expect(fetchMock.mock.calls[1][0]).toBe('/api/datasets/d1/timeline/events/tl_2/variants?assign=E+7');
   });
 
   it('deletes a timeline event by its id', async () => {

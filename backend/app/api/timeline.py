@@ -18,13 +18,22 @@ from app.domain.timeutil import fmt_hhmm
 from app.planning.models import EventChoice, EventVariant
 from app.planning.session import PlanningContext
 from app.planning.timeline import TimelineEntry, TimelineStep, Walk, replay_step
-from app.planning.variants import VARIANTS, Outcome, build_choice, is_choosable
+from app.planning.variants import (
+    VARIANTS,
+    Outcome,
+    assign_variant,
+    assigned_engineer,
+    build_choice,
+    is_assignable,
+    is_choosable,
+)
 
 RunBackground = Callable[[Callable[[], None]], None]
 
 # Пауза фонового предподсчёта между шагами: запрос, который ждёт timeline_lock, успевает его взять.
 PRECOMPUTE_PAUSE_S = 0.05
 NOT_CHOOSABLE_TEXT = "Для этого события варианты не предлагаются."
+NOT_ASSIGNABLE_TEXT = "Бригаду можно выбрать только для срочной заявки."
 
 
 class VariantUnavailable(Exception):
@@ -35,14 +44,40 @@ class VariantUnavailable(Exception):
         self.status = status
 
 
-def _choice(record: DatasetRecord, walk: Walk, entry: TimelineEntry) -> EventChoice:
-    """Под record.lock: варианты события из посчитанных шагов его стратегий."""
+def check_variant(record: DatasetRecord, entry: TimelineEntry, variant: EventVariant) -> None:
+    """Под record.lock: проверяет стратегию из запроса для события entry. Бросает VariantUnavailable.
+
+    По порядку: незнакомая строка — 422 у любого события, не «ломающее» событие — 409, «отдать бригаде» не
+    на срочной заявке или с бригадой не из этого дня — 422. Базовые стратегии подходят любому «ломающему»
+    событию.
+    """
+    engineer_id = assigned_engineer(variant)
+    if variant not in VARIANTS and engineer_id is None:
+        raise VariantUnavailable(422, f"Неизвестный вариант «{variant}».")
+    if not is_choosable(entry.event):
+        raise VariantUnavailable(409, NOT_CHOOSABLE_TEXT)
+    if engineer_id is None:
+        return
+    if not is_assignable(entry.event):
+        raise VariantUnavailable(422, NOT_ASSIGNABLE_TEXT)
+    if record.base is None or record.base.engineer(engineer_id) is None:
+        raise VariantUnavailable(422, f"Инженер {engineer_id} не найден.")
+
+
+def _choice(
+    record: DatasetRecord, walk: Walk, entry: TimelineEntry, assign: EventVariant | None = None
+) -> EventChoice:
+    """Под record.lock: варианты события из посчитанных шагов его стратегий.
+
+    assign — стратегия «отдать бригаде», если диспетчер её назвал: она идёт в окне четвёртой.
+    """
     outcomes = []
-    for variant in VARIANTS:
+    for variant in (*VARIANTS, *([assign] if assign is not None else [])):
         step = record.timeline.step(walk, entry, variant)
         if step is not None and step.applied is not None and step.session.last_diff is not None:
             outcomes.append(Outcome(variant, step.session.plan, step.session.last_diff))
-    return build_choice(entry.id, entry.event, walk.session.plan, outcomes, entry.variant)
+    names = {engineer.id: engineer.name for engineer in walk.session.engineers}
+    return build_choice(entry.id, entry.event, walk.session.plan, outcomes, entry.variant, names)
 
 
 def planning_state(record: DatasetRecord) -> PlanningState:
@@ -116,6 +151,25 @@ def _replay_variants(record: DatasetRecord, ctx: PlanningContext, walk: Walk, en
             record.use_version(version)
 
 
+def _replay_assign(
+    record: DatasetRecord, ctx: PlanningContext, walk: Walk, entry: TimelineEntry, variant: EventVariant
+) -> None:
+    """Под record.timeline_lock: шаг события entry со стратегией «отдать бригаде», если он ещё не посчитан.
+
+    Такие шаги не предподсчитываются: диспетчер сначала называет бригаду, и только тогда считается один план.
+    Посчитанный шаг лежит в кэше под своим ключом, поэтому повторное открытие окна решатель не запускает.
+    """
+    with record.lock:
+        if record.timeline.step(walk, entry, variant) is not None:
+            return
+    version = record.next_version()
+    step = replay_step(walk.session, entry, ctx, version, variant)
+    with record.lock:
+        record.timeline.store(walk, entry, step, variant)
+        if step.applied is not None:
+            record.use_version(version)
+
+
 def compute_steps(record: DatasetRecord, ctx: PlanningContext, count: int) -> Walk:
     """Под record.timeline_lock: досчитывает шаги первых count событий по порядку и возвращает проход по ним.
 
@@ -180,8 +234,14 @@ def insert_and_replay(
     return step
 
 
-def event_choice(record: DatasetRecord, ctx: PlanningContext, entry_id: str) -> EventChoice:
-    """Варианты события шкалы для окна выбора: считает недостающие стратегии. Бросает VariantUnavailable."""
+def event_choice(
+    record: DatasetRecord, ctx: PlanningContext, entry_id: str, assign: str | None = None
+) -> EventChoice:
+    """Варианты события шкалы для окна выбора: считает недостающие стратегии. Бросает VariantUnavailable.
+
+    assign — номер бригады: к трём вариантам добавляется четвёртый, «отдать заявку этой бригаде». Его план
+    считается здесь же, по одному запросу, и остаётся в кэше шагов.
+    """
     with record.timeline_lock:
         with record.lock:
             entry = record.timeline.find(entry_id)
@@ -189,6 +249,9 @@ def event_choice(record: DatasetRecord, ctx: PlanningContext, entry_id: str) -> 
                 raise VariantUnavailable(404, f"Событие {entry_id} не найдено.")
             if not is_choosable(entry.event):
                 raise VariantUnavailable(409, NOT_CHOOSABLE_TEXT)
+            variant = assign_variant(assign) if assign is not None else None
+            if variant is not None:
+                check_variant(record, entry, variant)
             position = record.timeline.entries.index(entry)
         walk = compute_steps(record, ctx, position)
         if walk.done < position:
@@ -199,7 +262,10 @@ def event_choice(record: DatasetRecord, ctx: PlanningContext, entry_id: str) -> 
             optimal = record.timeline.step(walk, entry, "optimal")
             if optimal is not None and optimal.reason is not None:
                 raise VariantUnavailable(409, f"Событие отклонено: {optimal.reason}")
-            return _choice(record, walk, entry)
+        if variant is not None:
+            _replay_assign(record, ctx, walk, entry, variant)
+        with record.lock:
+            return _choice(record, walk, entry, variant)
 
 
 def move_cursor(record: DatasetRecord, ctx: PlanningContext, cursor: int) -> None:

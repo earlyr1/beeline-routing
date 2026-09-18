@@ -103,9 +103,14 @@ export const addTimelineEvent = (datasetId: string, event: PlanEvent) =>
 export const deleteTimelineEvent = (datasetId: string, entryId: string) =>
   request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
 
-/** Варианты исправления для «ломающего» события шкалы. */
-export const getTimelineVariants = (datasetId: string, entryId: string) =>
-  request<EventChoice>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}/variants`);
+/**
+ * Варианты исправления для «ломающего» события шкалы. С assign сервер считает ещё один план — с заявкой
+ * у выбранной бригады — и присылает его четвёртым вариантом.
+ */
+export const getTimelineVariants = (datasetId: string, entryId: string, assign?: string) =>
+  request<EventChoice>(
+    `${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}/variants${assign ? `?${new URLSearchParams({ assign })}` : ''}`,
+  );
 
 /** Выбрать или поменять стратегию события: план пересчитывается с этого события. */
 export const setTimelineVariant = (datasetId: string, entryId: string, variant: EventVariant) =>

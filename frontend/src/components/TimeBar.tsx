@@ -196,7 +196,7 @@ export function TimeBar() {
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
                   {item.choosable && (
                     <>
-                      <span className="muted">{item.variant ? `Вариант: ${variantTitle(item.variant, item.event.type)}` : 'Вариант не выбран'}</span>
+                      <span className="muted">{item.variant ? `Вариант: ${variantTitle(item.variant, item.event.type, state.engineers)}` : 'Вариант не выбран'}</span>
                       <button
                         type="button"
                         className="btn btn-small"

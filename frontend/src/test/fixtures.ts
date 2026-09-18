@@ -259,35 +259,83 @@ export function makeTimeline(): TimelineItem[] {
   ];
 }
 
+const BASE_VARIANT_TEXTS: Record<string, { title: string; summary: string }> = {
+  optimal: { title: 'Оптимально по дню', summary: 'Пересчитать остаток дня целиком' },
+  stable: { title: 'Минимум перестановок', summary: 'Чужие маршруты почти не трогаем' },
+  keep: { title: 'Ничего не менять', summary: 'Оставить маршруты как есть' },
+};
+
+/**
+ * Вариант исправления с итогами плана фикстуры. У «отдать бригаде» имя в заголовке и своя бригада заявки,
+ * а сравнивают его всегда с «Оптимально по дню»; три готовые стратегии сравнены с рекомендованной.
+ */
+export function makeVariantOption(variant: EventVariant, patch: Partial<VariantOption> = {}): VariantOption {
+  const assigned = variant.startsWith('assign:') ? variant.slice('assign:'.length) : null;
+  const texts = assigned
+    ? { title: `Отдать: ${engineers().find((item) => item.id === assigned)?.name ?? assigned}`, summary: 'Выбор диспетчера' }
+    : BASE_VARIANT_TEXTS[variant];
+  return {
+    variant,
+    ...texts,
+    metrics: makePlanningState().plan.metrics,
+    late: 0,
+    moved: 0,
+    pros: [],
+    cons: [],
+    recommended: false,
+    request_engineer_id: assigned,
+    compared_to: variant === 'optimal' ? 'stable' : 'optimal',
+    ...patch,
+  };
+}
+
 /**
  * Варианты исправления для недоступности Бригады Белузин в 13:00: рекомендован пересчёт дня,
  * минимум перестановок держит маршруты, «ничего не менять» оставляет двух клиентов без инженера и двоих с опозданием.
  */
 export function makeEventChoice(overrides: Partial<EventChoice> = {}): EventChoice {
   const metrics = makePlanningState().plan.metrics;
-  const option = (variant: EventVariant, patch: Partial<VariantOption> = {}): VariantOption => ({
-    variant,
-    title: { optimal: 'Оптимально по дню', stable: 'Минимум перестановок', keep: 'Ничего не менять' }[variant],
-    summary: { optimal: 'Пересчитать остаток дня целиком', stable: 'Чужие маршруты почти не трогаем', keep: 'Оставить маршруты как есть' }[variant],
-    metrics,
-    late: 0,
-    moved: 0,
-    pros: [],
-    cons: [],
-    recommended: false,
-    ...patch,
-  });
   return {
     entry_id: 'tl_2',
     event: { type: 'engineer_unavailable', time: '13:00', request: null, request_id: null, engineer_id: 'E02' },
     metrics_before: metrics,
     late_before: 0,
     variants: [
-      option('optimal', { recommended: true, moved: 3, pros: ['на 1 бригаду меньше'], cons: ['на 3 заявки больше переезжает к другим бригадам'] }),
-      option('stable', { moved: 0, pros: ['на 3 заявки меньше переезжает к другим бригадам'], cons: ['на 1 бригаду больше'] }),
-      option('keep', { late: 2, metrics: { ...metrics, unassigned: metrics.unassigned + 2 }, cons: ['на 4 клиента без инженера или с опозданием больше'] }),
+      makeVariantOption('optimal', {
+        recommended: true,
+        moved: 3,
+        pros: ['на 1 бригаду меньше'],
+        cons: ['на 3 заявки больше переезжает к другим бригадам'],
+      }),
+      makeVariantOption('stable', { moved: 0, pros: ['на 3 заявки меньше переезжает к другим бригадам'], cons: ['на 1 бригаду больше'] }),
+      makeVariantOption('keep', {
+        late: 2,
+        metrics: { ...metrics, unassigned: metrics.unassigned + 2 },
+        cons: ['на 4 клиента без инженера или с опозданием больше'],
+      }),
     ],
     current: null,
+    assignable: false,
+    ...overrides,
+  };
+}
+
+/**
+ * Варианты для срочной заявки URG-001 в 13:00: только у неё диспетчер может отдать заявку конкретной бригаде.
+ * По оптимальному плану её берёт Бригада Белузин, «ничего не менять» оставляет заявку без бригады.
+ */
+export function makeUrgentChoice(overrides: Partial<EventChoice> = {}): EventChoice {
+  const base = makeEventChoice();
+  return {
+    ...base,
+    entry_id: 'tl_3',
+    event: { type: 'urgent', time: '13:00', request: requests()[7], request_id: null, engineer_id: null },
+    variants: [
+      makeVariantOption('optimal', { recommended: true, moved: 1, request_engineer_id: 'E02', pros: ['срочная заявка без опоздания'] }),
+      makeVariantOption('stable', { request_engineer_id: 'E02', cons: ['на 3,0 км больше пробега'] }),
+      makeVariantOption('keep', { request_engineer_id: null, cons: ['срочная заявка остаётся без инженера'] }),
+    ],
+    assignable: true,
     ...overrides,
   };
 }

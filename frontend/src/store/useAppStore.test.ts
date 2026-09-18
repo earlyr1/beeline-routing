@@ -20,9 +20,9 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 import * as api from '../api/client';
-import type { DatasetStatus, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
+import type { DatasetStatus, EventChoice, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
 import { cancelEvent, reassignEvent } from '../lib/events';
-import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem } from '../test/fixtures';
+import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem, makeUrgentChoice, makeVariantOption } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
 
@@ -952,6 +952,27 @@ describe('choice of a variant for an event that breaks the plan', () => {
     expect(api.moveCursor).not.toHaveBeenCalled();
     expect(useAppStore.getState()).toMatchObject({ choice: null, clock: '15:00' });
     expect(useAppStore.getState().state?.version).toBe(9);
+  });
+
+  it('computes one more variant with the request given to the chosen brigade', async () => {
+    useAppStore.getState().setPlanningState(at('13:00'));
+    useAppStore.setState({ choice: makeUrgentChoice() });
+    const withAssign = makeUrgentChoice({ variants: [...makeUrgentChoice().variants, makeVariantOption('assign:E01')] });
+    vi.mocked(api.getTimelineVariants).mockResolvedValue(withAssign);
+    await useAppStore.getState().previewAssign('E01');
+    expect(api.getTimelineVariants).toHaveBeenCalledWith('d_test', 'tl_3', 'E01');
+    expect(useAppStore.getState().choice?.variants.map((option) => option.variant)).toEqual(['optimal', 'stable', 'keep', 'assign:E01']);
+    expect(useAppStore.getState().assignLoading).toBe(false);
+
+    // Окно закрыли, пока считали план: посчитанный вариант его не открывает заново.
+    const response = deferred<EventChoice>();
+    vi.mocked(api.getTimelineVariants).mockReturnValue(response.promise);
+    const computing = useAppStore.getState().previewAssign('E02');
+    await vi.waitFor(() => expect(useAppStore.getState().assignLoading).toBe(true));
+    useAppStore.getState().closeChoice();
+    response.resolve(withAssign);
+    await computing;
+    expect(useAppStore.getState()).toMatchObject({ choice: null, assignLoading: false });
   });
 
   it('keeps the dialog open with an error when the choice fails and closes it on a new day', async () => {

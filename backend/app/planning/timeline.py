@@ -315,14 +315,15 @@ class Timeline:
         self.steps[(walk.prefix, entry_token(entry, variant))] = step
 
     def prune(self, walk: Walk) -> None:
-        """Оставляет в кэше шаги полного прохода и другие стратегии его событий: выбор можно поменять без пересчёта."""
+        """Оставляет в кэше шаги полного прохода и другие стратегии его событий: выбор можно поменять без пересчёта.
+
+        Стратегии не перечисляются: рядом с выбранной остаются и три базовые, и посчитанные «отдать бригаде» —
+        их считают по одной, по запросу диспетчера, и второй раз окно открывается без решателя.
+        """
         if walk.done != len(self.entries):
             return
-        keep = set(walk.keys)
-        for prefix, token in walk.keys:
-            if "@" in token:
-                keep.update((prefix, f"{_token_entry(token)}@{variant}") for variant in VARIANTS)
-        self.steps = {key: step for key, step in self.steps.items() if key in keep}
+        keep = {(prefix, _token_entry(token)) for prefix, token in walk.keys}
+        self.steps = {key: step for key, step in self.steps.items() if (key[0], _token_entry(key[1])) in keep}
 
     def pending_choice(self, base: PlanningSession, cursor: int) -> tuple[Walk, TimelineEntry] | None:
         """Событие, на котором стоит текущее время и которое ждёт выбора, и проход до него."""

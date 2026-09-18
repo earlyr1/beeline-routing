@@ -20,8 +20,8 @@ from app.api.schemas import (
     VariantRequest,
 )
 from app.api.timeline import (
-    NOT_CHOOSABLE_TEXT,
     VariantUnavailable,
+    check_variant,
     ensure_precompute,
     event_choice,
     insert_and_replay,
@@ -271,13 +271,19 @@ def clear_timeline(dataset_id: str, deps: Deps) -> PlanningState:
 
 
 @router.get("/datasets/{dataset_id}/timeline/events/{entry_id}/variants", response_model=EventChoice)
-def get_timeline_variants(dataset_id: str, entry_id: str, deps: Deps) -> EventChoice:
-    """Варианты исправления для «ломающего» события шкалы: для окна выбора и смены выбора."""
+def get_timeline_variants(
+    dataset_id: str, entry_id: str, deps: Deps, assign: str | None = None
+) -> EventChoice:
+    """Варианты исправления для «ломающего» события шкалы: для окна выбора и смены выбора.
+
+    assign — номер бригады: у срочной заявки к трём вариантам добавляется четвёртый, «отдать ей заявку».
+    Такой вариант считается только по этому запросу, поэтому окно открывается без него.
+    """
     record = _record(deps, dataset_id)
     with record.lock:
         _session(record)
     try:
-        return event_choice(record, deps.ingest.planning, entry_id)
+        return event_choice(record, deps.ingest.planning, entry_id, assign)
     except VariantUnavailable as error:
         raise HTTPException(status_code=error.status, detail=str(error)) from error
 
@@ -293,12 +299,13 @@ def put_timeline_variant(dataset_id: str, entry_id: str, body: VariantRequest, d
                 _session(record)
                 entry = record.timeline.find(entry_id)
                 if entry is None:
-                    raise HTTPException(status_code=404, detail=f"Событие {entry_id} не найдено.")
-                if not is_choosable(entry.event):
-                    raise HTTPException(status_code=409, detail=NOT_CHOOSABLE_TEXT)
+                    raise VariantUnavailable(404, f"Событие {entry_id} не найдено.")
+                check_variant(record, entry, body.variant)
                 record.timeline.set_variant(entry_id, body.variant)
             settle(record, ctx)
             return planning_state(record)
+    except VariantUnavailable as error:
+        raise HTTPException(status_code=error.status, detail=str(error)) from error
     finally:
         ensure_precompute(record, ctx, deps.run_background)
 

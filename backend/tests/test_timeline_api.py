@@ -8,6 +8,7 @@ import pytest
 from app.domain.enums import EventType
 from app.domain.models import Event
 from tests.api_helpers import HashGeocoder, make_client, sample_bundle, upload
+from tests.helpers import req
 from tests.llm_helpers import ScriptedProvider, completion, tool_call
 from tests.timeline_helpers import cancel, fcfs_solves, restore
 
@@ -705,6 +706,8 @@ def test_variant_errors(tmp_path, solves):
     assert client.put(f"{base}/timeline/events/tl_9/variant", json={"variant": "keep"}).status_code == 404
     assert client.get(f"{base}/timeline/events/tl_9/variants").status_code == 404
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "best"}).status_code == 422
+    # Строка без номера бригады тоже неизвестна: до решателя она не доходит.
+    assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:"}).status_code == 422
 
 
 def test_legacy_events_and_proposals_apply_the_optimal_variant_without_asking(tmp_path, solves):
@@ -761,6 +764,9 @@ def test_request_reassignment_waits_for_a_variant_and_pins_the_request(tmp_path,
         choice["variants"][2]["summary"]
         == "Бригада пропускает, на что не успевает, остальные маршруты как есть"
     )
+    # Бригаду называет само событие, четвёртого варианта у него нет.
+    assert choice["assignable"] is False
+    assert [option["request_engineer_id"] for option in choice["variants"]] == ["E2", "E2", "E2"]
 
     chosen = choose(client, base, "tl_1", "keep")
 
@@ -835,3 +841,66 @@ def test_changing_an_earlier_choice_replays_a_later_breaking_event_with_its_own_
     # Шаг «Оптимально» в 13:00 уже был в кэше, задержка пересчитана после него и со своей стратегией.
     assert (solves, solves.variants) == (["14:00"], ["stable"])
     assert (("tl_1@optimal",), "tl_2@stable") in cached_steps(deps, base)
+
+
+def urgent(time="12:00", request_id="U1"):
+    return Event(type=EventType.URGENT, time=time, request=req(request_id, 0, 0, "13:00", "17:00"))
+
+
+def test_urgent_request_can_be_given_to_a_named_brigade_and_that_plan_is_counted_on_demand(tmp_path, solves):
+    client, deps, base, background = dataset(tmp_path, solves)
+    added(client, base, urgent())
+
+    background.run()
+
+    # Предподсчёт считает только три базовых варианта: «отдать бригаде» ждёт, пока диспетчер назовёт бригаду.
+    assert cached_steps(deps, base) == {((), f"tl_1@{variant}") for variant in ("optimal", "stable", "keep")}
+    choice = cursor_to(client, base, "17:00")["pending_choice"]
+    assert (choice["assignable"], len(choice["variants"])) == (True, 3)
+    assert choice["variants"][0]["request_engineer_id"] == "E1"
+    solves.clear()
+
+    response = client.get(f"{base}/timeline/events/tl_1/variants", params={"assign": "E2"})
+
+    assert response.status_code == 200, response.text
+    options = response.json()["variants"]
+    assert [option["variant"] for option in options] == ["optimal", "stable", "keep", "assign:E2"]
+    given = options[3]
+    assert (given["title"], given["summary"]) == ("Отдать: Инженер E2", "Выбор диспетчера")
+    assert (given["recommended"], given["compared_to"]) == (False, "optimal")
+    assert given["request_engineer_id"] == "E2"
+    # Посчитан ровно один план, и он лежит в кэше под своим ключом: второй раз окно откроется без решателя.
+    assert (solves, ((), "tl_1@assign:E2") in cached_steps(deps, base)) == (["12:00"], True)
+    solves.clear()
+    # Выбор другого варианта делает проход полным и чистит кэш от лишних веток: посчитанный план бригады
+    # в нём остаётся, и окно второй раз открывается без решателя.
+    choose(client, base, "tl_1", "optimal")
+    assert client.get(f"{base}/timeline/events/tl_1/variants", params={"assign": "E2"}).status_code == 200
+    assert solves == []
+
+    chosen = choose(client, base, "tl_1", "assign:E2")
+
+    assert [(item["status"], item["variant"]) for item in chosen["timeline"]] == [("applied", "assign:E2")]
+    assert next(item for item in chosen["requests"] if item["id"] == "U1")["fixed_engineer_id"] == "E2"
+    assert "U1" in route_ids(chosen, "E2")
+
+
+def test_a_brigade_can_be_named_only_for_an_urgent_request_and_only_from_this_day(tmp_path, solves):
+    client, _, base, background = dataset(tmp_path, solves)
+    added(client, base, unavailable(busy_of(client, base), "13:00"))
+    added(client, base, urgent("14:00"))
+    background.run()
+
+    for response in (
+        client.get(f"{base}/timeline/events/tl_1/variants", params={"assign": "E2"}),
+        client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:E2"}),
+    ):
+        assert (response.status_code, response.json()["detail"]) == (
+            422,
+            "Бригаду можно выбрать только для срочной заявки.",
+        )
+    for response in (
+        client.get(f"{base}/timeline/events/tl_2/variants", params={"assign": "E9"}),
+        client.put(f"{base}/timeline/events/tl_2/variant", json={"variant": "assign:E9"}),
+    ):
+        assert (response.status_code, response.json()["detail"]) == (422, "Инженер E9 не найден.")

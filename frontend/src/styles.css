@@ -1835,7 +1835,7 @@ h4 {
   margin-top: 12px;
 }
 
-/* Окно выбора варианта исправления: поверх всего экрана, три карточки в ряд. */
+/* Окно выбора варианта исправления: поверх всего экрана, карточки в ряд. */
 .choice-overlay {
   position: fixed;
   inset: 0;
@@ -1881,8 +1881,13 @@ h4 {
 
 .choice__cards {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 14px;
+}
+
+/* Четвёртая карточка «отдать бригаде»: окно шире, чтобы четыре карточки остались в ряд. */
+.choice--wide {
+  width: min(1280px, 100%);
 }
 
 .variant {
@@ -1906,6 +1911,46 @@ h4 {
 
 .variant__head p {
   margin: 0;
+}
+
+/* Карточка «отдать бригаде» до расчёта: пунктир, потому что плана за ней ещё нет. */
+.variant--assign {
+  border-style: dashed;
+}
+
+/* Кто берёт заявку в этом варианте: одна строка под названием. */
+.variant__holder {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Цена решения: заголовок над плюсами и минусами карточки «отдать бригаде». */
+.variant__compare {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.variant__same {
+  margin: 0;
+  font-size: 13px;
+}
+
+/* Выбор бригады в карточке без плана: прижат к низу, как кнопка «Выбрать» у остальных. */
+.variant--assign .variant__picker {
+  margin-top: auto;
+}
+
+.variant__picker .brigade-picker {
+  margin-top: 8px;
+}
+
+.variant__waiting {
+  margin: 6px 0 0;
+  font-size: 13px;
 }
 
 .variant__numbers {

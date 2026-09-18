@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { EventType, EventVariant } from '../api/types';
+import type { BaseVariant, EventType } from '../api/types';
 import { makeEventChoice, makePlanningState, makeReassignEvent, makeTimelineItem } from '../test/fixtures';
 import { reassignEvent } from './events';
-import { CHOOSABLE_EVENTS, choiceEvent, VARIANT_TITLES, variantTitle } from './variants';
+import { assignedEngineer, assignVariant, CHOOSABLE_EVENTS, choiceEvent, isAssignVariant, VARIANT_TITLES, variantTitle } from './variants';
 
 describe('variants', () => {
   it('offers variants for a reassignment like for the other breaking events', () => {
@@ -18,11 +18,22 @@ describe('variants', () => {
     expect(variantTitle('stable', 'request_reassigned')).toBe('Минимум перестановок');
     const others: EventType[] = ['urgent', 'engineer_unavailable', 'engineer_transport_changed', 'engineer_delayed'];
     for (const type of others) {
-      for (const variant of Object.keys(VARIANT_TITLES) as EventVariant[]) {
+      for (const variant of Object.keys(VARIANT_TITLES) as BaseVariant[]) {
         expect(variantTitle(variant, type)).toBe(VARIANT_TITLES[variant]);
       }
     }
     expect(variantTitle('keep', 'engineer_delayed')).toBe('Ничего не менять');
+  });
+
+  it('names the variant «отдать заявку бригаде» by the brigade of the day', () => {
+    expect(assignVariant('E02')).toBe('assign:E02');
+    expect(assignedEngineer('assign:E02')).toBe('E02');
+    expect(assignedEngineer('keep')).toBeNull();
+    expect(isAssignVariant('assign:E02')).toBe(true);
+    expect(isAssignVariant('optimal')).toBe(false);
+    expect(variantTitle('assign:E02', 'urgent', makePlanningState().engineers)).toBe('Отдать: Бригада Белузин');
+    // Бригады дня нет под рукой: остаётся номер.
+    expect(variantTitle('assign:E09', 'urgent')).toBe('Отдать: Бригада E09');
   });
 
   describe('choiceEvent', () => {

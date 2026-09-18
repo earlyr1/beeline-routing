@@ -3,21 +3,25 @@
 Спецификация: docs/superpowers/specs/2026-09-17-event-variants-design.md. «Ломающие» события — те, после которых
 есть разные способы спасти день: недоступность, смена транспорта, задержка инженера, срочная заявка и
 переназначение заявки диспетчером. Отмена, возврат и изменение заявки применяются одним планом, как раньше.
+
+У срочной заявки к трём посчитанным заранее вариантам добавляется четвёртый — «отдать заявку названной
+бригаде» (стратегия «assign:<инженер>»). Его считают по запросу диспетчера и сравнивают с «Оптимально по дню»:
+так видно, чего стоит решение отдать заявку не туда, куда её кладёт оптимум.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 
 from app.domain.enums import TRANSPORT_RU, EventType, Priority, ReasonCode, request_label
 from app.domain.models import Event, Plan, Request, Unassigned, Visit
-from app.planning.models import EventChoice, EventVariant, PlanDiff, VariantOption
+from app.planning.models import BaseVariant, EventChoice, EventVariant, PlanDiff, VariantOption
 from app.solvers.assemble import build_plan
 from app.solvers.problem import EngineerState, Problem
 from app.solvers.simulate import simulate_route
 
-VARIANTS: tuple[EventVariant, ...] = ("optimal", "stable", "keep")
+VARIANTS: tuple[BaseVariant, ...] = ("optimal", "stable", "keep")
 BREAKING_EVENTS = frozenset(
     {
         EventType.URGENT,
@@ -30,25 +34,28 @@ BREAKING_EVENTS = frozenset(
 # «Минимум перестановок»: условные 500 км за перенос заявки к другому инженеру вместо 20. Снять заявку всё равно
 # дороже (drop_normal), поэтому заявки пострадавшей бригады уходят другим, а чужие маршруты почти не трогаются.
 STABLE_REASSIGNMENT = 500_000
-VARIANT_TITLES: dict[EventVariant, str] = {
+VARIANT_TITLES: dict[BaseVariant, str] = {
     "optimal": "Оптимально по дню",
     "stable": "Минимум перестановок",
     "keep": "Ничего не менять",
 }
-VARIANT_SUMMARIES: dict[EventVariant, str] = {
+VARIANT_SUMMARIES: dict[BaseVariant, str] = {
     "optimal": "Пересчитать остаток дня целиком",
     "stable": "Чужие маршруты почти не трогаем",
     "keep": "Оставить маршруты как есть",
 }
 # У переназначения заявки «keep» не оставляет всё как есть, а вставляет заявку в маршрут выбранной бригады.
-EVENT_VARIANT_TITLES: dict[EventType, dict[EventVariant, str]] = {
+EVENT_VARIANT_TITLES: dict[EventType, dict[BaseVariant, str]] = {
     EventType.REQUEST_REASSIGNED: {"keep": "Вставить в маршрут"},
 }
-EVENT_VARIANT_SUMMARIES: dict[EventType, dict[EventVariant, str]] = {
+EVENT_VARIANT_SUMMARIES: dict[EventType, dict[BaseVariant, str]] = {
     EventType.REQUEST_REASSIGNED: {
         "keep": "Бригада пропускает, на что не успевает, остальные маршруты как есть"
     },
 }
+# Стратегия «отдать заявку бригаде»: «assign:E07». Бригада называется в заголовке варианта.
+ASSIGN_PREFIX = "assign:"
+ASSIGN_SUMMARY = "Выбор диспетчера"
 KEEP_TEXT = "Вариант «Ничего не менять»: план не пересчитан, заявку никто не забрал."
 INSERT_TITLE = EVENT_VARIANT_TITLES[EventType.REQUEST_REASSIGNED]["keep"]
 INSERT_TEXT = f"Вариант «{INSERT_TITLE}»: план не пересчитан, заявку никто не забрал."
@@ -59,11 +66,49 @@ def is_choosable(event: Event) -> bool:
     return event.type in BREAKING_EVENTS
 
 
-def variant_title(variant: EventVariant, event_type: EventType) -> str:
+def is_assignable(event: Event) -> bool:
+    """Событие, у которого диспетчер может отдать заявку выбранной бригаде.
+
+    Только срочная заявка: остальные «ломающие» события двигают целую пачку заявок, а переназначение само
+    называет бригаду.
+    """
+    return event.type == EventType.URGENT
+
+
+def assign_variant(engineer_id: str) -> EventVariant:
+    """Стратегия «отдать заявку бригаде engineer_id»."""
+    return f"{ASSIGN_PREFIX}{engineer_id}"
+
+
+def assigned_engineer(variant: EventVariant | None) -> str | None:
+    """Бригада стратегии «отдать заявку», если это она; иначе None (в том числе у «assign:» без номера)."""
+    if variant is None or not variant.startswith(ASSIGN_PREFIX):
+        return None
+    return variant[len(ASSIGN_PREFIX) :] or None
+
+
+def choice_request_id(event: Event) -> str | None:
+    """Заявка, о которой событие, если оно об одной заявке: срочная и переназначение. Иначе None."""
+    if event.type == EventType.URGENT:
+        return event.request.id if event.request is not None else None
+    if event.type == EventType.REQUEST_REASSIGNED:
+        return event.request_id
+    return None
+
+
+def variant_title(
+    variant: EventVariant, event_type: EventType, names: Mapping[str, str] | None = None
+) -> str:
+    """Название варианта для диспетчера; у «отдать бригаде» — имя бригады из names (иначе её номер)."""
+    engineer_id = assigned_engineer(variant)
+    if engineer_id is not None:
+        return f"Отдать: {(names or {}).get(engineer_id, engineer_id)}"
     return EVENT_VARIANT_TITLES.get(event_type, {}).get(variant, VARIANT_TITLES[variant])
 
 
 def variant_summary(variant: EventVariant, event_type: EventType) -> str:
+    if assigned_engineer(variant) is not None:
+        return ASSIGN_SUMMARY
     return EVENT_VARIANT_SUMMARIES.get(event_type, {}).get(variant, VARIANT_SUMMARIES[variant])
 
 
@@ -307,36 +352,73 @@ def _compare(option: VariantOption, reference: VariantOption) -> tuple[list[str]
     return pros[:MAX_LINES], cons[:MAX_LINES]
 
 
+def _order(outcome: Outcome) -> int:
+    """Порядок вариантов в окне: три базовых, затем «отдать бригаде»."""
+    return VARIANTS.index(outcome.variant) if outcome.variant in VARIANTS else len(VARIANTS)
+
+
+def _request_engineer(plan: Plan, request_id: str | None) -> str | None:
+    """Бригада, у которой заявка в маршрутах плана; None — заявки в маршрутах нет."""
+    if request_id is None:
+        return None
+    return next(
+        (
+            route.engineer_id
+            for route in plan.routes
+            for visit in route.visits
+            if visit.request_id == request_id
+        ),
+        None,
+    )
+
+
 def build_choice(
     entry_id: str,
     event: Event,
     before: Plan,
     outcomes: Sequence[Outcome],
     current: EventVariant | None,
+    names: Mapping[str, str] | None = None,
 ) -> EventChoice:
-    """Варианты в порядке VARIANTS с рекомендацией и строками «лучше / хуже».
+    """Варианты в порядке VARIANTS с рекомендацией и строками «лучше / хуже»; names — имена бригад по номеру.
 
-    Остальные варианты сравниваются с рекомендованным, рекомендованный — со следующим по ключу рекомендации.
+    Базовые варианты сравниваются с рекомендованным, рекомендованный — со следующим по ключу рекомендации.
+    Вариант «отдать бригаде» идёт последним, в рекомендации не участвует и всегда сравнивается с «Оптимально
+    по дню»: диспетчер видит цену своего решения относительно оптимума дня.
     """
+    request_id = choice_request_id(event)
     options = [
         VariantOption(
             variant=outcome.variant,
-            title=variant_title(outcome.variant, event.type),
+            title=variant_title(outcome.variant, event.type, names),
             summary=variant_summary(outcome.variant, event.type),
             metrics=outcome.plan.metrics,
             late=late_visits(outcome.plan),
             moved=len(outcome.diff.moved),
+            request_engineer_id=_request_engineer(outcome.plan, request_id),
         )
-        for outcome in sorted(outcomes, key=lambda outcome: VARIANTS.index(outcome.variant))
+        for outcome in sorted(outcomes, key=_order)
     ]
-    ranked = sorted(options, key=_rank)
-    best = ranked[0]
+    ranked = sorted((option for option in options if option.variant in VARIANTS), key=_rank)
+    best = ranked[0] if ranked else None
+    optimal = next((option for option in options if option.variant == "optimal"), None)
     described = []
     for option in options:
-        reference = ranked[1] if option is best and len(ranked) > 1 else best
-        pros, cons = _compare(option, reference) if reference is not option else ([], [])
+        if option.variant in VARIANTS:
+            reference = ranked[1] if option is best and len(ranked) > 1 else best
+        else:
+            reference = optimal
+        compared = reference if reference is not None and reference is not option else None
+        pros, cons = _compare(option, compared) if compared is not None else ([], [])
         described.append(
-            option.model_copy(update={"pros": pros, "cons": cons, "recommended": option is best})
+            option.model_copy(
+                update={
+                    "pros": pros,
+                    "cons": cons,
+                    "recommended": option is best,
+                    "compared_to": compared.variant if compared is not None else None,
+                }
+            )
         )
     return EventChoice(
         entry_id=entry_id,
@@ -345,4 +427,5 @@ def build_choice(
         late_before=late_visits(before),
         variants=described,
         current=current,
+        assignable=is_assignable(event),
     )

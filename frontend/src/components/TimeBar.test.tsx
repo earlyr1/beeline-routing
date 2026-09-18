@@ -18,7 +18,7 @@ import * as api from '../api/client';
 import type { PlanningState } from '../api/types';
 import { pinLeft } from '../lib/timeBar';
 import { PLAY_TICK_MS, useAppStore } from '../store/useAppStore';
-import { makeEventChoice, makePlanningState, makeReassignEvent, makeTimeline, makeTimelineItem } from '../test/fixtures';
+import { makeEventChoice, makePlanningState, makeReassignEvent, makeTimeline, makeTimelineItem, makeUrgentChoice } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { TimeBar } from './TimeBar';
 
@@ -233,6 +233,14 @@ describe('TimeBar', () => {
     fireEvent.click(within(events).getByRole('button', { name: 'Варианты…' }));
     expect(openChoice).toHaveBeenCalledWith('tl_2');
     expect(screen.queryByRole('group', { name: 'События 13:00' })).not.toBeInTheDocument();
+  });
+
+  it('names the variant «отдать бригаде» by the brigade that took the request', () => {
+    const timeline = [makeTimelineItem({ id: 'tl_3', event: makeUrgentChoice().event, status: 'applied', choosable: true, variant: 'assign:E02' })];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByRole('button', { name: /Срочная/ }));
+    expect(within(screen.getByRole('group', { name: 'События 13:00' })).getByText('Вариант: Отдать: Бригада Белузин')).toBeInTheDocument();
   });
 
   it('names the kept variant of a reassignment as the insertion into the route and opens its request', () => {

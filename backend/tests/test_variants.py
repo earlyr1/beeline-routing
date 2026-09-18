@@ -12,6 +12,7 @@ from app.planning.variants import (
     STABLE_REASSIGNMENT,
     VARIANTS,
     Outcome,
+    assign_variant,
     build_choice,
     is_choosable,
     late_visits,
@@ -205,14 +206,19 @@ def test_events_that_do_not_break_the_plan_ignore_the_variant(solves):
     assert apply_event(base, cancel, ctx, variant="keep").plan == apply_event(base, cancel, ctx).plan
 
 
-def _plan(unassigned, engineers, km, late=0):
+def _plan(unassigned, engineers, km, late=0, holder=None):
+    """План с метриками для сравнения вариантов; holder — бригада (не E1), к которой попала заявка U1."""
     visits = [
         Visit(request_id=f"L{k}", arrival=600, start=600, end=630, leg_km=1, leg_min=5, late_min=5)
         for k in range(late)
     ]
+    routes = [Route(engineer_id="E1", visits=visits, total_km=km, total_travel_min=0)]
+    if holder is not None:
+        urgent = Visit(request_id="U1", arrival=600, start=600, end=630, leg_km=1, leg_min=5, late_min=0)
+        routes.append(Route(engineer_id=holder, visits=[urgent], total_km=0, total_travel_min=0))
     return Plan(
         solver="ortools",
-        routes=[Route(engineer_id="E1", visits=visits, total_km=km, total_travel_min=0)],
+        routes=routes,
         unassigned=[],
         metrics=Metrics(
             engineers_used=engineers, km_per_engineer={}, total_km=km, assigned=0, unassigned=unassigned
@@ -285,3 +291,34 @@ def test_choice_for_a_reassignment_offers_to_insert_into_the_route():
     ]
     assert variant_title("keep", EventType.URGENT) == "Ничего не менять"
     assert variant_summary("keep", EventType.URGENT) == "Оставить маршруты как есть"
+    # Бригаду выбирают только у срочной заявки: переназначение её и так называет.
+    assert choice.assignable is False
+    assert all(option.request_engineer_id is None for option in choice.variants)
+
+
+def test_choice_adds_giving_the_request_to_a_brigade_as_a_fourth_option_priced_against_the_optimum():
+    before = _plan(0, 5, 100.0)
+    optimal = _plan(0, 5, 110.0, holder="E7")
+    stable = _plan(0, 5, 100.0, holder="E8")
+    keep = _plan(1, 5, 100.0)
+    given = _plan(0, 6, 140.0, holder="E9")
+    outcomes = [
+        Outcome("optimal", optimal, _diff(before, optimal, 2)),
+        Outcome("stable", stable, _diff(before, stable, 1)),
+        Outcome("keep", keep, _diff(before, keep, 0)),
+        Outcome(assign_variant("E9"), given, _diff(before, given, 2)),
+    ]
+    event = Event(type=EventType.URGENT, time="12:00", request=req("U1", 0, 0, "12:00", "13:00"))
+
+    choice = build_choice("tl_1", event, before, outcomes, None, {"E9": "Бригада Зверев"})
+
+    assert choice.assignable is True
+    assert [option.variant for option in choice.variants] == ["optimal", "stable", "keep", "assign:E9"]
+    # Рекомендация считается по трём базовым вариантам: «Минимум перестановок» переносит меньше заявок.
+    assert [option.recommended for option in choice.variants] == [False, True, False, False]
+    assert [option.compared_to for option in choice.variants] == ["stable", "optimal", "stable", "optimal"]
+    assert [option.request_engineer_id for option in choice.variants] == ["E7", "E8", None, "E9"]
+    chosen = choice.variants[3]
+    assert (chosen.title, chosen.summary) == ("Отдать: Бригада Зверев", "Выбор диспетчера")
+    # Цена решения считается от «Оптимально по дню», хотя рекомендован другой вариант.
+    assert (chosen.pros, chosen.cons) == ([], ["на 1 бригаду больше", "на 30,0 км больше"])

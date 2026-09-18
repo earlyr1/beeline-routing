@@ -7,7 +7,7 @@ from app.domain.models import Event
 from app.ingest.geocode import GeoResult
 from app.planning.session import EventRejected, apply_event, geocode_entry
 from app.planning.timeline import Timeline, check_known, entry_token, known_requests, replay_step
-from app.planning.variants import VARIANTS
+from app.planning.variants import VARIANTS, assign_variant
 from tests.helpers import req
 from tests.planning_helpers import busy_engineer, context, new_session
 from tests.timeline_helpers import cancel, fcfs_solves, replay_all, restore
@@ -370,6 +370,28 @@ def test_prune_keeps_the_other_variants_of_chosen_events_and_remove_drops_them(s
     assert {key[1] for key in timeline.steps} == {f"{breaking.id}@{variant}" for variant in VARIANTS}
     timeline.remove(breaking.id)
     assert timeline.steps == {}
+
+
+def test_prune_keeps_the_counted_give_it_to_a_brigade_step(solves):
+    """Шаг «отдать бригаде» считают по запросу диспетчера: полный проход его не выбрасывает.
+
+    Иначе тот же выбор бригады после любого обращения к состоянию считался бы решателем заново.
+    """
+    ctx = context()
+    base = new_session(ctx)
+    timeline = Timeline()
+    (entry,) = _added(
+        timeline, Event(type=EventType.URGENT, time="12:00", request=req("U1", 0, 0, "13:00", "17:00"))
+    )
+    walk = _variants_of(timeline, base, ctx, entry)
+    given = assign_variant("E2")
+    timeline.store(walk, entry, replay_step(walk.session, entry, ctx, 99, given), given)
+    timeline.set_variant(entry.id, "optimal")
+    walk = replay_all(timeline, base, ctx)
+
+    timeline.prune(walk)
+
+    assert {key[1] for key in timeline.steps} == {f"{entry.id}@{variant}" for variant in (*VARIANTS, given)}
 
 
 def test_entry_can_be_created_with_a_variant():

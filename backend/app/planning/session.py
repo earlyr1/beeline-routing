@@ -18,7 +18,15 @@ from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
 from app.planning.models import AppliedEvent, EventVariant, PlanDiff
-from app.planning.variants import STABLE_REASSIGNMENT, insert_plan, is_choosable, keep_plan
+from app.planning.variants import (
+    STABLE_REASSIGNMENT,
+    assigned_engineer,
+    choice_request_id,
+    insert_plan,
+    is_assignable,
+    is_choosable,
+    keep_plan,
+)
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
@@ -137,6 +145,8 @@ def _solve(
     """Оптимизированный план с весами уровня нагрузки и базовый FCFS. Стоимость инженера FCFS не использует.
 
     variant="stable" делает перенос заявки к другому инженеру очень дорогим (вариант «Минимум перестановок»).
+    Остальные стратегии, в том числе «отдать заявку бригаде», ищут с обычными весами уровня нагрузки: заявку
+    к бригаде привязывает закрепление в самой заявке, а не веса.
     С пулом процессов поиск идёт сразу несколькими стратегиями и берётся лучший план; share — сколько поисков
     делят пул одновременно (варианты события считаются вместе).
     """
@@ -405,6 +415,13 @@ def _planned_engineer(plan: Plan, request_id: str) -> str | None:
         ),
         None,
     )
+
+
+def _pin_request(requests: list[Request], request_id: str | None, engineer_id: str) -> None:
+    """Закрепляет заявку за бригадой: решатель не отдаст её другим (Exclusion.FIXED_TO_OTHER)."""
+    for request in requests:
+        if request.id == request_id:
+            request.fixed_engineer_id = engineer_id
 
 
 def _release_pins(requests: list[Request], engineers: list[Engineer]) -> list[Request]:
@@ -676,12 +693,22 @@ def apply_event(
     """
     _check_time(session, event)
     requests, engineers, stored_event = _apply_to_inputs(session, event, ctx)
+    strategy: EventVariant = variant if is_choosable(stored_event) else "optimal"
+    chosen = assigned_engineer(strategy) if is_assignable(stored_event) else None
+    if chosen is not None:
+        # «Отдать заявку бригаде»: закрепляем её до сборки задачи, как это делает переназначение, и дальше
+        # считаем обычным «Оптимально по дню». Событие не отклоняется ни при какой бригаде: цену решения
+        # показывает план — не успевающая бригада оставит заявку или свою соседнюю без инженера. Бригаде,
+        # которая заявку взять не может (нет навыка или транспорта, недоступна), закрепление снимают те же
+        # правила _release_pins и сразу, а не на следующем событии: диспетчер утверждает тот план, который
+        # останется. У остальных закрепление держит заявку у бригады и в следующих событиях.
+        _pin_request(requests, choice_request_id(stored_event), chosen)
+        requests = _release_pins(requests, engineers)
     base = _day_problem(requests, engineers, ctx, session.workload_level, session.lunch_enabled)
     problem = _pinned_problem(base, session, stored_event)
     reassigned = stored_event.type == EventType.REQUEST_REASSIGNED
     if reassigned:
         _check_reachable(problem, stored_event, _label(requests, stored_event.request_id))
-    strategy: EventVariant = variant if is_choosable(stored_event) else "optimal"
     if strategy == "keep":
         unassigned_before = {item.request_id for item in session.plan.unassigned}
         if reassigned:
@@ -691,7 +718,9 @@ def apply_event(
             plan = keep_plan(problem, unassigned_before)
         baseline = FcfsSolver().solve(problem)
     else:
-        # Варианты «ломающего» события считаются одновременно: «Оптимально» и «Минимум перестановок» делят пул.
+        # Варианты «ломающего» события делят пул: «Оптимально» и «Минимум перестановок» считаются одновременно.
+        # «Отдать бригаде» считается один, по запросу диспетчера, но получает такую же долю пула: его цену
+        # диспетчер сравнивает с «Оптимально по дню», а более широкий поиск нашёл бы план не хуже и занизил её.
         share = 2 if is_choosable(stored_event) else 1
         plan, baseline = _solve(
             problem, session.workload_level, ctx.time_limit_s, strategy, pool=ctx.solver_pool, share=share
