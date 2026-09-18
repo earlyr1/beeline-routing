@@ -5,13 +5,22 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
-from app.domain.enums import LEGACY_FOOT, TRANSPORT_RU, EventType, Priority, Skill, Transport
+from app.domain.enums import (
+    LEGACY_FOOT,
+    TRANSPORT_RU,
+    EventType,
+    Priority,
+    Skill,
+    Transport,
+    request_label,
+)
 from app.domain.models import DELAY_RANGE_TEXT, MAX_DELAY_MIN, MIN_DELAY_MIN, Event, Request
 from app.domain.timeutil import HHMM
 from app.domain.validation_text import validation_text
@@ -167,16 +176,28 @@ def resolve_engineer(session: PlanningSession, value: str) -> str:
     raise Unresolved(f"Под «{value}» подходят несколько инженеров: {names}. Уточните, кого вы имеете в виду.")
 
 
+# Во фронте срочная заявка подписана «URG-<номер>», в том числе заявка дня со своим билайновским номером.
+URGENT_LABEL = re.compile(r"urg\s*-\s*(.+)", re.IGNORECASE)
+
+
 def resolve_request(session: PlanningSession, value: str) -> str:
     if session.request(value) is not None:
         return value
+    label = URGENT_LABEL.fullmatch(value.strip())
+    if label is not None:
+        # Диспетчер называет заявку так, как её подписал фронт: номер срочной заявки от подписи не меняется.
+        number = label.group(1).strip()
+        if session.request(number) is not None:
+            return number
     key = _norm(value)
     matches = [request for request in session.requests if key and key in _norm(request.address)]
     if len(matches) == 1:
         return matches[0].id
     if not matches:
         raise Unresolved(f"Заявка «{value}» не найдена.")
-    listed = "; ".join(f"{request.id} ({request.address})" for request in matches[:5])
+    listed = "; ".join(
+        f"{request_label(request.id, request.priority)} ({request.address})" for request in matches[:5]
+    )
     raise Unresolved(f"Под «{value}» подходят несколько заявок: {listed}. Уточните номер.")
 
 
@@ -189,7 +210,8 @@ def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:
     changes = args.model_dump(include=EDITABLE_REQUEST_FIELDS, exclude_none=True)
     if not changes:
         raise Unresolved(
-            f"Не понял, что изменить в заявке {stored.id}. Уточните окно, длительность, адрес или другое поле."
+            f"Не понял, что изменить в заявке {request_label(stored.id, stored.priority)}. "
+            "Уточните окно, длительность, адрес или другое поле."
         )
     if changes.get("asap"):
         # Окно заявки «как можно скорее» задаёт backend, названное окно не используется.
@@ -221,7 +243,7 @@ def _request_update_event(session: PlanningSession, args: RequestUpdateArgs, tim
             update={"window_start": stored.window_start, "window_end": stored.window_end}
         )
     event = Event(type=EventType.REQUEST_UPDATED, time=time, request_id=request_id, request=request)
-    raise Refused(event, window_order_text(request_id))
+    raise Refused(event, window_order_text(request_label(stored.id, stored.priority)))
 
 
 def _build_event(

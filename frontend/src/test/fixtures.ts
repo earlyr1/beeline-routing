@@ -358,6 +358,16 @@ export function makeAsapState(): PlanningState {
   };
 }
 
+/**
+ * День, в котором срочные заявки пришли с данными: у них обычный номер «Билайна», а не URG-…, как у заявки диспетчера.
+ * Диспетчер видит такую заявку как URG-50104, но в событиях и запросах её номер остаётся сырым.
+ */
+export function makeDataUrgentState(ids: string[] = ['50104']): PlanningState {
+  const urgent = new Set(ids);
+  const state = makePlanningState();
+  return { ...state, requests: state.requests.map((item) => (urgent.has(item.id) ? { ...item, priority: 'urgent' } : item)) };
+}
+
 /** Задержка Бригады Арташкин на 150 минут в 13:30, пока она едет к заявке 50104. */
 export function makeDelayEvent(overrides: Partial<PlanEvent> = {}): PlanEvent {
   return {

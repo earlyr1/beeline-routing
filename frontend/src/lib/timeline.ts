@@ -1,5 +1,5 @@
 import type { Engineer, Plan, PlanningState, RouteLunch, ServiceRequest } from '../api/types';
-import { formatWindow, isValidTime, requestWindowPhrase, toMinutes } from './format';
+import { formatWindow, isValidTime, requestLabel, requestWindowPhrase, toMinutes } from './format';
 
 /** Ось по умолчанию 09:00–23:00, расширяется под данные, но не дальше 00:00–24:00. */
 export const AXIS_DEFAULT_FROM = 9 * 60;
@@ -13,6 +13,8 @@ export interface TimeScale {
 
 export interface TimelineBar {
   requestId: string;
+  /** Номер заявки для подписи: у срочной с приставкой «URG-». */
+  requestLabel: string;
   left: number;
   width: number;
   windowLeft: number;
@@ -111,6 +113,7 @@ function buildRow(engineer: Engineer, plan: Plan, scale: TimeScale, requests: Ma
     const windowRight = percent(scale, toMinutes(request?.window_end ?? visit.end));
     return {
       requestId: visit.request_id,
+      requestLabel: requestLabel(visit.request_id, request?.priority),
       left: Math.min(left, 99.5),
       width: Math.max(0.5, right - left),
       windowLeft,

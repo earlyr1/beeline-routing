@@ -18,7 +18,7 @@ import type { ReverseGeocode } from './api/types';
 import { App } from './App';
 import { MAP_HEIGHT, MAP_WIDTH, stubMapContainerSize } from './components/map/leafletTestEnv';
 import { SESSION_DATASET_KEY, useAppStore } from './store/useAppStore';
-import { makeExplanation, makePlanningState } from './test/fixtures';
+import { makeDataUrgentState, makeExplanation, makePlanningState } from './test/fixtures';
 import { resetStore } from './test/store';
 
 stubMapContainerSize();
@@ -215,6 +215,14 @@ describe('App', () => {
     expect(screen.getByText('Кликните по карте, чтобы указать место срочной заявки')).toBeInTheDocument();
     act(() => useAppStore.getState().startPick('edit'));
     expect(screen.getByText('Кликните по карте, чтобы указать новое место заявки 50104')).toBeInTheDocument();
+    expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
+  });
+
+  it('names an urgent request of the day in the hint over the map like the dialog next to it', async () => {
+    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), editingRequestId: '50104', pickMode: true, pickFor: 'edit' });
+    render(<App />);
+    expect(screen.getByRole('heading', { name: 'Изменить заявку URG-50104' })).toBeInTheDocument();
+    expect(screen.getByText('Кликните по карте, чтобы указать новое место заявки URG-50104')).toBeInTheDocument();
     expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
   });
 

@@ -9,7 +9,7 @@ vi.mock('../api/client', async (importOriginal) => {
 import * as api from '../api/client';
 import { cancelEvent, reassignEvent, restoreEvent } from '../lib/events';
 import { useAppStore } from '../store/useAppStore';
-import { makeAsapState, makeExplanation, makePlanningState } from '../test/fixtures';
+import { makeAsapState, makeDataUrgentState, makeExplanation, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { ExplanationCard } from './ExplanationCard';
 
@@ -39,6 +39,14 @@ describe('ExplanationCard', () => {
     fireEvent.click(why);
     expect(useAppStore.getState().whyOpen).toBe(true);
     expect(why).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('names an urgent request of the day with the URG- prefix but asks the server by its raw number', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), selectedRequestId: '50104' });
+    render(<ExplanationCard />);
+    expect(await screen.findByRole('heading', { name: 'Заявка URG-50104' })).toBeInTheDocument();
+    expect(api.getExplanation).toHaveBeenCalledWith('d_test', '50104');
   });
 
   it('shows the error and closes', async () => {

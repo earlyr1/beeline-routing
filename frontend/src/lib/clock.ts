@@ -1,6 +1,6 @@
 import type { Engineer, HHMM, Route, RouteLeg, ServiceRequest, Visit } from '../api/types';
 import type { LngLat } from '../components/map/yandexLoader';
-import { toMinutes } from './format';
+import { requestLabelOf, toMinutes } from './format';
 
 /**
  * Где инженер в момент на часах дня: ещё не выехал, в пути, ждёт у клиента, работает, обедает или закончил день.
@@ -19,7 +19,7 @@ export interface EnginePhase {
 }
 
 /** Фаза инженера по его маршруту и времени на часах; null — визитов нет, и показывать нечего. */
-export function enginePhase(route: Route | undefined, clock: HHMM): EnginePhase | null {
+export function enginePhase(route: Route | undefined, clock: HHMM, requests: Map<string, ServiceRequest>): EnginePhase | null {
   if (!route || route.visits.length === 0) return null;
   const now = toMinutes(clock);
   // Обед идёт между визитами, поэтому он главнее: в его часы инженер не в дороге и не у клиента.
@@ -28,18 +28,20 @@ export function enginePhase(route: Route | undefined, clock: HHMM): EnginePhase 
   }
   for (const [index, visit] of route.visits.entries()) {
     const id = visit.request_id;
+    // В подсказке номер заявки такой же, как везде на экране: у срочной с приставкой «URG-».
+    const label = requestLabelOf(id, requests);
     if (now >= toMinutes(visit.end)) continue;
-    if (now >= toMinutes(visit.start)) return { kind: 'onSite', requestId: id, text: `работает у ${id}`, progress: null };
+    if (now >= toMinutes(visit.start)) return { kind: 'onSite', requestId: id, text: `работает у ${label}`, progress: null };
     const arrival = toMinutes(visit.arrival);
-    if (now >= arrival) return { kind: 'waiting', requestId: id, text: `ждёт у клиента ${id}`, progress: null };
+    if (now >= arrival) return { kind: 'waiting', requestId: id, text: `ждёт у клиента ${label}`, progress: null };
     const departure = arrival - visit.leg_min;
     if (now >= departure) {
       // Приезд не позже выезда: инженер уже на месте назначения.
       const progress = arrival > departure ? (now - departure) / (arrival - departure) : 1;
-      return { kind: 'driving', requestId: id, text: `в пути к ${id}`, progress };
+      return { kind: 'driving', requestId: id, text: `в пути к ${label}`, progress };
     }
     // Между работами бывает пауза: инженер стоит там, где закончил, и ждёт выезда.
-    return { kind: 'before', requestId: id, text: index === 0 ? 'ещё не выехал' : `ждёт выезда к ${id}`, progress: null };
+    return { kind: 'before', requestId: id, text: index === 0 ? 'ещё не выехал' : `ждёт выезда к ${label}`, progress: null };
   }
   return { kind: 'done', requestId: route.visits[route.visits.length - 1].request_id, text: 'работы закончены', progress: null };
 }
@@ -117,7 +119,7 @@ export interface PlaceInput {
 
 /** Фаза инженера и его место на карте: точка, пройденные отрезки и текущий отрезок, разрезанный этой точкой. */
 export function enginePlace({ engineer, route, requests, legs, clock }: PlaceInput): EnginePlace | null {
-  const phase = enginePhase(route, clock);
+  const phase = enginePhase(route, clock, requests);
   if (!phase || !route) return null;
   const now = toMinutes(clock);
   const start: LngLat = [engineer.start_lon, engineer.start_lat];

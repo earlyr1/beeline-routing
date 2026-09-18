@@ -9,7 +9,7 @@ import {
   validateRequestEdit,
   type RequestEditForm,
 } from '../../lib/events';
-import { PRIORITY_LABELS, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
+import { PRIORITY_LABELS, requestLabel, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { AsapToggle } from './AsapToggle';
 import { EquipmentToggle } from './EquipmentToggle';
@@ -65,7 +65,7 @@ function EditRequestForm({ original, engineers }: { original: ServiceRequest; en
   return (
     <div className="dialog dialog--floating" role="dialog" aria-label="Изменить заявку">
       <form noValidate onSubmit={(event) => void submit(event)}>
-        <h3>{`Изменить заявку ${original.id}`}</h3>
+        <h3>{`Изменить заявку ${requestLabel(original.id, original.priority)}`}</h3>
         <label className="field">
           <span>Адрес</span>
           <input value={form.address} onChange={(event) => update('address', event.target.value)} />

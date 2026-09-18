@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { ENGINEER_PALETTE } from '../../lib/colors';
 import { percent } from '../../lib/timeline';
 import { useAppStore } from '../../store/useAppStore';
-import { makeAsapState, makePlanningState } from '../../test/fixtures';
+import { makeAsapState, makeDataUrgentState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { BrigadesTab } from './BrigadesTab';
 import { ComparisonTab } from './ComparisonTab';
@@ -68,6 +68,13 @@ describe('panel tabs', () => {
     expect(screen.getByText('ул.Перовская, д. 42 к 1 · как можно скорее с 13:00 · Аварийные работы')).toBeInTheDocument();
   });
 
+  it('UnassignedTab names an urgent request of the day with the URG- prefix and opens it by its raw number', () => {
+    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(['18754']) });
+    render(<UnassignedTab />);
+    fireEvent.click(screen.getByText('URG-18754'));
+    expect(useAppStore.getState().selectedRequestId).toBe('18754');
+  });
+
   it('UnassignedTab shows an empty message when everything is assigned', () => {
     const state = makePlanningState();
     resetStore({ state: { ...state, plan: { ...state.plan, unassigned: [] } } });
@@ -102,6 +109,15 @@ describe('panel tabs', () => {
     // День начинается в 09:00: раньше подписей часов нет.
     expect(container.querySelectorAll('.timeline__tick')[0]).toHaveTextContent('09:00');
     expect(screen.queryByText('08:00')).not.toBeInTheDocument();
+  });
+
+  it('TimelineTab marks a selected urgent bar as both urgent and selected', () => {
+    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), selectedRequestId: '50104' });
+    render(<TimelineTab />);
+    // Рамки срочности и выделения рисует одно свойство box-shadow: в стилях у них общее правило, здесь важны оба класса.
+    const bar = screen.getByRole('button', { name: 'Заявка URG-50104 14:00–14:45' });
+    expect(bar).toHaveClass('timeline__bar--urgent', 'timeline__bar--selected');
+    expect(bar).toHaveAttribute('title', 'URG-50104: 14:00–14:45, окно 14:00–16:00');
   });
 
   it('TimelineTab draws the now line of every engineer at the clock of the day', () => {

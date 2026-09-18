@@ -72,6 +72,7 @@ export function TimeBar() {
   const pins = timelinePins(state.timeline ?? [], range);
   const openPin = pins.find((pin) => pin.minute === openMinute) ?? null;
   const engineers = byId(state.engineers);
+  const requests = byId(state.requests);
   // События меняют текущий план: в плане до события и во время расчёта их не добавляют, как и с карты.
   const menuLocked = busy || showPrevious;
   // Удаление и смена варианта пересчитывают план: не во время расчёта, фиксации часов, проигрывания и открытого окна выбора.
@@ -113,7 +114,7 @@ export function TimeBar() {
               type="button"
               className={`time-bar__pin time-bar__pin--${pin.status}${pin.minute === openMinute ? ' time-bar__pin--open' : ''}`}
               style={{ left: `${pin.left}%` }}
-              title={pin.items.map((item) => timelineItemTitle(item, engineers)).join('\n')}
+              title={pin.items.map((item) => timelineItemTitle(item, engineers, requests)).join('\n')}
               aria-expanded={pin.minute === openMinute}
               onClick={() => {
                 setMenuOpen(false);
@@ -187,10 +188,10 @@ export function TimeBar() {
                         selectRequest(requestId);
                       }}
                     >
-                      {describeEvent(item.event, engineers)}
+                      {describeEvent(item.event, engineers, requests)}
                     </button>
                   ) : (
-                    <span>{describeEvent(item.event, engineers)}</span>
+                    <span>{describeEvent(item.event, engineers, requests)}</span>
                   )}
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
                   {item.choosable && (

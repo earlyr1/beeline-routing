@@ -199,7 +199,8 @@ def test_request_update_toggles_asap_and_keeps_the_waiting_clock():
 
     with pytest.raises(EventRejected) as same:
         apply_event(kept, update(edited(kept, "R2", window_start="16:00", window_end="17:00"), "08:20"), ctx)
-    assert str(same.value) == "В заявке R2 ничего не изменилось."
+    # Заявка стала срочной, поэтому в сообщении она подписана «URG-».
+    assert str(same.value) == "В заявке URG-R2 ничего не изменилось."
 
     # Снять «как можно скорее» без других изменений: это изменение, окно берётся из запроса.
     off = apply_event(kept, update(edited(kept, "R2", asap=False), "08:20"), ctx)
@@ -384,5 +385,5 @@ def test_restore_after_the_day_ended_speaks_about_asap():
     with pytest.raises(EventRejected) as rejected:
         apply_event(cancelled, Event(type=EventType.RESTORE, time="18:30", request_id="U1"), ctx)
     assert str(rejected.value) == (
-        "Заявка U1 как можно скорее с 13:00: смены закончились в 18:00, вернуть её в план нельзя."
+        "Заявка URG-U1 как можно скорее с 13:00: смены закончились в 18:00, вернуть её в план нельзя."
     )

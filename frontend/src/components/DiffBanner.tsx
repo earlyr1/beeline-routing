@@ -17,8 +17,9 @@ export function DiffBanner() {
 
   const diff = state.last_diff;
   const engineers = byId(state.engineers);
+  const requests = byId(state.requests);
   const last = state.events[state.events.length - 1];
-  const lastText = last ? describeEvent(last.event, engineers) : null;
+  const lastText = last ? describeEvent(last.event, engineers, requests) : null;
   // Изменения всегда относятся к последнему применённому событию; после перехода часов назад заголовок говорит, на какое время план.
   const back = Boolean(move?.back);
   const title = back ? `План на ${state.cursor}` : (lastText ?? 'План перестроен');
@@ -27,8 +28,8 @@ export function DiffBanner() {
   const after = diff.metrics_after;
   const shifts = diff.time_shifts.filter((item) => item.delta_min !== 0).length;
   const forecast = diff.delay_forecast ?? null;
-  const forecastText = forecast ? forecastLines(forecast, byId(state.requests), engineers) : [];
-  const lateTitle = forecast ? lateVisitsTitle(forecast) : '';
+  const forecastText = forecast ? forecastLines(forecast, requests, engineers) : [];
+  const lateTitle = forecast ? lateVisitsTitle(forecast, requests) : '';
   const forecastWarns = forecast !== null && (forecast.late_without_replan.length > 0 || forecast.overtime_without_replan_min > 0);
 
   return (

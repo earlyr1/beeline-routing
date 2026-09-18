@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Engineer, Route, RouteLeg, ServiceRequest } from '../api/types';
-import { makePlanningState, makeRouteGeometry } from '../test/fixtures';
+import { makeDataUrgentState, makePlanningState, makeRouteGeometry } from '../test/fixtures';
 import { enginePhase, enginePlace, pointAlong, requestClockStatus, splitAlong, type PlaceInput } from './clock';
 import { byId, straightLegs } from './planView';
 
@@ -16,7 +16,7 @@ const engineerOf = (engineerId: string): Engineer => {
 
 const routeOf = (engineerId: string): Route | undefined => state.plan.routes.find((route) => route.engineer_id === engineerId);
 
-const phase = (engineerId: string, clock: string) => enginePhase(routeOf(engineerId), clock);
+const phase = (engineerId: string, clock: string) => enginePhase(routeOf(engineerId), clock, requests);
 
 function place(engineerId: string, clock: string, patch: Partial<PlaceInput> = {}) {
   const engineer = engineerOf(engineerId);
@@ -117,6 +117,15 @@ describe('enginePhase', () => {
     expect(phase('E01', '13:00')?.kind).toBe('driving');
   });
 
+  it('в подсказке номер срочной заявки дня идёт с приставкой URG-, а сама фаза держит сырой номер', () => {
+    const urgent = byId(makeDataUrgentState().requests);
+    const driving = enginePhase(routeOf('E01'), '13:00', urgent);
+    expect(driving).toEqual({ kind: 'driving', requestId: '50104', text: 'в пути к URG-50104', progress: 0 });
+    expect(enginePhase(routeOf('E01'), '14:30', urgent)?.text).toBe('работает у URG-50104');
+    // Обычная заявка остаётся со своим номером.
+    expect(enginePhase(routeOf('E01'), '10:30', urgent)?.text).toBe('работает у 74198');
+  });
+
   it('обед главнее дороги и работы', () => {
     expect(phase('E01', '16:00')).toEqual({ kind: 'lunch', requestId: null, text: 'обед', progress: null });
     expect(phase('E02', '14:30')?.kind).toBe('lunch');
@@ -138,13 +147,13 @@ describe('enginePhase', () => {
       total_travel_min: 20,
       lunch: null,
     };
-    expect(enginePhase(route, '12:00')).toEqual({ kind: 'before', requestId: 'B', text: 'ждёт выезда к B', progress: null });
-    expect(enginePhase(route, '12:50')?.kind).toBe('driving');
+    expect(enginePhase(route, '12:00', requests)).toEqual({ kind: 'before', requestId: 'B', text: 'ждёт выезда к B', progress: null });
+    expect(enginePhase(route, '12:50', requests)?.kind).toBe('driving');
   });
 
   it('без маршрута и без визитов фазы нет', () => {
     expect(phase('E03', '13:00')).toBeNull();
-    expect(enginePhase(undefined, '13:00')).toBeNull();
+    expect(enginePhase(undefined, '13:00', requests)).toBeNull();
   });
 });
 

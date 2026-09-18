@@ -274,7 +274,8 @@ function saveDatasetId(datasetId: string | null): void {
 /** Сообщение об отклонённых событиях шкалы для всплывающей ошибки. */
 function rejectedMessage(items: TimelineItem[], state: PlanningState): string {
   const engineers = byId(state.engineers);
-  return items.map((item) => rejectedNotice(item, engineers)).join(' ');
+  const requests = byId(state.requests);
+  return items.map((item) => rejectedNotice(item, engineers, requests)).join(' ');
 }
 
 /** Поколение сессии: растёт при новой загрузке и при «Другой файл». Ответы прошлых поколений игнорируются. */

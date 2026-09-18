@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { formatSigned } from '../lib/format';
+import { formatSigned, requestLabelOf } from '../lib/format';
 import { byId, displayedPlan, routeSummary } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 import { EngineerLink } from './EngineerLink';
@@ -57,7 +57,7 @@ function RequestWhy({ requestId }: { requestId: string }) {
   const link = (engineerId: string) => <EngineerLink engineerId={engineerId} name={engineers.get(engineerId)?.name ?? engineerId} />;
 
   return (
-    <Shell eyebrow="Почему так" title={`Заявка ${requestId}`}>
+    <Shell eyebrow="Почему так" title={`Заявка ${requestLabelOf(requestId, byId(state.requests))}`}>
       {showPrevious && <p className="note">Объяснение относится к текущему плану, после события.</p>}
       {loading && <p className="muted">Загружаем объяснение…</p>}
       {error && <p className="error-text">{error}</p>}

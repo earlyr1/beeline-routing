@@ -11,7 +11,7 @@ import type {
   Unassigned,
   Visit,
 } from '../api/types';
-import { formatDuration, formatKm, toMinutes } from './format';
+import { formatDuration, formatKm, requestLabel, toMinutes } from './format';
 
 export interface AssignmentInfo {
   engineerId: string;
@@ -132,6 +132,9 @@ export function routeRows({ stops, lunch }: Pick<RouteSummary, 'stops' | 'lunch'
   return rows;
 }
 
+/** Номер визита в тексте объяснения: у срочной заявки с приставкой «URG-», как и везде на экране. */
+const stopLabel = (stop: RouteStop) => requestLabel(stop.visit.request_id, stop.request?.priority);
+
 function orderSentence(stops: RouteStop[], totalKm: number, planKm: number): string {
   let head = `Маршрут ${formatKm(totalKm)}`;
   if (planKm > 0) head += ` — ${Math.round((totalKm / planKm) * 100)}% пробега всего плана`;
@@ -146,17 +149,17 @@ function orderSentence(stops: RouteStop[], totalKm: number, planKm: number): str
 
 function windowSentence(stops: RouteStop[]): string {
   const late = stops
-    .map((stop) => ({ id: stop.visit.request_id, minutes: Math.max(stop.visit.late_min, -(stop.slackMin ?? 0)) }))
+    .map((stop) => ({ id: stopLabel(stop), minutes: Math.max(stop.visit.late_min, -(stop.slackMin ?? 0)) }))
     .filter((item) => item.minutes > 0);
   if (late.length > 0) {
     return `С опозданием к окну: ${late.map((item) => `${item.id} на ${formatDuration(item.minutes)}`).join(', ')}.`;
   }
   const early = stops.filter((stop) => stop.request && toMinutes(stop.visit.start) < toMinutes(stop.request.window_start));
-  if (early.length > 0) return `Раньше окна начинаются визиты: ${early.map((stop) => stop.visit.request_id).join(', ')}.`;
+  if (early.length > 0) return `Раньше окна начинаются визиты: ${early.map(stopLabel).join(', ')}.`;
   let tightest: { id: string; slack: number } | null = null;
   for (const stop of stops) {
     if (stop.slackMin !== null && (tightest === null || stop.slackMin < tightest.slack)) {
-      tightest = { id: stop.visit.request_id, slack: stop.slackMin };
+      tightest = { id: stopLabel(stop), slack: stop.slackMin };
     }
   }
   if (!tightest) return 'Все визиты начинаются внутри окон.';
@@ -172,7 +175,7 @@ function shiftSentence(engineer: Engineer, endOfWork: HHMM): string {
 }
 
 function pinnedSentence(stops: RouteStop[]): string | null {
-  const pinned = stops.filter((stop) => stop.visit.pinned).map((stop) => stop.visit.request_id);
+  const pinned = stops.filter((stop) => stop.visit.pinned).map(stopLabel);
   if (pinned.length === 0) return null;
   if (pinned.length === 1) return `Визит ${pinned[0]} начат до события и закреплён: перепланирование его не меняет.`;
   return `Визиты ${pinned.join(', ')} начаты до события и закреплены: перепланирование их не меняет.`;

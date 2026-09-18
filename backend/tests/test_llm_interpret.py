@@ -6,6 +6,7 @@ from app.llm.client import LlmResult, ToolCall
 from app.llm.interpret import NOTHING_FOUND, interpret
 from app.llm.prompt import build_messages
 from app.planning.session import apply_event
+from tests.helpers import req
 from tests.llm_helpers import ids, named_session
 from tests.planning_helpers import context, day_requests, new_session
 
@@ -490,3 +491,70 @@ def test_prompt_and_nothing_found_hint_mention_transport_change():
     assert "propose_engineer_transport_change" in system["content"]
     assert '"transport": "car"' in user["content"]
     assert "смена транспорта" in NOTHING_FOUND
+
+
+def urgent_day_session(ctx):
+    """День со срочной заявкой Билайна 57866: во фронте она подписана «URG-57866», номер остаётся прежним."""
+    urgent = req("57866", 1, 1, "13:00", "15:00", priority=Priority.URGENT)
+    return new_session(ctx=ctx, requests=[*day_requests(), urgent])
+
+
+def test_urgent_request_is_found_by_the_shown_urg_number():
+    ctx = context()
+    session = urgent_day_session(ctx)
+    out = run(
+        [
+            ToolCall("propose_cancel", {"request_id": "URG-57866", "rationale": "Клиент отказался"}),
+            ToolCall(
+                "propose_cancel", {"request_id": " urg - 57866 ", "time": "13:00", "rationale": "Отмена"}
+            ),
+            ToolCall("propose_cancel", {"request_id": "URG-99999", "rationale": "Отмена"}),
+        ],
+        ctx=ctx,
+        session=session,
+    )
+    assert out.clarifications == ["Заявка «URG-99999» не найдена."]
+    assert [(d.event.request_id, d.event.time, d.error) for d in out.drafts] == [
+        ("57866", 0, None),
+        ("57866", 780, None),
+    ]
+
+
+def test_urgent_request_from_chat_is_still_found_by_its_own_number():
+    ctx = context()
+    from_chat = req("URG-AI-001", 1, 1, "13:00", "15:00", priority=Priority.URGENT).model_copy(
+        update={"address": "Город Москва, ул.Таганская, д. 3"}
+    )
+    session = new_session(ctx=ctx, requests=[*day_requests(), from_chat])
+    out = run(
+        [ToolCall("propose_cancel", {"request_id": "URG-AI-001", "rationale": "Авария устранена"})],
+        ctx=ctx,
+        session=session,
+    )
+    assert out.clarifications == []
+    assert [(d.event.request_id, d.error) for d in out.drafts] == [("URG-AI-001", None)]
+
+
+def test_assistant_answers_sign_an_urgent_request_of_the_day():
+    ctx = context()
+    session = urgent_day_session(ctx)
+    out = run(
+        [
+            ToolCall("propose_request_update", {"request_id": "57866", "rationale": "Что-то поменять"}),
+            ToolCall("propose_cancel", {"request_id": "адрес", "rationale": "Отмена"}),
+            ToolCall(
+                "propose_request_update",
+                {"request_id": "57866", "window_start": "16:00", "window_end": "16:00", "rationale": "Окно"},
+            ),
+        ],
+        ctx=ctx,
+        session=session,
+    )
+    assert out.clarifications == [
+        "Не понял, что изменить в заявке URG-57866. Уточните окно, длительность, адрес или другое поле.",
+        "Под «адрес» подходят несколько заявок: R1 (адрес R1); R2 (адрес R2); R3 (адрес R3); "
+        "URG-57866 (адрес 57866). Уточните номер.",
+    ]
+    assert [(d.event.request_id, d.error) for d in out.drafts] == [
+        ("57866", "Конец окна заявки URG-57866 должен быть позже начала.")
+    ]

@@ -3,7 +3,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { unavailableEvent } from '../lib/events';
 import { percent } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
-import { makeAsapState, makeDelayEvent, makePlanningState, makeReassignEvent, makeTimelineItem, makeTransportChangeEvent } from '../test/fixtures';
+import {
+  makeAsapState,
+  makeDataUrgentState,
+  makeDelayEvent,
+  makePlanningState,
+  makeReassignEvent,
+  makeTimelineItem,
+  makeTransportChangeEvent,
+} from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { RouteCard } from './RouteCard';
 
@@ -37,6 +45,15 @@ describe('RouteCard', () => {
     expect(cells(rows[0])).toEqual(['1', '74198Закреплена', '10:00–12:00', '09:35', '10:00', '120 мин', '6,1 км']);
     expect(cells(rows[3])).toEqual(['4', '46393', '15:00–17:00', '15:10', '15:10', '110 мин', '3,9 км']);
     expect(cells(rows[4])).toEqual(['', 'Обед', '15:55–16:40']);
+  });
+
+  it('names an urgent visit of the day with the URG- prefix and opens it by its raw number', () => {
+    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), selectedEngineerId: 'E01' });
+    render(<RouteCard />);
+    const urgent = bodyRows()[2];
+    expect(cells(urgent)[1]).toBe('URG-50104');
+    fireEvent.click(urgent);
+    expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
   it('lists the lunch among the visits in time order and the lunch row opens nothing', () => {

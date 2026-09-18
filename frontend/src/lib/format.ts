@@ -156,6 +156,27 @@ export function shortAddress(address: string): string {
   return address.replace(/^(г\.\s*)?(Город\s+)?Москва,\s*/u, '').replace(/,\s*кв\.\s*\S+\s*$/u, '');
 }
 
+/** Приставка к номеру срочной заявки: заявки дня приходят с обычным номером «Билайна», созданные диспетчером уже с ней. */
+const URGENT_PREFIX = 'URG-';
+
+/** Заявка, от которой подписи номера нужен только приоритет. */
+interface RequestPriority {
+  priority: Priority;
+}
+
+/**
+ * Номер заявки для диспетчера: у срочной впереди «URG-», у обычной номер как есть.
+ * Приставка только для чтения: в событиях, запросах к серверу и ключах стора номер остаётся сырым.
+ */
+export function requestLabel(id: string, priority: Priority | undefined): string {
+  return priority === 'urgent' && !id.startsWith(URGENT_PREFIX) ? `${URGENT_PREFIX}${id}` : id;
+}
+
+/** То же по одному номеру: приоритет берём из заявок дня, незнакомый номер остаётся как есть. */
+export function requestLabelOf(id: string, requests: ReadonlyMap<string, RequestPriority>): string {
+  return requestLabel(id, requests.get(id)?.priority);
+}
+
 /** Название бригады для подписи «← Бригада …»: в выгрузках имя уже начинается со слова «Бригада», и оно не повторяется. */
 export function brigadeName(name: string): string {
   return /^бригада\s/iu.test(name) ? name : `Бригада ${name}`;

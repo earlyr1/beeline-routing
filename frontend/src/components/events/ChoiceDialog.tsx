@@ -107,8 +107,9 @@ export function ChoiceDialog() {
 
   if (!open) return null;
   const engineers = byId(state?.engineers ?? []);
+  const requests = byId(state?.requests ?? []);
   // У переназначения заголовок называет и бригаду, от которой уходит заявка.
-  const title = choice ? describeEvent(state ? choiceEvent(choice, state) : choice.event, engineers) : 'Событие дня';
+  const title = choice ? describeEvent(state ? choiceEvent(choice, state) : choice.event, engineers, requests) : 'Событие дня';
 
   return (
     <div className="choice-overlay">

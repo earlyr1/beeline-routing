@@ -1,4 +1,4 @@
-import type { Engineer, EventType, HHMM, PlanningState, TimelineItem, TimelineStatus } from '../api/types';
+import type { Engineer, EventType, HHMM, PlanningState, ServiceRequest, TimelineItem, TimelineStatus } from '../api/types';
 import { describeEvent } from './events';
 import { fromMinutes, isValidTime, toMinutes } from './format';
 import { percent, type TimeScale } from './timeline';
@@ -27,13 +27,13 @@ export function timelineStatusText(item: TimelineItem): string {
 }
 
 /** Подсказка отметки: описание события и его статус. */
-export function timelineItemTitle(item: TimelineItem, engineers: Map<string, Engineer>): string {
-  return `${describeEvent(item.event, engineers)} · ${timelineStatusText(item)}`;
+export function timelineItemTitle(item: TimelineItem, engineers: Map<string, Engineer>, requests: Map<string, ServiceRequest>): string {
+  return `${describeEvent(item.event, engineers, requests)} · ${timelineStatusText(item)}`;
 }
 
 /** Сообщение, когда сервер отклонил событие шкалы, пока считал планы впереди. */
-export function rejectedNotice(item: TimelineItem, engineers: Map<string, Engineer>): string {
-  return `Событие ${describeEvent(item.event, engineers)} отклонено: ${item.reason ?? 'причина не указана'}`;
+export function rejectedNotice(item: TimelineItem, engineers: Map<string, Engineer>, requests: Map<string, ServiceRequest>): string {
+  return `Событие ${describeEvent(item.event, engineers, requests)} отклонено: ${item.reason ?? 'причина не указана'}`;
 }
 
 /** Границы ползунка часов в минутах: от начала шкалы дня до её конца, но не позже 23:59. */

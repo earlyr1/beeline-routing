@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import type { ServiceRequest } from '../api/types';
-import { makeAsapRequest, makeDelayEvent, makeDelayForecast, makePlanningState, makeReassignEvent, makeRequestUpdateEvent } from '../test/fixtures';
+import {
+  makeAsapRequest,
+  makeDataUrgentState,
+  makeDelayEvent,
+  makeDelayForecast,
+  makePlanningState,
+  makeReassignEvent,
+  makeRequestUpdateEvent,
+} from '../test/fixtures';
 import {
   BEFORE_SHIFTS_HINT,
   beforeShiftsHint,
@@ -169,11 +177,28 @@ describe('events', () => {
 
   it('describes applied events for the dispatcher', () => {
     const engineers = byId(makePlanningState().engineers);
-    expect(describeEvent(unavailableEvent('E03', '13:00'), engineers)).toBe('Инженер недоступен: Бригада Комарь с 13:00');
-    expect(describeEvent(cancelEvent('10135', '09:30'), engineers)).toBe('Отмена заявки 10135 в 09:30');
+    const requests = byId(makePlanningState().requests);
+    expect(describeEvent(unavailableEvent('E03', '13:00'), engineers, requests)).toBe('Инженер недоступен: Бригада Комарь с 13:00');
+    expect(describeEvent(cancelEvent('10135', '09:30'), engineers, requests)).toBe('Отмена заявки 10135 в 09:30');
     const urgent = makePlanningState().events[2].event;
-    expect(describeEvent(urgent, engineers)).toBe('Срочная заявка URG-001 в 13:00');
-    expect(describeEvent({ ...urgent, request: makeAsapRequest() }, engineers)).toBe('Срочная заявка URG-002 как можно скорее, 13:00');
+    expect(describeEvent(urgent, engineers, requests)).toBe('Срочная заявка URG-001 в 13:00');
+    expect(describeEvent({ ...urgent, request: makeAsapRequest() }, engineers, requests)).toBe('Срочная заявка URG-002 как можно скорее, 13:00');
+  });
+
+  it('names an urgent request of the day with the URG- prefix, while the event keeps the raw number', () => {
+    const state = makeDataUrgentState();
+    const engineers = byId(state.engineers);
+    const requests = byId(state.requests);
+    const cancel = cancelEvent('50104', '13:30');
+    expect(cancel.request_id).toBe('50104');
+    expect(describeEvent(cancel, engineers, requests)).toBe('Отмена заявки URG-50104 в 13:30');
+    expect(describeEvent(restoreEvent('50104', '13:30'), engineers, requests)).toBe('Возврат заявки URG-50104 в 13:30');
+    expect(describeEvent(reassignEvent('50104', 'E02', '13:30'), engineers, requests)).toBe(
+      'Переназначение заявки URG-50104 → Бригада Белузин с 13:30',
+    );
+    // Обычная заявка остаётся со своим номером, заявка диспетчера не получает приставку дважды.
+    expect(describeEvent(cancelEvent('46393', '13:30'), engineers, requests)).toBe('Отмена заявки 46393 в 13:30');
+    expect(describeEvent(cancelEvent('URG-001', '13:30'), engineers, requests)).toBe('Отмена заявки URG-001 в 13:30');
   });
 
   it('builds a transport change event with the new transport only', () => {
@@ -190,9 +215,10 @@ describe('events', () => {
 
   it('describes a transport change with and without the previous transport', () => {
     const engineers = byId(makePlanningState().engineers);
+    const requests = byId(makePlanningState().requests);
     const applied = { ...transportChangeEvent('E01', 'bike', '13:30'), previous_transport: 'car' as const };
-    expect(describeEvent(applied, engineers)).toBe('Смена транспорта: Бригада Арташкин, Автомобиль → Велосипед с 13:30');
-    expect(describeEvent(transportChangeEvent('E03', 'bike', '14:00'), engineers)).toBe('Смена транспорта: Бригада Комарь на Велосипед с 14:00');
+    expect(describeEvent(applied, engineers, requests)).toBe('Смена транспорта: Бригада Арташкин, Автомобиль → Велосипед с 13:30');
+    expect(describeEvent(transportChangeEvent('E03', 'bike', '14:00'), engineers, requests)).toBe('Смена транспорта: Бригада Комарь на Велосипед с 14:00');
   });
 
   it('suggests a bike instead of a car and a car instead of anything else', () => {
@@ -427,13 +453,14 @@ describe('request update', () => {
 
   it('describes an applied request update with its changes and a client event without them', () => {
     const engineers = byId(state.engineers);
-    expect(describeEvent(makeRequestUpdateEvent(), engineers)).toBe(
+    const requests = byId(state.requests);
+    expect(describeEvent(makeRequestUpdateEvent(), engineers, requests)).toBe(
       'Изменена заявка 50104 с 13:30: окно 14:00–16:00 → 15:00–17:00, длительность 45 → 60 мин',
     );
-    expect(describeEvent(makeRequestUpdateEvent({ previous_request: null }), engineers)).toBe('Изменена заявка 50104 с 13:30');
+    expect(describeEvent(makeRequestUpdateEvent({ previous_request: null }), engineers, requests)).toBe('Изменена заявка 50104 с 13:30');
     const previous = makeRequestUpdateEvent().previous_request!;
     const asap = makeRequestUpdateEvent({ request: { ...previous, asap: true, window_start: '13:30', window_end: '22:00' } });
-    expect(describeEvent(asap, engineers)).toBe('Изменена заявка 50104 с 13:30: как можно скорее');
+    expect(describeEvent(asap, engineers, requests)).toBe('Изменена заявка 50104 с 13:30: как можно скорее');
     expect(EVENT_LABELS.request_updated).toBe('Изменение заявки');
   });
 });
@@ -465,8 +492,8 @@ describe('engineer delay', () => {
   });
 
   it('describes a delay with the engineer name, the minutes and the time', () => {
-    expect(describeEvent(makeDelayEvent(), engineers)).toBe('Задержка: Бригада Арташкин на 150 мин с 13:30');
-    expect(describeEvent(delayEvent('E99', 15, '14:00'), engineers)).toBe('Задержка: E99 на 15 мин с 14:00');
+    expect(describeEvent(makeDelayEvent(), engineers, requests)).toBe('Задержка: Бригада Арташкин на 150 мин с 13:30');
+    expect(describeEvent(delayEvent('E99', 15, '14:00'), engineers, requests)).toBe('Задержка: E99 на 15 мин с 14:00');
   });
 
   it('forecasts how late the clients would be without replanning', () => {
@@ -504,6 +531,7 @@ describe('engineer delay', () => {
 describe('request reassignment', () => {
   const state = makePlanningState();
   const engineers = byId(state.engineers);
+  const requests = byId(state.requests);
   const requestOf = (id: string) => state.requests.find((request) => request.id === id) as ServiceRequest;
   const engineerOf = (id: string) => engineers.get(id)!;
 
@@ -519,11 +547,11 @@ describe('request reassignment', () => {
   });
 
   it('describes a reassignment from the previous brigade and one without it', () => {
-    expect(describeEvent(makeReassignEvent(), engineers)).toBe('Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:30');
+    expect(describeEvent(makeReassignEvent(), engineers, requests)).toBe('Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:30');
     // Заявка была без бригады или событие ещё не применено: прежней бригады нет, имя новой не склоняется.
-    expect(describeEvent(makeReassignEvent({ previous_engineer_id: null }), engineers)).toBe('Переназначение заявки 50104 → Бригада Белузин с 13:30');
-    expect(describeEvent(reassignEvent('18754', 'E01', '14:00'), engineers)).toBe('Переназначение заявки 18754 → Бригада Арташкин с 14:00');
-    expect(describeEvent(makeReassignEvent({ engineer_id: 'E99', previous_engineer_id: 'E98' }), engineers)).toBe(
+    expect(describeEvent(makeReassignEvent({ previous_engineer_id: null }), engineers, requests)).toBe('Переназначение заявки 50104 → Бригада Белузин с 13:30');
+    expect(describeEvent(reassignEvent('18754', 'E01', '14:00'), engineers, requests)).toBe('Переназначение заявки 18754 → Бригада Арташкин с 14:00');
+    expect(describeEvent(makeReassignEvent({ engineer_id: 'E99', previous_engineer_id: 'E98' }), engineers, requests)).toBe(
       'Переназначение заявки 50104: E98 → E99 с 13:30',
     );
   });

@@ -9,6 +9,8 @@ import {
   fromMinutes,
   isValidTime,
   laterTime,
+  requestLabel,
+  requestLabelOf,
   requestWindowPhrase,
   requestWindowText,
   shortAddress,
@@ -71,6 +73,25 @@ describe('format', () => {
     expect(capitalize(requestWindowPhrase(windowed))).toBe('Окно 14:00–16:00');
     expect(capitalize(requestWindowPhrase(asap))).toBe('Как можно скорее с 13:00');
     expect(capitalize('')).toBe('');
+  });
+
+  it('marks the number of an urgent request with «URG-» and leaves the rest as it is', () => {
+    expect(requestLabel('57866', 'urgent')).toBe('URG-57866');
+    expect(requestLabel('57866', 'normal')).toBe('57866');
+    // Заявки нет в дне: приоритет неизвестен, номер остаётся как есть.
+    expect(requestLabel('57866', undefined)).toBe('57866');
+    // Заявка диспетчера приходит уже с приставкой, и второй раз она не добавляется.
+    expect(requestLabel('URG-M3K7P', 'urgent')).toBe('URG-M3K7P');
+  });
+
+  it('takes the priority of a request of the day by its number', () => {
+    const requests = new Map([
+      ['57866', { priority: 'urgent' as const }],
+      ['50104', { priority: 'normal' as const }],
+    ]);
+    expect(requestLabelOf('57866', requests)).toBe('URG-57866');
+    expect(requestLabelOf('50104', requests)).toBe('50104');
+    expect(requestLabelOf('99999', requests)).toBe('99999');
   });
 
   it('shortens Moscow addresses and drops the flat', () => {

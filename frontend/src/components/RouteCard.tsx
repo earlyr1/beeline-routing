@@ -5,6 +5,7 @@ import {
   formatKm,
   formatWindow,
   plural,
+  requestLabel,
   requestWindowText,
   SKILL_LABELS,
   toMinutes,
@@ -71,6 +72,7 @@ export function RouteCard() {
     .filter((item) => item.event.engineer_id === engineer.id || item.event.previous_engineer_id === engineer.id)
     .reverse();
   const engineers = byId(state.engineers);
+  const requests = byId(state.requests);
 
   return (
     <section className="explanation route-card" aria-label="Бригада">
@@ -168,7 +170,7 @@ export function RouteCard() {
                 <tr key={stop.visit.request_id} className="route-card__row" onClick={() => selectRequest(stop.visit.request_id)}>
                   <td>{stop.order}</td>
                   <td>
-                    <strong>{stop.visit.request_id}</strong>
+                    <strong>{requestLabel(stop.visit.request_id, stop.request?.priority)}</strong>
                     {stop.visit.pinned && <span className="badge">Закреплена</span>}
                   </td>
                   <td>{stop.request ? requestWindowText(stop.request) : '—'}</td>
@@ -190,7 +192,7 @@ export function RouteCard() {
               <li key={item.id}>
                 <span className="brigade-events__time">{item.event.time}</span>{' '}
                 <span>
-                  {describeEvent(item.event, engineers)}{' '}
+                  {describeEvent(item.event, engineers, requests)}{' '}
                   <span className={`brigade-events__status brigade-events__status--${item.status}`}>{`· ${timelineStatusText(item)}`}</span>
                 </span>
               </li>

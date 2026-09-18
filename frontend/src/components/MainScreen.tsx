@@ -1,3 +1,4 @@
+import { requestLabel } from '../lib/format';
 import { useAppStore } from '../store/useAppStore';
 import { DiffBanner } from './DiffBanner';
 import { ErrorToast } from './ErrorToast';
@@ -17,6 +18,10 @@ export function MainScreen() {
   const pickMode = useAppStore((s) => s.pickMode);
   const pickFor = useAppStore((s) => s.pickFor);
   const editingRequestId = useAppStore((s) => s.editingRequestId);
+  // Номер заявки в подсказке такой же, как в карточке и в диалоге: у срочной заявки дня с приставкой «URG-».
+  const editingRequestLabel = useAppStore((s) =>
+    s.editingRequestId === null ? null : requestLabel(s.editingRequestId, s.state?.requests.find((item) => item.id === s.editingRequestId)?.priority),
+  );
   const delayDialogOpen = useAppStore((s) => s.delayDialogOpen);
   const engineerDialog = useAppStore((s) => s.engineerDialog?.kind ?? null);
   // Срочная заявка и плавающий диалог открыты вместе: плавающий стоит левее, чтобы не закрыть срочную заявку.
@@ -26,8 +31,8 @@ export function MainScreen() {
   const whyOpen = useAppStore((s) => s.whyOpen && (s.selectedRequestId !== null || s.selectedEngineerId !== null));
   // Подсказка называет диалог, который начал выбор точки: оба диалога могут быть открыты одновременно.
   const pickHint =
-    pickFor === 'edit' && editingRequestId
-      ? `Кликните по карте, чтобы указать новое место заявки ${editingRequestId}`
+    pickFor === 'edit' && editingRequestLabel
+      ? `Кликните по карте, чтобы указать новое место заявки ${editingRequestLabel}`
       : pickFor === 'urgent'
         ? 'Кликните по карте, чтобы указать место срочной заявки'
         : 'Кликните по карте, чтобы указать точку';

@@ -323,6 +323,28 @@ def test_insert_skips_only_what_does_not_fit_and_returns_to_the_previous_order(s
     assert solves == []
 
 
+def test_insert_signs_an_urgent_request_in_the_reason(solves):
+    """Причина пропущенной заявки лежит в карточке под подписью заявки: срочная названа в ней «URG-<номер>»."""
+    ctx = context()
+    base = insert_day(ctx)
+    urgent = replace(
+        base,
+        requests=[
+            request.model_copy(update={"priority": Priority.URGENT}) if request.id == "X" else request
+            for request in base.requests
+        ],
+    )
+
+    inserted = apply_event(urgent, reassign("X", "E1", time="09:30"), ctx, variant="keep")
+
+    assert [(item.request_id, item.reason_text) for item in inserted.plan.unassigned] == [
+        (
+            "P2",
+            "Вариант «Вставить в маршрут»: Инженер E1 пропускает заявку, чтобы успеть к заявке URG-X.",
+        )
+    ]
+
+
 @pytest.mark.parametrize(
     ("first", "expected", "skipped"),
     [

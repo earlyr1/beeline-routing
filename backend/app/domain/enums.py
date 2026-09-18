@@ -65,3 +65,16 @@ TRANSPORT_RU = {
     Transport.PUBLIC: "Общественный транспорт и пешком",
 }
 PRIORITY_RU = {Priority.NORMAL: "Обычная", Priority.URGENT: "Срочная"}
+
+# Подпись срочной заявки для диспетчера: «URG-<номер>». Так её подписывает и фронт (frontend/src/lib/format.ts).
+URGENT_PREFIX = "URG-"
+
+
+def request_label(request_id: str, priority: Priority) -> str:
+    """Номер заявки для диспетчера: у срочной впереди «URG-», у обычной номер как есть.
+
+    Приставка только для показа: в событиях, API и бандле номер заявки остаётся сырым.
+    """
+    if priority == Priority.URGENT and not request_id.startswith(URGENT_PREFIX):
+        return f"{URGENT_PREFIX}{request_id}"
+    return request_id

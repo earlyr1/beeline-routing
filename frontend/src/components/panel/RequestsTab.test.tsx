@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../store/useAppStore';
-import { makeAsapState, makePlanningState } from '../../test/fixtures';
+import { makeAsapState, makeDataUrgentState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { RequestsTab } from './RequestsTab';
 
@@ -28,6 +28,24 @@ describe('RequestsTab', () => {
 
     expect(within(rowOf('18754')).getByText('Не назначена')).toBeInTheDocument();
     expect(within(rowOf('10135')).getByRole('button', { name: 'Вернуть' })).toBeEnabled();
+  });
+
+  it('shows an urgent request of the day as URG-… and keeps the raw number in the event and in the store', () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), clock: '13:30' });
+    useAppStore.setState({ applyEvent });
+    render(<RequestsTab />);
+    const urgent = rowOf('URG-50104');
+    expect(within(urgent).getByText('Срочная')).toBeInTheDocument();
+    // Заявка диспетчера приходит уже с приставкой, обычная заявка остаётся со своим номером.
+    expect(rowOf('URG-001')).toBeInTheDocument();
+    expect(rowOf('46393')).toBeInTheDocument();
+    expect(screen.queryByText('URG-URG-001')).not.toBeInTheDocument();
+
+    fireEvent.click(within(urgent).getByRole('button', { name: 'Отменить' }));
+    expect(applyEvent).toHaveBeenCalledWith({ type: 'cancel', time: '13:30', request: null, request_id: '50104', engineer_id: null });
+    fireEvent.click(urgent);
+    expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
   it('cancels a request at the chosen event time without selecting the row', () => {

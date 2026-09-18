@@ -1,7 +1,7 @@
 import type { ServiceRequest } from '../../api/types';
 import { REQUEST_CLOCK_LABELS, requestClockStatus } from '../../lib/clock';
 import { engineerColor } from '../../lib/colors';
-import { capitalize, requestWindowPhrase, shortAddress } from '../../lib/format';
+import { capitalize, requestLabel, requestWindowPhrase, shortAddress } from '../../lib/format';
 import {
   assignmentIndex,
   byId,
@@ -80,7 +80,7 @@ export function RequestsTab() {
               <span className="dot" style={{ background: engineerColor(info?.engineerId, ids) }} />
               <div className="request-row__main">
                 <div className="request-row__title">
-                  <strong>{request.id}</strong>
+                  <strong>{requestLabel(request.id, request.priority)}</strong>
                   <span>{shortAddress(request.address)}</span>
                 </div>
                 <div className="request-row__meta">

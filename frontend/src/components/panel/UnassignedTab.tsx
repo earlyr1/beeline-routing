@@ -1,4 +1,4 @@
-import { REASON_LABELS, requestWindowPhrase, shortAddress, SKILL_LABELS } from '../../lib/format';
+import { REASON_LABELS, requestLabel, requestWindowPhrase, shortAddress, SKILL_LABELS } from '../../lib/format';
 import { byId, displayedPlan } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
 
@@ -19,7 +19,7 @@ export function UnassignedTab() {
         return (
           <li key={item.request_id} className="unassigned-item" onClick={() => selectRequest(item.request_id)}>
             <div className="unassigned-item__head">
-              <strong>{item.request_id}</strong>
+              <strong>{requestLabel(item.request_id, request?.priority)}</strong>
               <span className="badge badge--warn">{REASON_LABELS[item.reason_code]}</span>
             </div>
             {request && (

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { makePlanningState } from '../test/fixtures';
+import { makeDataUrgentState, makePlanningState } from '../test/fixtures';
 import {
   assignmentIndex,
   byId,
@@ -103,6 +103,29 @@ describe('planView', () => {
       'С опозданием к окну: 50104 на 10 мин.',
       'Работы заканчиваются в 16:55, позже конца смены в 16:30.',
     ]);
+  });
+
+  it('names an urgent request of the day with the URG- prefix in the sentences', () => {
+    const urgentState = makeDataUrgentState();
+    const [e01, ...rest] = urgentState.plan.routes;
+    // Визиты Арташкина переставляем так, чтобы в объяснении появилась каждая фраза с номером заявки 50104.
+    const sentences = (visits: typeof e01.visits) => {
+      const plan = { ...urgentState.plan, routes: [{ ...e01, visits }, ...rest] };
+      return routeSummary({ ...urgentState, plan }, plan, 'E01')?.sentences ?? [];
+    };
+    const [first, second, urgent, last] = e01.visits;
+    expect(sentences([first, second, last, { ...urgent, arrival: '16:05', start: '16:10', end: '16:55', late_min: 10 }])).toContain(
+      'С опозданием к окну: URG-50104 на 10 мин.',
+    );
+    expect(sentences([first, second, { ...urgent, arrival: '12:55', start: '13:00', end: '13:45' }, last])).toContain(
+      'Раньше окна начинаются визиты: URG-50104.',
+    );
+    expect(sentences([first, second, { ...urgent, arrival: '15:00', start: '15:00', end: '15:45' }, last])).toContain(
+      'Все визиты начинаются внутри окон, минимальный запас до конца окна 1 ч (заявка URG-50104).',
+    );
+    expect(sentences([first, second, { ...urgent, pinned: true }, last])).toContain(
+      'Визиты 74198, 86160, URG-50104 начаты до события и закреплены: перепланирование их не меняет.',
+    );
   });
 
   it('puts the lunch between the visits in time order or after the last visit', () => {

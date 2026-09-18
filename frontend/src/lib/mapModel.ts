@@ -2,7 +2,7 @@ import type { HHMM, Plan, PlanningState, RouteLeg } from '../api/types';
 import type { LngLat } from '../components/map/yandexLoader';
 import { enginePlace, type PhaseKind } from './clock';
 import { engineerColor } from './colors';
-import { shortAddress } from './format';
+import { requestLabel, shortAddress } from './format';
 import { assignmentIndex, byId, diffMarks, engineerIdsOf, type DiffMark } from './planView';
 
 /** Прозрачность маршрутов других инженеров, когда выбран один: то же, что суффикс `40` у цвета. */
@@ -155,7 +155,7 @@ export function buildMapModel({ state, plan, legs, showPrevious, selectedRequest
         zIndex: selected ? 100 : 10,
         className,
         style: { background: cancelled ? '#ffffff' : engineerColor(info?.engineerId, ids) },
-        title: `${request.id}: ${shortAddress(request.address)}`,
+        title: `${requestLabel(request.id, request.priority)}: ${shortAddress(request.address)}`,
         label: cancelled ? '×' : info ? String(info.order + 1) : '!',
       },
     ];

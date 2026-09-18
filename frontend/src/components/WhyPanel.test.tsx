@@ -8,7 +8,7 @@ vi.mock('../api/client', async (importOriginal) => {
 
 import * as api from '../api/client';
 import { useAppStore } from '../store/useAppStore';
-import { makeExplanation, makePlanningState } from '../test/fixtures';
+import { makeDataUrgentState, makeExplanation, makePlanningState } from '../test/fixtures';
 import { MapMenu } from './map/MapMenu';
 import { RouteCard } from './RouteCard';
 import { resetStore } from '../test/store';
@@ -29,6 +29,14 @@ describe('WhyPanel', () => {
     useAppStore.setState({ selectedRequestId: '50104' });
     render(<WhyPanel />);
     expect(screen.queryByRole('complementary', { name: 'Почему' })).not.toBeInTheDocument();
+  });
+
+  it('names an urgent request of the day with the URG- prefix in its title', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), selectedRequestId: '50104', whyOpen: true });
+    render(<WhyPanel />);
+    expect(await within(panel()).findByRole('heading', { name: 'Заявка URG-50104' })).toBeInTheDocument();
+    expect(api.getExplanation).toHaveBeenCalledWith('d_test', '50104');
   });
 
   it('explains the choice for the open request: checks, factors and other engineers', async () => {

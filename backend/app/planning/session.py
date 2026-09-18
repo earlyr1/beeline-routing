@@ -7,7 +7,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from app.domain.enums import SKILL_RU, TRANSPORT_RU, EventType, Priority, RequestStatus
+from app.domain.enums import SKILL_RU, TRANSPORT_RU, EventType, Priority, RequestStatus, request_label
 from app.domain.models import Engineer, Event, Lunch, Office, Plan, Request, Visit
 from app.domain.timeutil import fmt_hhmm
 from app.geo.kvcache import KVCache
@@ -383,8 +383,16 @@ def asap_window(engineers: list[Engineer], now: int) -> dict[str, int]:
     return {"window_start": now, "window_end": max([now, *(_working_until(e) for e in engineers)])}
 
 
-def window_order_text(request_id: str) -> str:
-    return f"Конец окна заявки {request_id} должен быть позже начала."
+def window_order_text(label: str) -> str:
+    return f"Конец окна заявки {label} должен быть позже начала."
+
+
+def _label(requests: Sequence[Request], request_id: str | None) -> str:
+    """Подпись заявки для диспетчера по заявкам дня: у срочной впереди «URG-», незнакомый номер как есть."""
+    request = next((item for item in requests if item.id == request_id), None)
+    if request is None:
+        return request_id or ""
+    return request_label(request.id, request.priority)
 
 
 def _planned_engineer(plan: Plan, request_id: str) -> str | None:
@@ -447,18 +455,19 @@ def _changed_inputs(
         if index is None:
             raise EventRejected(f"Заявка {event.request_id} не найдена.")
         stored, sent = requests[index], event.request
+        label = request_label(stored.id, stored.priority)
         if stored.id in started:
             raise EventRejected(
-                f"Заявка {stored.id} уже в работе с {fmt_hhmm(started[stored.id].start)}, изменить её нельзя."
+                f"Заявка {label} уже в работе с {fmt_hhmm(started[stored.id].start)}, изменить её нельзя."
             )
         if not sent.asap:
             if sent.window_end < now:
                 raise EventRejected(
-                    f"Окно заявки {stored.id} заканчивается в {fmt_hhmm(sent.window_end)}, это раньше времени "
+                    f"Окно заявки {label} заканчивается в {fmt_hhmm(sent.window_end)}, это раньше времени "
                     f"события {fmt_hhmm(now)}."
                 )
             if sent.window_end <= sent.window_start:
-                raise EventRejected(window_order_text(stored.id))
+                raise EventRejected(window_order_text(label))
             window = {}
         elif stored.asap:
             # Заявка остаётся «как можно скорее»: часы ожидания не перезапускаются, окно из запроса не используется.
@@ -469,7 +478,7 @@ def _changed_inputs(
         changes = {**sent.model_dump(include=EDITABLE_REQUEST_FIELDS), **window}
         merged = stored.model_copy(update={**changes, **_edited_location(stored, sent, ctx)})
         if merged == stored:
-            raise EventRejected(f"В заявке {stored.id} ничего не изменилось.")
+            raise EventRejected(f"В заявке {label} ничего не изменилось.")
         requests[index] = merged
         return requests, engineers, event.model_copy(update={"request": merged, "previous_request": stored})
 
@@ -477,25 +486,26 @@ def _changed_inputs(
         request = by_id.get(event.request_id or "")
         if request is None:
             raise EventRejected(f"Заявка {event.request_id} не найдена.")
+        label = request_label(request.id, request.priority)
         if event.type == EventType.CANCEL:
             if request.status == RequestStatus.CANCELLED:
-                raise EventRejected(f"Заявка {request.id} уже отменена.")
+                raise EventRejected(f"Заявка {label} уже отменена.")
             if request.id in started:
                 raise EventRejected(
-                    f"Заявка {request.id} уже в работе с {fmt_hhmm(started[request.id].start)}, отменить её нельзя."
+                    f"Заявка {label} уже в работе с {fmt_hhmm(started[request.id].start)}, отменить её нельзя."
                 )
             request.status = RequestStatus.CANCELLED
         else:
             if request.status != RequestStatus.CANCELLED:
-                raise EventRejected(f"Заявка {request.id} не отменена, возвращать нечего.")
+                raise EventRejected(f"Заявка {label} не отменена, возвращать нечего.")
             if request.window_end < now and request.asap:
                 raise EventRejected(
-                    f"Заявка {request.id} как можно скорее с {fmt_hhmm(request.window_start)}: смены закончились "
+                    f"Заявка {label} как можно скорее с {fmt_hhmm(request.window_start)}: смены закончились "
                     f"в {fmt_hhmm(request.window_end)}, вернуть её в план нельзя."
                 )
             if request.window_end < now:
                 raise EventRejected(
-                    f"Окно заявки {request.id} ({fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}) "
+                    f"Окно заявки {label} ({fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}) "
                     f"уже прошло, вернуть её в план нельзя."
                 )
             request.status = RequestStatus.ACTIVE
@@ -528,11 +538,12 @@ def _changed_inputs(
         request = by_id.get(event.request_id or "")
         if request is None:
             raise EventRejected(f"Заявка {event.request_id} не найдена.")
+        label = request_label(request.id, request.priority)
         if request.status == RequestStatus.CANCELLED:
-            raise EventRejected(f"Заявка {request.id} отменена, назначить её нельзя.")
+            raise EventRejected(f"Заявка {label} отменена, назначить её нельзя.")
         if request.id in started:
             raise EventRejected(
-                f"Заявка {request.id} уже в работе с {fmt_hhmm(started[request.id].start)}, переназначить её нельзя."
+                f"Заявка {label} уже в работе с {fmt_hhmm(started[request.id].start)}, переназначить её нельзя."
             )
         engineer = _find_engineer(engineers, event.engineer_id)
         if not engineer.available:
@@ -543,12 +554,12 @@ def _changed_inputs(
             raise EventRejected(f"У {engineer.name} нет навыка «{SKILL_RU[request.skill]}».")
         if request.transport_required not in (None, engineer.transport):
             raise EventRejected(
-                f"Заявке {request.id} нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
+                f"Заявке {label} нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
                 f"у {engineer.name} «{TRANSPORT_RU[engineer.transport]}»."
             )
         previous = _planned_engineer(session.plan, request.id)
         if previous == engineer.id:
-            raise EventRejected(f"Заявка {request.id} уже у {engineer.name}.")
+            raise EventRejected(f"Заявка {label} уже у {engineer.name}.")
         # Успевает ли бригада к заявке, проверяет apply_event по задаче после события.
         request.fixed_engineer_id = engineer.id
         return requests, engineers, event.model_copy(update={"previous_engineer_id": previous})
@@ -567,7 +578,8 @@ def _changed_inputs(
         update={"priority": Priority.URGENT, "status": RequestStatus.ACTIVE, "fixed_engineer_id": None}
     )
     if new.id in by_id:
-        raise EventRejected(f"Заявка с номером {new.id} уже есть в плане.")
+        taken = by_id[new.id]
+        raise EventRejected(f"Заявка с номером {request_label(taken.id, taken.priority)} уже есть в плане.")
     if new.asap:
         # Окно из запроса не используется: заявка ждёт с времени события до конца смен.
         new = new.model_copy(update=asap_window(engineers, now))
@@ -601,14 +613,15 @@ def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Pr
     return delay_engineer(problem, event.engineer_id, event.delay_min)
 
 
-def _check_reachable(problem: Problem, event: Event) -> None:
+def _check_reachable(problem: Problem, event: Event, label: str) -> None:
     """Переназначение: бригада успевает к заявке хотя бы без других несделанных заявок. Иначе EventRejected.
 
     Проверка по задаче после события (закреплённая работа, задержки) и до выбора стратегии: отказ от неё не зависит.
+    label — подпись заявки для диспетчера.
     """
     request_id = event.request_id or ""
     if not problem.has_request(request_id):
-        raise EventRejected(f"У заявки {request_id} нет точки на карте, назначить её нельзя.")
+        raise EventRejected(f"У заявки {label} нет точки на карте, назначить её нельзя.")
     state = problem.state(event.engineer_id or "")
     name = state.engineer.name
     if not state.active:
@@ -620,7 +633,7 @@ def _check_reachable(problem: Problem, event: Event) -> None:
     # Без обеда бригада успела бы: не помещается именно обед.
     lunch_note = " и с учётом обеда" if alone.lunch_conflict else ""
     raise EventRejected(
-        f"{name} не успевает к заявке {request_id} даже без других заявок{lunch_note}: начнёт не раньше "
+        f"{name} не успевает к заявке {label} даже без других заявок{lunch_note}: начнёт не раньше "
         f"{fmt_hhmm(visit.start)}, окно {fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}, "
         f"смена до {fmt_hhmm(state.available_until)}."
     )
@@ -667,7 +680,7 @@ def apply_event(
     problem = _pinned_problem(base, session, stored_event)
     reassigned = stored_event.type == EventType.REQUEST_REASSIGNED
     if reassigned:
-        _check_reachable(problem, stored_event)
+        _check_reachable(problem, stored_event, _label(requests, stored_event.request_id))
     strategy: EventVariant = variant if is_choosable(stored_event) else "optimal"
     if strategy == "keep":
         unassigned_before = {item.request_id for item in session.plan.unassigned}

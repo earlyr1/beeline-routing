@@ -1,5 +1,5 @@
 import { REQUEST_CLOCK_LABELS, requestClockStatus } from '../lib/clock';
-import { brigadeName, formatKm, requestWindowPhrase, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
+import { brigadeName, formatKm, requestLabel, requestWindowPhrase, shortAddress, SKILL_LABELS, TRANSPORT_LABELS } from '../lib/format';
 import { assignmentIndex, byId } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 import { BrigadePicker } from './BrigadePicker';
@@ -43,7 +43,7 @@ export function ExplanationCard() {
       <header className="explanation__head">
         <div>
           <div className="explanation__title">
-            <h3>Заявка {selectedRequestId}</h3>
+            <h3>Заявка {requestLabel(selectedRequestId, request?.priority)}</h3>
             {clockStatus && <span className={`badge badge--clock-${clockStatus}`}>{REQUEST_CLOCK_LABELS[clockStatus]}</span>}
           </div>
           {request && (

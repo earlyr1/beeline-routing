@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from app.domain.enums import EventType
+from app.domain.enums import EventType, request_label
 from app.domain.models import Event, Request
 from app.domain.timeutil import DAY_MIN
 from app.ingest.geocode import GeoResult
@@ -182,8 +182,11 @@ def check_known(base: PlanningSession, entries: Sequence[TimelineEntry], event: 
         raise EventRejected(f"Инженер {event.engineer_id} не найден.")
     if event.type == EventType.URGENT and event.request is not None:
         new_id = event.request.id
-        if base.request(new_id) is not None or any(request.id == new_id for _, request in urgent):
-            raise EventRejected(f"Заявка с номером {new_id} уже есть в плане.")
+        taken = base.request(new_id) or next((request for _, request in urgent if request.id == new_id), None)
+        if taken is not None:
+            raise EventRejected(
+                f"Заявка с номером {request_label(taken.id, taken.priority)} уже есть в плане."
+            )
     if event.type in _REQUEST_EVENTS:
         earlier = {request.id for entry, request in urgent if entry.event.time <= event.time}
         if base.request(event.request_id or "") is None and event.request_id not in earlier:

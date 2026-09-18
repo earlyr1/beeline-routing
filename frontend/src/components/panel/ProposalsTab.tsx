@@ -21,7 +21,7 @@ function ProposalCard({ proposal, state, disabled, onApprove, onReject }: CardPr
   return (
     <li className={`proposal proposal--${proposal.status}`}>
       <div className="proposal__head">
-        <strong>{describeEvent(proposal.event, byId(state.engineers))}</strong>
+        <strong>{describeEvent(proposal.event, byId(state.engineers), byId(state.requests))}</strong>
         <span className={`badge proposal__status proposal__status--${proposal.status}`}>
           {PROPOSAL_STATUS_LABELS[proposal.status]}
         </span>

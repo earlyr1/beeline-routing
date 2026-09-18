@@ -21,6 +21,7 @@ import {
 
 const state = makePlanningState();
 const engineers = byId(state.engineers);
+const requests = byId(state.requests);
 
 describe('time bar', () => {
   it('names every event type with a short pin label', () => {
@@ -43,9 +44,9 @@ describe('time bar', () => {
     expect(timelineStatusText(applied)).toBe('применено');
     expect(timelineStatusText(pending)).toBe('впереди');
     expect(timelineStatusText(rejected)).toBe('отклонено: Заявка 74198 уже выполнена.');
-    expect(timelineItemTitle(applied, engineers)).toBe('Отмена заявки 10135 в 09:30 · применено');
-    expect(timelineItemTitle(pending, engineers)).toBe('Задержка: Бригада Арташкин на 150 мин с 15:00 · впереди');
-    expect(rejectedNotice(rejected, engineers)).toBe('Событие Отмена заявки 74198 в 16:30 отклонено: Заявка 74198 уже выполнена.');
+    expect(timelineItemTitle(applied, engineers, requests)).toBe('Отмена заявки 10135 в 09:30 · применено');
+    expect(timelineItemTitle(pending, engineers, requests)).toBe('Задержка: Бригада Арташкин на 150 мин с 15:00 · впереди');
+    expect(rejectedNotice(rejected, engineers, requests)).toBe('Событие Отмена заявки 74198 в 16:30 отклонено: Заявка 74198 уже выполнена.');
   });
 
   it('caps the slider at 23:59 and keeps the clock inside it', () => {

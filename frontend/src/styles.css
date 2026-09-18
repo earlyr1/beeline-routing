@@ -1629,6 +1629,8 @@ h4 {
   cursor: pointer;
   /* Полоса работы выше смены, штриховки недоступности и линии текущего времени: её всегда можно нажать. */
   z-index: 2;
+  /* Насколько широки рамки срочности и выделения: на столько же отодвинута рамка опоздания, иначе она их закрывает. */
+  --bar-rings: 0px;
 }
 
 .timeline__bar--pinned {
@@ -1637,6 +1639,7 @@ h4 {
 
 .timeline__bar--urgent {
   box-shadow: 0 0 0 2px var(--danger);
+  --bar-rings: 2px;
 }
 
 .timeline__bar--clipped {
@@ -1645,12 +1648,26 @@ h4 {
 
 .timeline__bar--late {
   outline: 2px solid var(--warn);
+  outline-offset: var(--bar-rings);
 }
 
 .timeline__bar--selected {
   top: 5px;
   bottom: 5px;
   box-shadow: 0 0 0 2px var(--text);
+  --bar-rings: 2px;
+}
+
+/*
+ * Выбранная срочная заявка: рамки срочности и выделения рисует одно и то же свойство box-shadow, и по отдельности
+ * они затирали бы друг друга — чёрная рамка выделения прятала бы красную. Здесь обе сразу: чёрная у полосы,
+ * красная снаружи, чтобы срочность была видна и у бригады красного цвета.
+ */
+.timeline__bar--urgent.timeline__bar--selected {
+  box-shadow:
+    0 0 0 2px var(--text),
+    0 0 0 4px var(--danger);
+  --bar-rings: 4px;
 }
 
 .timeline__now {

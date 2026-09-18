@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { RouteLeg } from '../api/types';
-import { makePlanningState, makeRouteGeometry } from '../test/fixtures';
+import { makeDataUrgentState, makePlanningState, makeRouteGeometry } from '../test/fixtures';
 import { ENGINEER_PALETTE, UNASSIGNED_COLOR } from './colors';
 import {
   buildClockLayer,
@@ -74,6 +74,18 @@ describe('buildMapModel', () => {
     const requests = model.markers.filter((marker) => marker.target.kind === 'request');
     expect(requests.length).toBeGreaterThan(0);
     for (const marker of requests) expect(isClickableMarker(marker)).toBe(true);
+  });
+
+  it('names an urgent request of the day with the URG- prefix and keeps its raw number as the key', () => {
+    const state = makeDataUrgentState();
+    const model = buildMapModel(input({ state, plan: state.plan }));
+    expect(markerOf(model, '50104')).toMatchObject({
+      target: { kind: 'request', requestId: '50104' },
+      title: 'URG-50104: ул.Грайвороновская, д. 10 к 2',
+    });
+    // Заявка диспетчера приходит уже с приставкой, обычная заявка остаётся со своим номером.
+    expect(markerOf(model, 'URG-001').title).toMatch(/^URG-001: /);
+    expect(markerOf(model, '46393').title).toMatch(/^46393: /);
   });
 
   it('colors engineer starts and dims unavailable engineers', () => {

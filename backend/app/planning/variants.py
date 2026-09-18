@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 
-from app.domain.enums import TRANSPORT_RU, EventType, Priority, ReasonCode
+from app.domain.enums import TRANSPORT_RU, EventType, Priority, ReasonCode, request_label
 from app.domain.models import Event, Plan, Request, Unassigned, Visit
 from app.planning.models import EventChoice, EventVariant, PlanDiff, VariantOption
 from app.solvers.assemble import build_plan
@@ -128,7 +128,8 @@ def insert_plan(
     if best is not None:
         _, kept, skipped = best
         sequences[engineer_id] = kept
-        text = f"Вариант «{INSERT_TITLE}»: {state.engineer.name} пропускает заявку, чтобы успеть к заявке {request_id}."
+        label = request_label(request_id, problem.request(request_id).priority)
+        text = f"Вариант «{INSERT_TITLE}»: {state.engineer.name} пропускает заявку, чтобы успеть к заявке {label}."
         for rid in skipped:
             fixed[rid] = Unassigned(request_id=rid, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text)
     # Если заявку не вставить никуда, её причину считает build_plan.

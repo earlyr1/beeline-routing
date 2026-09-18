@@ -6,6 +6,8 @@ import {
   laterTime,
   plural,
   PRIORITY_LABELS,
+  requestLabel,
+  requestLabelOf,
   shortAddress,
   SKILL_LABELS,
   toMinutes,
@@ -477,9 +479,12 @@ export function forecastLines(
 }
 
 /** Подробности прогноза для подсказки: по строке на каждый визит с опозданием. */
-export function lateVisitsTitle(forecast: DelayForecast): string {
+export function lateVisitsTitle(forecast: DelayForecast, requests: Map<string, ServiceRequest>): string {
   return forecast.late_without_replan
-    .map((item) => `${item.request_id}: план ${item.planned_start}, прогноз ${item.forecast_start}, +${item.late_min} мин`)
+    .map(
+      (item) =>
+        `${requestLabelOf(item.request_id, requests)}: план ${item.planned_start}, прогноз ${item.forecast_start}, +${item.late_min} мин`,
+    )
     .join('\n');
 }
 
@@ -498,7 +503,16 @@ export function eventRequestId(event: PlanEvent): string | null {
   }
 }
 
-export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>): string {
+/**
+ * Номер заявки события с приставкой срочности: у события со своей заявкой приоритет берём из неё,
+ * у отмены, возврата и переназначения — из заявок дня.
+ */
+function eventRequestLabel(event: PlanEvent, requests: Map<string, ServiceRequest>): string {
+  const id = eventRequestId(event) ?? '';
+  return requestLabel(id, event.request?.priority ?? requests.get(id)?.priority);
+}
+
+export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>, requests: Map<string, ServiceRequest>): string {
   switch (event.type) {
     case 'engineer_delayed': {
       const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
@@ -506,7 +520,7 @@ export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>
       return `Задержка: ${name} на ${event.delay_min} мин с ${event.time}`;
     }
     case 'request_updated': {
-      const title = `Изменена заявка ${event.request_id ?? event.request?.id ?? ''} с ${event.time}`;
+      const title = `Изменена заявка ${eventRequestLabel(event, requests)} с ${event.time}`;
       const changes = event.previous_request && event.request ? requestChanges(event.previous_request, event.request) : [];
       return changes.length > 0 ? `${title}: ${changes.join(', ')}` : title;
     }
@@ -519,17 +533,17 @@ export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>
       return `Смена транспорта: ${name} на ${next} с ${event.time}`;
     }
     case 'urgent':
-      if (event.request?.asap) return `Срочная заявка ${event.request.id} как можно скорее, ${event.time}`;
-      return `Срочная заявка ${event.request?.id ?? ''} в ${event.time}`;
+      if (event.request?.asap) return `Срочная заявка ${eventRequestLabel(event, requests)} как можно скорее, ${event.time}`;
+      return `Срочная заявка ${eventRequestLabel(event, requests)} в ${event.time}`;
     case 'cancel':
-      return `Отмена заявки ${event.request_id} в ${event.time}`;
+      return `Отмена заявки ${eventRequestLabel(event, requests)} в ${event.time}`;
     case 'restore':
-      return `Возврат заявки ${event.request_id} в ${event.time}`;
+      return `Возврат заявки ${eventRequestLabel(event, requests)} в ${event.time}`;
     case 'engineer_unavailable':
       return `Инженер недоступен: ${engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id} с ${event.time}`;
     case 'request_reassigned': {
       const name = engineers.get(event.engineer_id ?? '')?.name ?? event.engineer_id;
-      const title = `Переназначение заявки ${event.request_id ?? ''}`;
+      const title = `Переназначение заявки ${eventRequestLabel(event, requests)}`;
       // Прежнюю бригаду сервер записывает у применённого события; у заявки без бригады и у события клиента её нет.
       // Имя бригады не склоняем: стрелка показывает, к какой бригаде уходит заявка.
       if (!event.previous_engineer_id) return `${title} → ${name} с ${event.time}`;
