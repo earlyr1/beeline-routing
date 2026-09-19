@@ -62,3 +62,23 @@ def test_exclusion_checks_skill_then_transport_then_availability():
     )
     reasons = [exclusion(problem.request("R1"), state) for state in problem.states]
     assert reasons == [Exclusion.NO_SKILL, Exclusion.NO_TRANSPORT, Exclusion.UNAVAILABLE, None]
+
+
+def test_leg_longer_than_transport_limit_is_a_violation():
+    # 20 км по прямой -> 26 км дороги: велосипед так далеко не ездит, а окно и смена при этом не нарушены.
+    problem = problem_of(
+        [req("R1", 20, 0, "10:00", "12:00")],
+        [eng("E1", transport=Transport.BIKE), eng("E2", transport=Transport.PUBLIC)],
+    )
+    bike, public = (simulate_route(problem, state, ["R1"]) for state in problem.states)
+    assert bike.violations == ["R1: плечо 26.0 км длиннее предела 15 км для транспорта «Велосипед»"]
+    assert public.violations == [
+        "R1: плечо 26.0 км длиннее предела 25 км для транспорта «Общественный транспорт и пешком»"
+    ]
+    assert not bike.feasible and not public.feasible
+
+
+def test_car_has_no_leg_limit():
+    problem = problem_of([req("R1", 60, 0, "10:00", "16:00")], [eng("E1")])
+    sim = simulate_route(problem, problem.states[0], ["R1"])
+    assert sim.feasible and sim.visits[0].leg_km == 78.14

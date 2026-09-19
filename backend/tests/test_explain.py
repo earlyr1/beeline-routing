@@ -170,3 +170,50 @@ def test_request_fixed_by_the_dispatcher_explains_only_that_the_dispatcher_chose
     assert unassigned.status == "unassigned"
     assert unassigned.alternatives == []
     assert unassigned.summary.startswith("Заявку закрепил диспетчер за Инженер E2. ")
+
+
+def test_alternative_too_far_for_its_transport_names_the_distance():
+    problem = problem_of(
+        [req("R1", 60, 0, "10:00", "16:00")],
+        [eng("E1", start=(58, 0)), eng("E2", transport=Transport.BIKE)],
+    )
+    explanation = build_explanation(
+        problem, build_plan(problem, "ortools", {"E1": ["R1"], "E2": []}), problem.request("R1")
+    )
+    alternative = next(a for a in explanation.alternatives if a.engineer_id == "E2")
+    assert alternative.feasible is False
+    assert alternative.reason == (
+        "Слишком далеко для транспорта «Велосипед»: 78 км до заявки при пределе 15 км"
+    )
+
+
+def test_unassigned_beyond_the_leg_limit_fails_the_transport_check():
+    problem = problem_of([req("R1", 60, 0, "10:00", "16:00")], [eng("E1", transport=Transport.BIKE)])
+    explanation = build_explanation(
+        problem, build_plan(problem, "ortools", {"E1": []}), problem.request("R1")
+    )
+    assert explanation.unassigned.reason_code == ReasonCode.NO_TRANSPORT
+    assert [(c.name, c.ok) for c in explanation.constraints][:2] == [("Навык", True), ("Транспорт", False)]
+    assert "ближайшая бригада в 78 км, это дальше предела плеча" in explanation.constraints[1].detail
+
+
+def test_unreachable_request_does_not_get_a_green_window_check():
+    """До R 47 км от точки бригады и 23 км от её заявки X: причина одна — предел плеча, и тексты не спорят."""
+    problem = problem_of(
+        [req("X", 18, 0, "10:00", "16:00"), req("R", 36, 0, "10:00", "11:30")],
+        [eng("E1", transport=Transport.PUBLIC)],
+    )
+    explanation = build_explanation(
+        problem, build_plan(problem, "ortools", {"E1": ["X"]}), problem.request("R")
+    )
+    [alternative] = explanation.alternatives
+    assert alternative.reason == "Не помещается в окно или смену вместе со своими заявками"
+    assert [(c.name, c.ok) for c in explanation.constraints] == [
+        ("Навык", True),
+        ("Транспорт", False),
+        ("Временное окно", False),
+        ("Смена", False),
+    ]
+    assert explanation.constraints[2].detail == (
+        "До заявки не доезжает ни одна подходящая бригада: успеть к окну 10:00–11:30 некому"
+    )

@@ -25,7 +25,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "86160",
@@ -44,7 +45,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "50104",
@@ -63,7 +65,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Заявка на подключение",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "46393",
@@ -82,7 +85,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "10135",
@@ -101,7 +105,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "18754",
@@ -120,7 +125,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "84627",
@@ -139,7 +145,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "61540",
@@ -158,7 +165,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "74949",
@@ -177,7 +185,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "41077",
@@ -196,7 +205,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "87693",
@@ -215,7 +225,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "93086",
@@ -234,7 +245,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "57866",
@@ -253,7 +265,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "35675",
@@ -272,7 +285,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "82388",
@@ -291,7 +305,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "23380",
@@ -310,7 +325,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "37272",
@@ -329,7 +345,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "71388",
@@ -348,7 +365,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "34366",
@@ -367,7 +385,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "67554",
@@ -386,7 +405,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Заявка на подключение",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "94409",
@@ -405,7 +425,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "10245",
@@ -424,7 +445,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "52405",
@@ -443,7 +465,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "30769",
@@ -462,7 +485,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "98182",
@@ -481,7 +505,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Заявка на подключение",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "76082",
@@ -500,7 +525,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Заказ подключения/Дозаказ оборудования",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "29890",
@@ -519,7 +545,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "77563",
@@ -538,7 +565,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "53587",
@@ -557,7 +585,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "82808",
@@ -576,7 +605,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "7939",
@@ -595,7 +625,8 @@
       "status": "active",
       "source_type_bk": "Подключение",
       "source_type_hd": "Конвергенция абонента",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "92031",
@@ -614,7 +645,8 @@
       "status": "active",
       "source_type_bk": "Дозаказ",
       "source_type_hd": "Дозаказ оборудования",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "31260",
@@ -633,7 +665,8 @@
       "status": "active",
       "source_type_bk": "Дозаказ",
       "source_type_hd": "Дозаказ оборудования",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "69967",
@@ -652,7 +685,8 @@
       "status": "active",
       "source_type_bk": "Дозаказ",
       "source_type_hd": "Заказ подключения/Дозаказ оборудования",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "22634",
@@ -671,7 +705,8 @@
       "status": "active",
       "source_type_bk": "Дозаказ",
       "source_type_hd": "Дозаказ оборудования",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "98815",
@@ -690,7 +725,8 @@
       "status": "active",
       "source_type_bk": "Дозаказ",
       "source_type_hd": "Дозаказ оборудования",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "33527",
@@ -709,7 +745,8 @@
       "status": "active",
       "source_type_bk": "Дозаказ",
       "source_type_hd": "Дозаказ оборудования",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "21571",
@@ -728,7 +765,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "47670",
@@ -747,7 +785,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "17892",
@@ -766,7 +805,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Переключение на Гбит/с",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "51115",
@@ -785,7 +825,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "76643",
@@ -804,7 +845,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "43506",
@@ -823,7 +865,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Переключение на Гбит/с",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "48174",
@@ -842,7 +885,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Мониторинг",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "48227",
@@ -861,7 +905,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "60720",
@@ -880,7 +925,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "48238",
@@ -899,7 +945,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Разрывы",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "41912",
@@ -918,7 +965,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "4893",
@@ -937,7 +985,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "68476",
@@ -956,7 +1005,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Разрывы",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "50219",
@@ -975,7 +1025,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "76678",
@@ -994,7 +1045,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Работа с кабелем",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "47330",
@@ -1013,7 +1065,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Роутер. Замена техническим специалистом",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "26645",
@@ -1032,7 +1085,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "TVE/ENT. Другие ошибки",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "24076",
@@ -1051,7 +1105,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Роутер. Замена техническим специалистом",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "30243",
@@ -1070,7 +1125,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "TVE/ENT. Замена приставки техником",
-      "needs_equipment": true
+      "needs_equipment": true,
+      "fixed_engineer_id": null
     },
     {
       "id": "32807",
@@ -1089,7 +1145,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Работа с кабелем",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "73572",
@@ -1108,7 +1165,8 @@
       "status": "active",
       "source_type_bk": "Локальная заявка",
       "source_type_hd": "Нет линка",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "41962",
@@ -1127,7 +1185,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Информация",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "97886",
@@ -1146,7 +1205,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Информация",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "17349",
@@ -1165,7 +1225,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Информация",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "54964",
@@ -1184,7 +1245,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Информация",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "21367",
@@ -1203,7 +1265,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Авария",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "24980",
@@ -1222,7 +1285,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Авария",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "15648",
@@ -1241,7 +1305,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Информация",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     },
     {
       "id": "57299",
@@ -1260,7 +1325,8 @@
       "status": "active",
       "source_type_bk": "Глобальная проблема",
       "source_type_hd": "Авария",
-      "needs_equipment": false
+      "needs_equipment": false,
+      "fixed_engineer_id": null
     }
   ],
   "engineers": [
@@ -1457,7 +1523,8 @@
       "transport": null,
       "previous_transport": null,
       "previous_request": null,
-      "delay_min": null
+      "delay_min": null,
+      "previous_engineer_id": null
     },
     {
       "type": "engineer_unavailable",
@@ -1468,7 +1535,8 @@
       "transport": null,
       "previous_transport": null,
       "previous_request": null,
-      "delay_min": null
+      "delay_min": null,
+      "previous_engineer_id": null
     },
     {
       "type": "urgent",
@@ -1490,14 +1558,16 @@
         "status": "active",
         "source_type_bk": "Глобальная проблема",
         "source_type_hd": "Авария",
-        "needs_equipment": false
+        "needs_equipment": false,
+        "fixed_engineer_id": null
       },
       "request_id": null,
       "engineer_id": null,
       "transport": null,
       "previous_transport": null,
       "previous_request": null,
-      "delay_min": null
+      "delay_min": null,
+      "previous_engineer_id": null
     }
   ],
   "control_plan": {
@@ -2271,9 +2341,11 @@
       "total_km": 235.29,
       "assigned": 64,
       "unassigned": 2,
-      "violations": 5
+      "violations": 7
     },
     "violations": [
+      "48227: плечо 30.4 км длиннее предела 15 км для транспорта «Велосипед»",
+      "71388: плечо 27.7 км длиннее предела 15 км для транспорта «Велосипед»",
       "51115: начало 20:59 позже окна до 20:00 на 59 мин",
       "46393: начало 22:02 позже окна до 22:00 на 2 мин",
       "46393: окончание 23:12 позже конца смены 22:00",

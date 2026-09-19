@@ -194,17 +194,22 @@ def _no_worse(
     """Проверка маршрута бригады при вставке: не хуже ли он прежнего маршрута route.
 
     Допустимый маршрут подходит. Недопустимый подходит, если нарушений не прибавилось: ни одна заявка не опаздывает
-    и не заканчивается после смены больше, чем в прежнем маршруте (новая заявка — вовремя и в смену), а обед, если в
-    прежнем маршруте он помещался, не пропадает и не перестаёт помещаться. Визиты сравниваются в том виде, в каком их
-    покажет план, — обычной симуляцией. Так бригада не пропускает заявку, к которой опаздывала и без вставки.
+    и не заканчивается после смены больше, чем в прежнем маршруте (новая заявка — вовремя и в смену), не появилось
+    плечо длиннее предела транспорта, а обед, если в прежнем маршруте он помещался, не пропадает и не перестаёт
+    помещаться. Визиты сравниваются в том виде, в каком их покажет план, — обычной симуляцией. Так бригада не
+    пропускает заявку, к которой опаздывала и без вставки, но и не едет на велосипеде через полобласти: по времени
+    такая вставка проходит, а предел плеча она нарушает.
     """
     before = simulate_route(problem, state, route)
     allowed = {visit.request_id: (visit.late_min, _overtime(visit, state)) for visit in before.visits}
+    long_before = _long_legs(problem, state, before.visits)
 
     def fits(request_ids: Sequence[str]) -> bool:
         result = simulate_route(problem, state, request_ids)
         if result.feasible:
             return True
+        if _long_legs(problem, state, result.visits) - long_before:
+            return False
         lunch_lost = result.lunch_conflict or (result.lunch is None and before.lunch is not None)
         if lunch_lost and not before.lunch_conflict:
             return False
@@ -219,6 +224,18 @@ def _no_worse(
 
 def _overtime(visit: Visit, state: EngineerState) -> int:
     return max(0, visit.end - state.available_until)
+
+
+def _long_legs(problem: Problem, state: EngineerState, visits: Sequence[Visit]) -> set[str]:
+    """Заявки маршрута, до которых плечо длиннее предела транспорта бригады. У автомобиля предела нет."""
+    node = state.start_node
+    long_legs: set[str] = set()
+    for visit in visits:
+        destination = problem.request_node(visit.request_id)
+        if problem.leg_too_long(node, destination, state.engineer):
+            long_legs.add(visit.request_id)
+        node = destination
+    return long_legs
 
 
 def _previous_routes(problem: Problem, text: str) -> tuple[dict[str, list[str]], dict[str, Unassigned]]:

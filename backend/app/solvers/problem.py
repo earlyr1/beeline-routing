@@ -126,6 +126,15 @@ class Problem:
     def travel_km(self, from_node: int, to_node: int, engineer: Engineer) -> float:
         return self.travel.km(from_node, to_node, engineer.transport)
 
+    def leg_limit_km(self, engineer: Engineer) -> float | None:
+        """Предел одного плеча для транспорта инженера или None, если предела нет (автомобиль)."""
+        return self.travel.model.leg_limit_km(engineer.transport)
+
+    def leg_too_long(self, from_node: int, to_node: int, engineer: Engineer) -> bool:
+        """Плечо длиннее предела: единственный источник ответа для прогона маршрута и модели OR-Tools."""
+        limit = self.leg_limit_km(engineer)
+        return limit is not None and self.travel_km(from_node, to_node, engineer) > limit
+
     def travel_min(self, from_node: int, to_node: int, engineer: Engineer) -> int:
         """Минуты в пути с запасом нагрузки дня. Коэффициент пробок берётся по началу окна заявки назначения.
 

@@ -33,6 +33,7 @@ from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.portfolio import SolverPool
 from app.solvers.problem import EngineerState, Problem, make_problem
+from app.solvers.reasons import too_far_km
 from app.solvers.simulate import simulate_route
 
 
@@ -631,10 +632,10 @@ def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Pr
 
 
 def _check_reachable(problem: Problem, event: Event, label: str) -> None:
-    """Переназначение: бригада успевает к заявке хотя бы без других несделанных заявок. Иначе EventRejected.
+    """Переназначение: бригада доедет до заявки и успеет к ней хотя бы без других несделанных заявок.
 
-    Проверка по задаче после события (закреплённая работа, задержки) и до выбора стратегии: отказ от неё не зависит.
-    label — подпись заявки для диспетчера.
+    Иначе EventRejected. Проверка по задаче после события (закреплённая работа, задержки) и до выбора стратегии:
+    отказ от неё не зависит. label — подпись заявки для диспетчера.
     """
     request_id = event.request_id or ""
     if not problem.has_request(request_id):
@@ -646,6 +647,14 @@ def _check_reachable(problem: Problem, event: Event, label: str) -> None:
     alone = simulate_route(problem, state, [request_id])
     if alone.feasible:
         return
+    far = too_far_km(problem, state, (), request_id)
+    if far is not None:
+        # Плечо длиннее предела транспорта: дело не во времени, бригада на велосипеде туда просто не поедет.
+        transport = TRANSPORT_RU[state.engineer.transport]
+        raise EventRejected(
+            f"{name} не доедет до заявки {label}: до неё {far:.0f} км, "
+            f"а «{transport}» не дальше {problem.leg_limit_km(state.engineer):g} км."
+        )
     request, visit = problem.request(request_id), alone.visits[0]
     # Без обеда бригада успела бы: не помещается именно обед.
     lunch_note = " и с учётом обеда" if alone.lunch_conflict else ""

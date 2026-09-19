@@ -113,6 +113,11 @@ def no_point_request():
     return req("N", 0, 0, "10:00", "17:00").model_copy(update={"lat": None, "lon": None})
 
 
+def far_for_a_bicycle_request():
+    """До заявки 26 км по дороге, окно на весь день: по времени велобригада успевает, но так далеко не ездит."""
+    return req("V", 20, 0, "10:00", "17:00")
+
+
 def rejection_cases(ctx):
     day = new_session(ctx)
     cancelled = apply_event(day, cancel("R2", "09:00"), ctx)
@@ -153,6 +158,15 @@ def rejection_cases(ctx):
             reassign("F", "E2", time="09:00"),
             "Инженер E2 не успевает к заявке F даже без других заявок: начнёт не раньше 11:19, "
             "окно 09:00–09:30, смена до 18:00.",
+        ),
+        (
+            new_session(
+                ctx,
+                requests=[*day_requests(), far_for_a_bicycle_request()],
+                engineers=[eng("E1"), eng("E2", transport=Transport.BIKE)],
+            ),
+            reassign("V", "E2", time="09:00"),
+            "Инженер E2 не доедет до заявки V: до неё 26 км, а «Велосипед» не дальше 15 км.",
         ),
     ]
 
@@ -553,3 +567,27 @@ def test_insert_does_not_take_the_lunch_break_of_a_route_late_since_before_the_e
     assert inserted.plan.violations == []
     assert [item.request_id for item in inserted.plan.unassigned] == ["P2"]
     assert inserted.plan.routes[0].lunch.start == 790  # 13:10, сразу после X
+
+
+def test_insert_does_not_take_a_stop_beyond_the_leg_limit(solves):
+    """Велобригаде отдают заявку B в 13 км от офиса, а её заявка A — в 13 км в другую сторону.
+
+    По времени маршрут B → A проходит: обе заявки в окне 10:00–16:00, смена до 18:00. Не проходит плечо B → A
+    в 26 км: велосипед так далеко не ездит, и A бригада не берёт.
+    """
+    ctx = context()
+    requests = [
+        req("A", 10, 0, "10:00", "16:00", transport=Transport.BIKE),
+        req("B", -10, 0, "10:00", "16:00"),
+    ]
+    engineers = [eng("E1", transport=Transport.BIKE), eng("E2")]
+    base = new_session(ctx, requests=requests, engineers=engineers, lunch_enabled=False)
+    assert routes(base.plan) == {"E1": ["A"], "E2": ["B"]}
+
+    inserted = apply_event(base, reassign("B", "E1", time="09:05"), ctx, variant="keep")
+
+    assert routes(inserted.plan) == {"E1": ["B"], "E2": []}
+    assert inserted.plan.violations == []
+    assert [(item.request_id, item.reason_code) for item in inserted.plan.unassigned] == [
+        ("A", ReasonCode.NO_FREE_ENGINEER)
+    ]

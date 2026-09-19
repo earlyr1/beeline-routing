@@ -1,4 +1,4 @@
-from app.domain.enums import ReasonCode, Skill
+from app.domain.enums import ReasonCode, Skill, Transport
 from app.solvers.eligibility import Exclusion, exclusion
 from app.solvers.fcfs import FcfsSolver
 from tests.helpers import eng, problem_of, req
@@ -50,3 +50,15 @@ def test_request_fixed_by_the_dispatcher_goes_only_to_its_brigade():
         "E1": ["R1"],
         "E2": ["R2"],
     }
+
+
+def test_does_not_send_a_bicycle_beyond_the_leg_limit():
+    problem = problem_of(
+        [req("R1", 20, 0, "10:00", "12:00")], [eng("E1", transport=Transport.BIKE), eng("E2")]
+    )
+    plan = FcfsSolver().solve(problem)
+    assert {route.engineer_id: [v.request_id for v in route.visits] for route in plan.routes} == {
+        "E1": [],
+        "E2": ["R1"],
+    }
+    assert plan.metrics.violations == 0

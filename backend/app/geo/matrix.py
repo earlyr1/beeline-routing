@@ -33,6 +33,22 @@ class TravelModel:
     walk_speed_kmh: float = 5.0
     public_ride_base_min: float = 22.5
     public_ride_min_per_km: float = 2.8
+    # Предел одного плеча по типу транспорта: бригада без машины не поедет через полобласти, даже если по смене
+    # проходит. 15 км на велосипеде — 45 минут при 20 км/ч; 25 км на общественном транспорте — около 1 часа
+    # 15 минут: предел сравнивается с километрами дороги, а 25 км дороги — это 19 км по прямой, то есть
+    # 22.5 + 2.8·19 ≈ 76 минут по формуле _public_minutes. У автомобиля предела нет: в Каширу и Ступино
+    # диспетчеры и правда отправляют бригады на машинах. Предел в километрах, а не в минутах: так он не плывёт
+    # от коэффициента пробок и запаса на дорогу и совпадает с числом, которое диспетчер видит в интерфейсе.
+    bike_leg_limit_km: float = 15.0
+    public_leg_limit_km: float = 25.0
+
+    def leg_limit_km(self, transport: Transport) -> float | None:
+        """Предел одного плеча для транспорта или None, если предела нет."""
+        if transport == Transport.BIKE:
+            return self.bike_leg_limit_km
+        if transport == Transport.PUBLIC:
+            return self.public_leg_limit_km
+        return None
 
 
 @dataclass(frozen=True)

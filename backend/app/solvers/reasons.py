@@ -2,11 +2,29 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from app.domain.enums import SKILL_RU, TRANSPORT_RU, ReasonCode
 from app.domain.models import Unassigned
 from app.domain.timeutil import fmt_hhmm
-from app.solvers.problem import Problem
+from app.solvers.problem import EngineerState, Problem
 from app.solvers.simulate import simulate_route
+
+
+def too_far_km(
+    problem: Problem, state: EngineerState, sequence: Sequence[str], request_id: str
+) -> float | None:
+    """Самое короткое плечо до заявки, если и оно длиннее предела транспорта инженера, иначе None.
+
+    Плечо считается от стартовой точки инженера и от каждой его заявки: если заявка дальше предела отовсюду,
+    бригада до неё не доедет ни первой, ни в середине маршрута.
+    """
+    engineer = state.engineer
+    destination = problem.request_node(request_id)
+    nodes = [state.start_node, *(problem.request_node(rid) for rid in sequence)]
+    if not all(problem.leg_too_long(node, destination, engineer) for node in nodes):
+        return None
+    return min(problem.travel_km(node, destination, engineer) for node in nodes)
 
 
 def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, list[str]]) -> Unassigned:
@@ -47,7 +65,31 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
         names = ", ".join(s.engineer.name for s in with_transport)
         return result(ReasonCode.NO_FREE_ENGINEER, f"Все подходящие инженеры недоступны: {names}.")
 
-    solo = [(s, simulate_route(problem, s, [request_id])) for s in active]
+    # Плечо до заявки считается от стартовой точки бригады: прогон «даже без других заявок» едет именно оттуда,
+    # и у бригады, которой это плечо запрещено, он показал бы время поездки, которой не будет.
+    direct = [(s, too_far_km(problem, s, (), request_id)) for s in active]
+    alone = [s for s, far in direct if far is None]
+    if not alone:
+        limits = ", ".join(
+            f"«{TRANSPORT_RU[transport]}» не дальше {limit:g} км"
+            for transport, limit in sorted(
+                {(s.engineer.transport, problem.leg_limit_km(s.engineer)) for s in active}
+            )
+        )
+        # Через свои заявки бригада иногда доезжает и туда, но вместе с ними заявка в маршрут не поместилась.
+        detour = any(
+            too_far_km(problem, s, sequences.get(s.engineer.id, []), request_id) is None for s in active
+        )
+        tail = (
+            " По пути от своих заявок доехать можно, но вместе с ними заявка не помещается." if detour else ""
+        )
+        return result(
+            ReasonCode.NO_TRANSPORT,
+            f"Нет инженера, который доедет: ближайшая подходящая бригада в "
+            f"{min(far for _, far in direct):.0f} км от заявки, а {limits}.{tail}",
+        )
+
+    solo = [(s, simulate_route(problem, s, [request_id])) for s in alone]
     fitting = [s for s, sim in solo if sim.feasible]
     if not fitting:
         state, sim = min(solo, key=lambda pair: (pair[1].visits[0].start, pair[1].visits[0].end))

@@ -66,3 +66,35 @@ def test_fixed_request_of_a_brigade_missing_from_the_day_is_explained_by_everyon
     reason = _reason([fixed], [eng("E1")], "R1")
     assert reason.reason_code == ReasonCode.DOES_NOT_FIT
     assert reason.reason_text.startswith("Работа не помещается")
+
+
+def test_nobody_reaches_the_request_on_a_bicycle_or_public_transport():
+    reason = _reason(
+        [req("R1", 60, 0, "10:00", "16:00")],
+        [eng("E1", transport=Transport.BIKE), eng("E2", transport=Transport.PUBLIC)],
+        "R1",
+    )
+    assert reason.reason_code == ReasonCode.NO_TRANSPORT
+    assert reason.reason_text == (
+        "Нет инженера, который доедет: ближайшая подходящая бригада в 78 км от заявки, "
+        "а «Велосипед» не дальше 15 км, «Общественный транспорт и пешком» не дальше 25 км."
+    )
+
+
+def test_request_reachable_only_through_its_own_stop_is_not_explained_by_the_window():
+    """До R 47 км от точки бригады и 23 км от её заявки X.
+
+    Прогон «даже без других заявок» поехал бы по запрещённому плечу и показал бы время поездки, которой не будет.
+    """
+    reason = _reason(
+        [req("X", 18, 0, "10:00", "16:00"), req("R", 36, 0, "10:00", "12:00")],
+        [eng("E1", transport=Transport.PUBLIC)],
+        "R",
+        {"E1": ["X"]},
+    )
+    assert reason.reason_code == ReasonCode.NO_TRANSPORT
+    assert reason.reason_text == (
+        "Нет инженера, который доедет: ближайшая подходящая бригада в 47 км от заявки, "
+        "а «Общественный транспорт и пешком» не дальше 25 км. "
+        "По пути от своих заявок доехать можно, но вместе с ними заявка не помещается."
+    )

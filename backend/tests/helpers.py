@@ -53,12 +53,14 @@ def eng(
     shift=("09:00", "18:00"),
     available=True,
     unavailable_from=None,
+    start=(0.0, 0.0),  # стартовая точка в километрах от офиса
 ):
+    start_lat, start_lon = at(*start)
     return Engineer(
         id=engineer_id,
         name=f"Инженер {engineer_id}",
-        start_lat=OFFICE_LAT,
-        start_lon=OFFICE_LON,
+        start_lat=start_lat,
+        start_lon=start_lon,
         shift_start=shift[0],
         shift_end=shift[1],
         skills=list(skills),
@@ -68,5 +70,5 @@ def eng(
     )
 
 
-def problem_of(requests, engineers):
-    return make_problem(requests, engineers, model=TravelModel(), traffic=TrafficProfile({}))
+def problem_of(requests, engineers, *, model=None):
+    return make_problem(requests, engineers, model=model or TravelModel(), traffic=TrafficProfile({}))

@@ -23,6 +23,10 @@ from app.solvers.problem import EngineerState, Problem
 from app.solvers.simulate import simulate_route
 
 DAY_MIN = 24 * 60
+# Транзит запрещённого плеча: больше вместимости измерения времени (2 * DAY_MIN), поэтому дуга не просто дорогая,
+# а недопустимая, и поиск её не использует. Заявку при этом всегда можно снять (AddDisjunction), так что
+# запрет дуг не делает модель неразрешимой.
+FORBIDDEN_LEG_MIN = 10 * DAY_MIN
 
 
 @dataclass(frozen=True)
@@ -123,7 +127,14 @@ class OrToolsSolver:
                         continue
                     if b < v_count:
                         continue  # в стартовые узлы не въезжаем
-                    time_matrix[a][b] = service[a] + problem.travel_min(nodes[a], nodes[b], engineer)
+                    too_long = problem.leg_too_long(nodes[a], nodes[b], engineer)
+                    time_matrix[a][b] = (
+                        FORBIDDEN_LEG_MIN
+                        if too_long
+                        else service[a] + problem.travel_min(nodes[a], nodes[b], engineer)
+                    )
+                    # Стоимость запрещённой дуги остаётся настоящей: нулевая приманивала бы эвристику первого
+                    # решения к дуге, которую она всё равно не сможет использовать.
                     cost = round(problem.travel_km(nodes[a], nodes[b], engineer) * 1000)
                     previous = problem.previous_assignment.get(candidates[b - v_count - 1])
                     if previous is not None and previous != engineer.id:

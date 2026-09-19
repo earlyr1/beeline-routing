@@ -97,3 +97,23 @@ def test_repair_puts_urgent_first_when_slots_are_scarce():
         [eng("E1")],
     )
     assert repair_unassigned(problem, {"E1": []}) == {"E1": ["U1"]}
+
+
+# Форма Каширы: дальняя заявка, велобригада рядом с офисом и бригада на машине уже на месте. Дешёвый ответ —
+# отдать обе заявки одному велосипедисту, и до предела плеча решатель так и делал.
+FAR_REQUESTS = [req("R1", 60, 0, "10:00", "16:00"), req("R2", 1, 0, "09:30", "10:00")]
+FAR_ENGINEERS = [eng("E1", transport=Transport.BIKE), eng("E2", start=(58, 0))]
+
+
+def test_far_request_goes_to_the_car_brigade_at_the_distance():
+    plan = OrToolsSolver(time_limit_s=1).solve(problem_of(FAR_REQUESTS, FAR_ENGINEERS))
+    assert _routes(plan) == {"E1": ["R2"], "E2": ["R1"]}
+    assert plan.metrics.violations == 0
+
+
+def test_without_the_limit_the_cheap_answer_uses_the_long_leg():
+    from app.geo.matrix import TravelModel
+
+    problem = problem_of(FAR_REQUESTS, FAR_ENGINEERS, model=TravelModel(bike_leg_limit_km=1000))
+    plan = OrToolsSolver(time_limit_s=1).solve(problem)
+    assert _routes(plan) == {"E1": ["R2", "R1"], "E2": []}

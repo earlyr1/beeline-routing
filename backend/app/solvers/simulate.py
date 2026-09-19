@@ -91,6 +91,7 @@ def _drive(
 ) -> SimResult:
     """Прогон без выбора места: обед перед визитом с номером lunch_at, при lunch_at == len(request_ids) после последнего."""
     engineer = state.engineer
+    limit_km = problem.leg_limit_km(engineer)
     node, clock = state.start_node, state.available_from
     visits: list[Visit] = []
     violations: list[str] = []
@@ -115,6 +116,11 @@ def _drive(
             violations.append(
                 f"{request_id}: нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
                 f"у {engineer.name} «{TRANSPORT_RU[engineer.transport]}»"
+            )
+        if problem.leg_too_long(node, destination, engineer):
+            violations.append(
+                f"{request_id}: плечо {leg_km:.1f} км длиннее предела {limit_km:g} км "
+                f"для транспорта «{TRANSPORT_RU[engineer.transport]}»"
             )
         if late:
             violations.append(

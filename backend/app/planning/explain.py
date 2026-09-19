@@ -11,10 +11,12 @@ from app.planning.models import Alternative, ConstraintCheck, Explanation
 from app.solvers.eligibility import Exclusion, exclusion
 from app.solvers.ortools_solver import ObjectiveWeights
 from app.solvers.problem import EngineerState, Problem
+from app.solvers.reasons import too_far_km
 from app.solvers.simulate import simulate_route
 
 KM_EPSILON = 0.05
 ASAP_CHECK = "Как можно скорее"
+NO_REACH = "До заявки не доезжает ни одна подходящая бригада"
 
 
 @dataclass(frozen=True)
@@ -92,12 +94,19 @@ def _alternative(
     idle = not sequence and not problem.pinned.get(engineer.id)
     insertion = best_insertion(problem, state, sequence, request.id)
     if insertion is None:
-        alone = simulate_route(problem, state, [request.id])
-        text = (
-            "Не успевает в окно или смену даже без других заявок"
-            if not alone.feasible
-            else "Не помещается в окно или смену вместе со своими заявками"
-        )
+        far = too_far_km(problem, state, sequence, request.id)
+        # «Даже без других заявок» — только о том, кто доедет до заявки прямо со своей точки. Остальные попадут
+        # туда лишь от своей заявки, и дело не в окне, а в том, что вместе с ней маршрут не складывается.
+        direct = too_far_km(problem, state, (), request.id) is None
+        if far is not None:
+            text = (
+                f"Слишком далеко для транспорта «{TRANSPORT_RU[engineer.transport]}»: "
+                f"{far:.0f} км до заявки при пределе {problem.leg_limit_km(engineer):g} км"
+            )
+        elif direct and not simulate_route(problem, state, [request.id]).feasible:
+            text = "Не успевает в окно или смену даже без других заявок"
+        else:
+            text = "Не помещается в окно или смену вместе со своими заявками"
         return Alternative(engineer_id=engineer.id, feasible=False, reason=text), idle
     note = ", но придётся задействовать ещё одного инженера" if idle else ""
     mileage = (
@@ -204,7 +213,12 @@ def _unassigned_constraints(problem: Problem, request: Request) -> list[Constrai
     required = request.transport_required
     with_transport = [s for s in skilled if required is None or s.engineer.transport == required]
     eligible = [s for s in states if exclusion(request, s) is None]
-    solo = [(s, simulate_route(problem, s, [request.id]).visits[0]) for s in eligible]
+    # Предел плеча: транспорт подходит, но так далеко на нём не ездят — это тоже про транспорт, а не про окна.
+    reach = [(s, too_far_km(problem, s, [], request.id)) for s in eligible]
+    unreachable = bool(eligible) and all(far is not None for _, far in reach)
+    # Об окне и смене судим только по тем, кто доедет до заявки со своей точки: у остальных прогон поехал бы по
+    # запрещённому плечу, и зелёное «успевает к окну» спорило бы с красным «дальше предела плеча».
+    solo = [(s, simulate_route(problem, s, [request.id]).visits[0]) for s, far in reach if far is None]
     window_ok = any(visit.late_min == 0 for _, visit in solo)
     shift_ok = any(visit.end <= s.available_until for s, visit in solo)
     window = f"{fmt_hhmm(request.window_start)}–{fmt_hhmm(request.window_end)}"
@@ -213,44 +227,46 @@ def _unassigned_constraints(problem: Problem, request: Request) -> list[Constrai
         if required is None
         else f"Нужен «{TRANSPORT_RU[required]}»: подходящих инженеров {len(with_transport)}"
     )
-    timing = ConstraintCheck(
-        name="Временное окно",
-        ok=window_ok,
-        detail=(
-            f"Хотя бы один доступный подходящий инженер успевает к окну {window}"
-            if window_ok
-            else f"Ни один доступный подходящий инженер не успевает к окну {window}"
-        ),
+    today_ok = any(visit.late_min == 0 and visit.end <= s.available_until for s, visit in solo)
+    until = max((s.available_until for s in with_transport), default=request.window_end)
+    window_detail = (
+        f"Хотя бы один доступный подходящий инженер успевает к окну {window}"
+        if window_ok
+        else f"Ни один доступный подходящий инженер не успевает к окну {window}"
     )
-    if request.asap:
-        today_ok = any(visit.late_min == 0 and visit.end <= s.available_until for s, visit in solo)
-        until = max((s.available_until for s in with_transport), default=request.window_end)
-        timing = ConstraintCheck(
-            name=ASAP_CHECK,
-            ok=today_ok,
-            detail=(
-                "Хотя бы один подходящий инженер успевает сегодня"
-                if today_ok
-                else f"Сегодня никто из подходящих инженеров не успевает до конца смен в {fmt_hhmm(until)}"
-            ),
-        )
+    shift_detail = (
+        "Хотя бы один подходящий инженер заканчивает работу в пределах смены"
+        if shift_ok
+        else "Ни один подходящий инженер не заканчивает работу в пределах смены"
+    )
+    asap_detail = (
+        "Хотя бы один подходящий инженер успевает сегодня"
+        if today_ok
+        else f"Сегодня никто из подходящих инженеров не успевает до конца смен в {fmt_hhmm(until)}"
+    )
+    if unreachable:
+        nearest = min(far for _, far in reach)
+        transport_detail += f"; ближайшая бригада в {nearest:.0f} км, это дальше предела плеча"
+        # Дело не в окне и не в смене: ехать к заявке некому, и время считать не по кому.
+        window_detail = f"{NO_REACH}: успеть к окну {window} некому"
+        shift_detail = f"{NO_REACH}: закончить работу в смену некому"
+        asap_detail = f"{NO_REACH}: ехать к ней сегодня некому"
+    timing = (
+        ConstraintCheck(name=ASAP_CHECK, ok=today_ok, detail=asap_detail)
+        if request.asap
+        else ConstraintCheck(name="Временное окно", ok=window_ok, detail=window_detail)
+    )
     return [
         ConstraintCheck(
             name="Навык",
             ok=bool(skilled),
             detail=f"Инженеров с навыком «{SKILL_RU[request.skill]}»: {len(skilled)}",
         ),
-        ConstraintCheck(name="Транспорт", ok=bool(with_transport), detail=transport_detail),
-        timing,
         ConstraintCheck(
-            name="Смена",
-            ok=shift_ok,
-            detail=(
-                "Хотя бы один подходящий инженер заканчивает работу в пределах смены"
-                if shift_ok
-                else "Ни один подходящий инженер не заканчивает работу в пределах смены"
-            ),
+            name="Транспорт", ok=bool(with_transport) and not unreachable, detail=transport_detail
         ),
+        timing,
+        ConstraintCheck(name="Смена", ok=shift_ok, detail=shift_detail),
     ]
 
 
