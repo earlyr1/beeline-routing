@@ -217,3 +217,41 @@ def test_unreachable_request_does_not_get_a_green_window_check():
     assert explanation.constraints[2].detail == (
         "До заявки не доезжает ни одна подходящая бригада: успеть к окну 10:00–11:30 некому"
     )
+
+
+def test_equipment_check_counts_what_is_left_after_the_plan_not_the_morning_stock():
+    """Две заявки с оборудованием на бригаду с запасом 1: строка проверки не спорит с причиной над собой.
+
+    Запас у бригады есть только с утра, и R0 его забрал. Причина неназначения, альтернатива и строка
+    «Оборудование» должны говорить об одном и том же — что везти нечего.
+    """
+    requests = [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30, equipment=True) for k in range(2)]
+    problem = problem_of(requests, [eng("E1", equipment_stock=1)])
+    explanation = build_explanation(
+        problem, build_plan(problem, "ortools", {"E1": ["R0"]}), problem.request("R1")
+    )
+    assert "не осталось оборудования" in explanation.summary
+    assert [(c.name, c.ok) for c in explanation.constraints] == [
+        ("Навык", True),
+        ("Транспорт", True),
+        ("Временное окно", True),
+        ("Смена", True),
+        ("Оборудование", False),
+    ]
+    assert explanation.constraints[4].detail == (
+        "Нужна одна единица; подходящих бригад, у которых она ещё осталась: 0"
+    )
+    assert explanation.alternatives[0].reason == "Оборудование кончилось: утром бригада взяла 1 ед."
+
+
+def test_equipment_check_stays_green_while_the_brigade_still_has_a_unit():
+    """Та же пара заявок, но запас 2: R1 без инженера не из-за оборудования, и строка остаётся зелёной."""
+    requests = [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30, equipment=True) for k in range(2)]
+    problem = problem_of(requests, [eng("E1", equipment_stock=2)])
+    explanation = build_explanation(
+        problem, build_plan(problem, "ortools", {"E1": ["R0"]}), problem.request("R1")
+    )
+    assert [(c.name, c.ok) for c in explanation.constraints][4] == ("Оборудование", True)
+    assert explanation.constraints[4].detail == (
+        "Нужна одна единица; подходящих бригад, у которых она ещё осталась: 1"
+    )

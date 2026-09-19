@@ -146,6 +146,7 @@ def build_engineers(
                 shift_end=shift.end,
                 skills=skills[name],
                 transport=transports[ids[name]],
+                equipment_stock=cfg.equipment_stock,
             )
         )
     return engineers, ids

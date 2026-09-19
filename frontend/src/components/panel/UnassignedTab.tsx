@@ -1,6 +1,7 @@
 import { REASON_LABELS, requestLabel, requestWindowPhrase, shortAddress, SKILL_LABELS } from '../../lib/format';
 import { byId, displayedPlan } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
+import { TierBadge } from '../TierBadge';
 
 export function UnassignedTab() {
   const state = useAppStore((s) => s.state);
@@ -20,6 +21,7 @@ export function UnassignedTab() {
           <li key={item.request_id} className="unassigned-item" onClick={() => selectRequest(item.request_id)}>
             <div className="unassigned-item__head">
               <strong>{requestLabel(item.request_id, request?.priority)}</strong>
+              <TierBadge tier={request?.tier} />
               <span className="badge badge--warn">{REASON_LABELS[item.reason_code]}</span>
             </div>
             {request && (

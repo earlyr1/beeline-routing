@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
-from app.domain.enums import Skill, Transport
+from app.domain.enums import RequestTier, Skill, Transport
 from app.domain.timeutil import HHMM
 
 # Доли жеребьёвки транспорта инженеров (app/synth/engineers.py) по прежним четырём типам и в прежнем порядке.
@@ -49,6 +49,7 @@ class SynthConfig(BaseModel):
     event_time: HHMM
     regions: dict[str, RegionConfig]
     skill_by_bk: dict[str, Skill]
+    tier_by_bk: dict[str, RequestTier]
     default_duration_min: int
     duration_jitter: float
     duration_round_to: int
@@ -56,6 +57,7 @@ class SynthConfig(BaseModel):
     urgent_bk_types: list[str]
     urgent_control_statuses: list[str]
     cancelled_control_statuses: list[str]
+    equipment_stock: int = Field(ge=0)
     equipment_hd_types: list[str]
     transport_required_rules: list[TransportRule]
     transport_mix: dict[TransportDraw, float]

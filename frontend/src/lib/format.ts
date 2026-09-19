@@ -6,6 +6,7 @@ import type {
   MatrixSource,
   Priority,
   ReasonCode,
+  RequestTier,
   Skill,
   SolverName,
   Transport,
@@ -24,6 +25,13 @@ export const TRANSPORT_LABELS: Record<Transport, string> = {
 };
 
 export const PRIORITY_LABELS: Record<Priority, string> = { normal: 'Обычная', urgent: 'Срочная' };
+
+/** Уровни распределения из ответов организаторов (вопрос 15). */
+export const TIER_LABELS: Record<RequestTier, string> = {
+  emergency: 'Авария',
+  connection: 'Подключение',
+  routine: 'Ремонт и дозаказ',
+};
 
 export const STAGE_LABELS: Record<DatasetStage, string> = {
   parsing: 'Чтение файла',

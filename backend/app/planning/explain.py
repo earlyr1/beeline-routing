@@ -11,7 +11,7 @@ from app.planning.models import Alternative, ConstraintCheck, Explanation
 from app.solvers.eligibility import Exclusion, exclusion
 from app.solvers.ortools_solver import ObjectiveWeights
 from app.solvers.problem import EngineerState, Problem
-from app.solvers.reasons import too_far_km
+from app.solvers.reasons import state_equipment_left, too_far_km
 from app.solvers.simulate import simulate_route
 
 KM_EPSILON = 0.05
@@ -92,6 +92,13 @@ def _alternative(
 
     sequence = [rid for rid in _open_sequence(problem, plan, engineer.id) if rid != request.id]
     idle = not sequence and not problem.pinned.get(engineer.id)
+    if request.needs_equipment and state.equipment_left - problem.equipment_used(sequence) <= 0:
+        # Оборудование бригада взяла утром на весь день: новую единицу ей взять негде, и дело не во времени.
+        return Alternative(
+            engineer_id=engineer.id,
+            feasible=False,
+            reason=f"Оборудование кончилось: утром бригада взяла {engineer.equipment_stock} ед.",
+        ), idle
     insertion = best_insertion(problem, state, sequence, request.id)
     if insertion is None:
         far = too_far_km(problem, state, sequence, request.id)
@@ -207,7 +214,7 @@ def _assigned_constraints(
     ]
 
 
-def _unassigned_constraints(problem: Problem, request: Request) -> list[ConstraintCheck]:
+def _unassigned_constraints(problem: Problem, plan: Plan, request: Request) -> list[ConstraintCheck]:
     states = problem.states
     skilled = [s for s in states if request.skill in s.engineer.skills]
     required = request.transport_required
@@ -256,7 +263,7 @@ def _unassigned_constraints(problem: Problem, request: Request) -> list[Constrai
         if request.asap
         else ConstraintCheck(name="Временное окно", ok=window_ok, detail=window_detail)
     )
-    return [
+    checks = [
         ConstraintCheck(
             name="Навык",
             ok=bool(skilled),
@@ -268,6 +275,23 @@ def _unassigned_constraints(problem: Problem, request: Request) -> list[Constrai
         timing,
         ConstraintCheck(name="Смена", ok=shift_ok, detail=shift_detail),
     ]
+    if request.needs_equipment:
+        # Проверка только у заявок с оборудованием: у остальных строка была бы всегда зелёной и лишней.
+        # Запас считается за вычетом того, что бригада уже везёт по плану, как и причина неназначения
+        # (reasons.state_equipment_left): по утреннему остатку строка спорила бы с «запас разобран» над собой.
+        sequences = {
+            s.engineer.id: [rid for rid in _open_sequence(problem, plan, s.engineer.id) if rid != request.id]
+            for s in eligible
+        }
+        stocked = sum(1 for s in eligible if state_equipment_left(problem, s, sequences) > 0)
+        checks.append(
+            ConstraintCheck(
+                name="Оборудование",
+                ok=stocked > 0,
+                detail=f"Нужна одна единица; подходящих бригад, у которых она ещё осталась: {stocked}",
+            )
+        )
+    return checks
 
 
 def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explanation:
@@ -299,7 +323,7 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
             request_id=request.id,
             status="unassigned",
             summary=item.reason_text if item else "Заявка не назначена.",
-            constraints=_unassigned_constraints(problem, request) if located else [],
+            constraints=_unassigned_constraints(problem, plan, request) if located else [],
             alternatives=alternatives,
             unassigned=item,
         )

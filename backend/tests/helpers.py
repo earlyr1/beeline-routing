@@ -2,8 +2,8 @@
 
 import math
 
-from app.domain.enums import Priority, Skill, Transport
-from app.domain.models import Engineer, Request
+from app.domain.enums import Priority, RequestTier, Skill, Transport
+from app.domain.models import DEFAULT_EQUIPMENT_STOCK, Engineer, Request
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.solvers.problem import make_problem
 
@@ -27,7 +27,9 @@ def req(
     skill=Skill.LOCAL,
     duration=30,
     priority=Priority.NORMAL,
+    tier=RequestTier.ROUTINE,
     transport=None,
+    equipment=False,
 ):
     lat, lon = at(x_km, y_km)
     return Request(
@@ -40,8 +42,10 @@ def req(
         window_start=window_start,
         window_end=window_end,
         priority=priority,
+        tier=tier,
         skill=skill,
         transport_required=transport,
+        needs_equipment=equipment,
     )
 
 
@@ -54,6 +58,7 @@ def eng(
     available=True,
     unavailable_from=None,
     start=(0.0, 0.0),  # стартовая точка в километрах от офиса
+    equipment_stock=DEFAULT_EQUIPMENT_STOCK,
 ):
     start_lat, start_lon = at(*start)
     return Engineer(
@@ -67,6 +72,7 @@ def eng(
         transport=transport,
         available=available,
         unavailable_from=unavailable_from,
+        equipment_stock=equipment_stock,
     )
 
 

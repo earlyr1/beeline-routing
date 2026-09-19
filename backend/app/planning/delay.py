@@ -28,7 +28,7 @@ def delayed_until(events: Iterable[Event]) -> dict[str, int]:
 def _ready_from(state: EngineerState, time: int) -> EngineerState:
     if time <= state.available_from:
         return state
-    return EngineerState(state.engineer, state.start_node, time, state.available_until)
+    return replace(state, available_from=time)
 
 
 def keep_delays(problem: Problem, until: dict[str, int]) -> Problem:

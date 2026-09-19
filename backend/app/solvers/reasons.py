@@ -27,6 +27,11 @@ def too_far_km(
     return min(problem.travel_km(node, destination, engineer) for node in nodes)
 
 
+def state_equipment_left(problem: Problem, state: EngineerState, sequences: dict[str, list[str]]) -> int:
+    """Сколько единиц оборудования у бригады ещё свободно: что осталось с утра минус разобранное её маршрутом."""
+    return state.equipment_left - problem.equipment_used(sequences.get(state.engineer.id, []))
+
+
 def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, list[str]]) -> Unassigned:
     """Причина по всем инженерам, а у заявки, закреплённой диспетчером, только по её бригаде."""
     request = problem.request(request_id)
@@ -88,6 +93,19 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
             f"Нет инженера, который доедет: ближайшая подходящая бригада в "
             f"{min(far for _, far in direct):.0f} км от заявки, а {limits}.{tail}",
         )
+
+    # Оборудование бригада получает в офисе утром на весь день: если у всех, кто мог бы приехать, запас уже
+    # разобран, дело не в окне и не в смене — везти нечего. Бригады, у которых единицы ещё есть, судим дальше
+    # по времени, иначе прогон «даже без других заявок» показал бы время поездки, которой не будет.
+    if request.needs_equipment:
+        stocked = [s for s in alone if state_equipment_left(problem, s, sequences) > 0]
+        if not stocked:
+            names = ", ".join(s.engineer.name for s in alone)
+            return result(
+                ReasonCode.NO_FREE_ENGINEER,
+                f"Ни у одной подходящей бригады не осталось оборудования: утренний запас разобран ({names}).",
+            )
+        alone = stocked
 
     solo = [(s, simulate_route(problem, s, [request_id])) for s in alone]
     fitting = [s for s, sim in solo if sim.feasible]

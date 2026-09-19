@@ -14,8 +14,8 @@ from __future__ import annotations
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 
-from app.domain.enums import TRANSPORT_RU, EventType, Priority, ReasonCode, request_label
-from app.domain.models import Event, Plan, Request, Unassigned, Visit
+from app.domain.enums import TRANSPORT_RU, EventType, ReasonCode, request_label
+from app.domain.models import Event, Plan, Unassigned, Visit, dispatch_order
 from app.planning.models import BaseVariant, EventChoice, EventVariant, PlanDiff, VariantOption
 from app.solvers.assemble import build_plan
 from app.solvers.problem import EngineerState, Problem
@@ -138,10 +138,11 @@ def insert_plan(
 
     Заявка request_id уходит из прежнего маршрута и встаёт в оставшийся маршрут бригады engineer_id. Для каждого
     места вставки маршрут идёт по порядку «заявки до места, новая заявка, заявки после места». Бригада берёт новую
-    заявку и добавляет к ней свои: сначала закреплённые диспетчером, затем срочные, затем обычные, в каждой группе —
-    по прежнему порядку. Заявка берётся, если маршрут со всеми взятыми остаётся не хуже прежнего (_no_worse), иначе
-    бригада её пропускает. Из мест берётся то, где пропущено меньше закреплённых заявок, затем срочных, затем всех,
-    затем короче маршрут; при равенстве — место раньше. Пропущенные заявки остаются без инженера. Маршруты
+    заявку и добавляет к ней свои по очереди распределения (dispatch_order): сначала закреплённые диспетчером,
+    затем аварии и срочные, затем подключения, затем ремонт и дозаказ, в каждой группе — по прежнему порядку.
+    Заявка берётся, если маршрут со всеми взятыми остаётся не хуже прежнего (_no_worse), иначе бригада её
+    пропускает. Из мест берётся то, где пропущено меньше закреплённых заявок, затем аварий, затем подключений,
+    затем всех, затем короче маршрут; при равенстве — место раньше. Пропущенные заявки остаются без инженера. Маршруты
     остальных бригад прежние, заявки без инженера до события сохраняют свою причину, как в keep_plan.
     """
     routes, fixed = _previous_routes(problem, INSERT_TEXT)
@@ -151,8 +152,8 @@ def insert_plan(
     route = sequences.get(engineer_id, [])
     fits = _no_worse(problem, state, route)
     # sorted устойчив: внутри группы остаётся прежний порядок.
-    by_importance = sorted(route, key=lambda rid: _importance(problem.request(rid)))
-    best: tuple[tuple[int, int, int, float], list[str], list[str]] | None = None
+    by_importance = sorted(route, key=lambda rid: dispatch_order(problem.request(rid)))
+    best: tuple[tuple[int, int, int, int, float], list[str], list[str]] | None = None
     for position in range(len(route) + 1) if fits([request_id]) else ():
         sequence = [*route[:position], request_id, *route[position:]]
         taken = {request_id}
@@ -161,10 +162,11 @@ def insert_plan(
                 taken.add(candidate)
         kept = [rid for rid in sequence if rid in taken]
         skipped = [rid for rid in route if rid not in taken]
-        requests = [problem.request(rid) for rid in skipped]
+        orders = [dispatch_order(problem.request(rid)) for rid in skipped]
         key = (
-            sum(1 for request in requests if request.fixed_engineer_id is not None),
-            sum(1 for request in requests if request.priority == Priority.URGENT),
+            orders.count(0),
+            orders.count(1),
+            orders.count(2),
             len(skipped),
             sum(visit.leg_km for visit in simulate_route(problem, state, kept).visits),
         )
@@ -175,17 +177,20 @@ def insert_plan(
         sequences[engineer_id] = kept
         label = request_label(request_id, problem.request(request_id).priority)
         text = f"Вариант «{INSERT_TITLE}»: {state.engineer.name} пропускает заявку, чтобы успеть к заявке {label}."
+        # Заявку, на которую у бригады уже не осталось оборудования, она пропускает не из-за времени: взять
+        # единицу днём негде, и «чтобы успеть» про неё было бы неправдой.
+        no_equipment = state.equipment_left - problem.equipment_used(kept) <= 0
+        short = (
+            f"Вариант «{INSERT_TITLE}»: у {state.engineer.name} не осталось оборудования на эту заявку: "
+            f"утром бригада взяла {state.engineer.equipment_stock} ед."
+        )
         for rid in skipped:
-            fixed[rid] = Unassigned(request_id=rid, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text)
+            reason = short if no_equipment and problem.request(rid).needs_equipment else text
+            fixed[rid] = Unassigned(
+                request_id=rid, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=reason
+            )
     # Если заявку не вставить никуда, её причину считает build_plan.
     return _routes_plan(problem, sequences, fixed, [*unassigned_before, request_id], INSERT_TEXT)
-
-
-def _importance(request: Request) -> int:
-    """Очередь заявки при вставке: закреплённая диспетчером — 0, срочная — 1, обычная — 2. Меньше — берётся раньше."""
-    if request.fixed_engineer_id is not None:
-        return 0
-    return 1 if request.priority == Priority.URGENT else 2
 
 
 def _no_worse(
@@ -195,7 +200,8 @@ def _no_worse(
 
     Допустимый маршрут подходит. Недопустимый подходит, если нарушений не прибавилось: ни одна заявка не опаздывает
     и не заканчивается после смены больше, чем в прежнем маршруте (новая заявка — вовремя и в смену), не появилось
-    плечо длиннее предела транспорта, а обед, если в прежнем маршруте он помещался, не пропадает и не перестаёт
+    плечо длиннее предела транспорта, не появилось заявки, на которую у бригады не осталось оборудования, а обед,
+    если в прежнем маршруте он помещался, не пропадает и не перестаёт
     помещаться. Визиты сравниваются в том виде, в каком их покажет план, — обычной симуляцией. Так бригада не
     пропускает заявку, к которой опаздывала и без вставки, но и не едет на велосипеде через полобласти: по времени
     такая вставка проходит, а предел плеча она нарушает.
@@ -203,12 +209,15 @@ def _no_worse(
     before = simulate_route(problem, state, route)
     allowed = {visit.request_id: (visit.late_min, _overtime(visit, state)) for visit in before.visits}
     long_before = _long_legs(problem, state, before.visits)
+    without_equipment_before = _without_equipment(problem, state, route)
 
     def fits(request_ids: Sequence[str]) -> bool:
         result = simulate_route(problem, state, request_ids)
         if result.feasible:
             return True
         if _long_legs(problem, state, result.visits) - long_before:
+            return False
+        if _without_equipment(problem, state, request_ids) - without_equipment_before:
             return False
         lunch_lost = result.lunch_conflict or (result.lunch is None and before.lunch is not None)
         if lunch_lost and not before.lunch_conflict:
@@ -224,6 +233,18 @@ def _no_worse(
 
 def _overtime(visit: Visit, state: EngineerState) -> int:
     return max(0, visit.end - state.available_until)
+
+
+def _without_equipment(problem: Problem, state: EngineerState, request_ids: Sequence[str]) -> set[str]:
+    """Заявки маршрута, на которые у бригады уже не осталось оборудования: новых единиц днём она не берёт."""
+    used = 0
+    short: set[str] = set()
+    for request_id in request_ids:
+        if problem.request(request_id).needs_equipment:
+            used += 1
+            if used > state.equipment_left:
+                short.add(request_id)
+    return short
 
 
 def _long_legs(problem: Problem, state: EngineerState, visits: Sequence[Visit]) -> set[str]:

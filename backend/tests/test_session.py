@@ -6,6 +6,7 @@ from app.domain.timeutil import parse_hhmm
 from app.ingest.geocode import GeoResult
 from app.planning.session import EventRejected, apply_event, pin_problem
 from app.solvers.assemble import build_plan
+from app.solvers.simulate import simulate_route
 from tests.helpers import eng, problem_of, req
 from tests.planning_helpers import (
     IN_TRANSIT_TO_B,
@@ -177,3 +178,22 @@ def test_waiting_visit_is_not_pinned_when_leaving_later_is_still_on_time():
     assert [visit.request_id for visit in pinned.pinned["E1"]] == ["A"]
     assert pinned.open_request_ids == ["B"]
     assert pinned.states[0].available_from == parse_hhmm(IN_TRANSIT_TO_B)
+
+
+def test_equipment_handed_out_before_the_event_does_not_come_back():
+    """Бригада выдала единицу утром: на остаток дня у неё на единицу меньше, новую в офисе она не берёт."""
+    requests = [
+        req("A", 5, 0, "09:00", "09:30", equipment=True),
+        req("B", 5, 4, "09:30", "10:15", equipment=True),
+        req("C", 1, 4, "10:30", "17:00", equipment=True),
+    ]
+    problem = problem_of(requests, [eng("E1", equipment_stock=2)])
+    plan = build_plan(problem, "ortools", {"E1": ["A", "B"]})
+    assert problem.states[0].equipment_left == 2
+
+    pinned = pin_problem(problem, plan, parse_hhmm(IN_TRANSIT_TO_B))
+
+    # A сделана, к B инженер уже едет: обе единицы выданы, на C везти нечего.
+    assert [visit.request_id for visit in pinned.pinned["E1"]] == ["A", "B"]
+    assert pinned.states[0].equipment_left == 0
+    assert not simulate_route(pinned, pinned.states[0], ["C"]).feasible

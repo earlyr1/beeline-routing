@@ -5,7 +5,7 @@ from __future__ import annotations
 import random
 from collections.abc import Callable
 
-from app.domain.enums import Priority, Skill, Transport
+from app.domain.enums import Priority, RequestTier, Skill, Transport
 from app.domain.models import Request
 from app.ingest.beeline_csv import RawFile
 from app.ingest.geocode import GeoResult
@@ -97,6 +97,9 @@ def build_requests(
                 window_start=row.window_start,
                 window_end=row.window_end,
                 priority=Priority.URGENT if urgent else Priority.NORMAL,
+                # Уровень распределения — из типа BK, а не из навыка: «Дозаказ» и «Подключение» делят навык
+                # connection, но дозаказ остаётся на нижнем уровне вместе с ремонтом.
+                tier=cfg.tier_by_bk.get(row.type_bk, RequestTier.ROUTINE),
                 skill=skill,
                 transport_required=synth_transport_required(cfg, skill, row.type_hd),
                 source_type_bk=row.type_bk,

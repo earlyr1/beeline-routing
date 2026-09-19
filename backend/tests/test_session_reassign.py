@@ -171,6 +171,31 @@ def rejection_cases(ctx):
     ]
 
 
+def test_reassign_to_a_brigade_that_ran_out_of_equipment_says_so(solves):
+    """У E1 запас 2 единицы, обе розданы на A и B. Заявку C с оборудованием ей уже не отдать.
+
+    По времени бригада к C успевает: начнёт в 12:00, окно 12:00–17:00, смена до 18:00 — текст про опоздание
+    спорил бы сам с собой. Дело в оборудовании: новых единиц днём в офисе не берут.
+    """
+    ctx = context()
+    requests = [
+        req("A", 5, 0, "09:00", "09:30", equipment=True),
+        req("B", 5, 4, "09:30", "10:15", equipment=True),
+        req("C", 1, 4, "12:00", "17:00", equipment=True),
+    ]
+    engineers = [eng("E1", equipment_stock=2), eng("E2", equipment_stock=2)]
+    session = new_session(ctx, requests=requests, engineers=engineers, workload_level=EXACT_TRAVEL_LEVEL)
+    assert routes(session.plan) == {"E1": ["A", "B"], "E2": ["C"]}
+
+    for variant in VARIANTS:
+        with pytest.raises(EventRejected) as error:
+            apply_event(session, reassign("C", "E1", time="10:30"), ctx, variant=variant)
+        assert str(error.value) == (
+            "У Инженер E1 не осталось оборудования для заявки C: утром бригада взяла 2 ед., "
+            "и все они уже розданы."
+        ), variant
+
+
 def test_rejections_do_not_depend_on_the_variant(solves):
     ctx = context()
     for session, event, text in rejection_cases(ctx):

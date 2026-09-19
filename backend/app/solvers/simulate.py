@@ -96,6 +96,7 @@ def _drive(
     visits: list[Visit] = []
     violations: list[str] = []
     lunch: Lunch | None = None
+    equipment = 0  # единиц оборудования, разобранных маршрутом к этому визиту
     for position, request_id in enumerate(request_ids):
         request = problem.request(request_id)
         destination = problem.request_node(request_id)
@@ -117,6 +118,14 @@ def _drive(
                 f"{request_id}: нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
                 f"у {engineer.name} «{TRANSPORT_RU[engineer.transport]}»"
             )
+        if request.needs_equipment:
+            # Оборудование бригада взяла утром на весь день: новых единиц в маршруте взять негде.
+            equipment += 1
+            if equipment > state.equipment_left:
+                violations.append(
+                    f"{request_id}: у {engineer.name} не осталось оборудования — в маршруте "
+                    f"{equipment} заявок с оборудованием, а с собой {state.equipment_left} ед."
+                )
         if problem.leg_too_long(node, destination, engineer):
             violations.append(
                 f"{request_id}: плечо {leg_km:.1f} км длиннее предела {limit_km:g} км "

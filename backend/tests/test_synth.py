@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from app.domain.enums import EventType, Priority, Skill, Transport
-from app.domain.models import Metrics, Office, Plan, Route, Visit
+from app.domain.enums import EventType, Priority, RequestTier, Skill, Transport
+from app.domain.models import Metrics, Office, Plan, Route, Visit, dispatch_order
 from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
 from app.ingest.geocode import GeoResult
 from app.settings import REPO_ROOT
@@ -197,6 +197,44 @@ def test_build_requests_marks_urgent_from_type_and_control_status(cfg):
     requests = build_requests(cfg, synthetic, control, _fake_geo)
     assert [r.priority for r in requests] == [Priority.URGENT, Priority.URGENT]
     assert requests[1].skill == Skill.EMERGENCY and requests[1].transport_required == Transport.CAR
+
+
+def test_tier_comes_from_the_bk_type_and_not_from_the_skill(cfg):
+    """Ответ организаторов (вопрос 15): авария → подключение → ремонт и дозаказ.
+
+    Ловушка данных: «Дозаказ» и «Подключение» делят навык connection, но дозаказ остаётся на нижнем уровне.
+    """
+    synthetic = RawFile(
+        rows=[
+            row(0, "1"),
+            row(1, "2", type_bk="Подключение", type_hd="Заявка на подключение"),
+            row(2, "3", type_bk="Глобальная проблема", type_hd="Авария", ws=1, we=1439),
+            row(3, "4", type_bk="Дозаказ", type_hd="Дозаказ оборудования"),
+        ],
+        office_address="x",
+        is_control=False,
+    )
+    requests = build_requests(cfg, synthetic, None, _fake_geo)
+    assert [r.tier for r in requests] == [
+        RequestTier.ROUTINE,
+        RequestTier.CONNECTION,
+        RequestTier.EMERGENCY,
+        RequestTier.ROUTINE,
+    ]
+    extra, connection = requests[3], requests[1]
+    assert extra.skill == connection.skill == Skill.CONNECTION
+    assert dispatch_order(connection) < dispatch_order(extra)
+
+
+def test_engineers_take_the_daily_equipment_stock_from_the_config(cfg):
+    control = RawFile(
+        rows=[row(0, "1", crew="Бригада А"), row(1, "2", crew="Бригада Б")],
+        office_address=None,
+        is_control=True,
+    )
+    office = Office(region="east", title="Восток", address="x", lat=55.7, lon=37.7)
+    engineers, _ = build_engineers(cfg, "east", control, office)
+    assert {e.equipment_stock for e in engineers} == {cfg.equipment_stock}
 
 
 def test_build_requests_puts_the_official_norm_into_the_request(cfg):

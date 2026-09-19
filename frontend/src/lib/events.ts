@@ -299,6 +299,8 @@ export function buildUrgentEvent(form: UrgentForm, requestId: string, engineers:
     ...visitWindow,
     asap: form.asap,
     priority: 'urgent',
+    // Срочная заявка диспетчера — авария дня: сервер ставит верхний уровень сам, здесь то же значение.
+    tier: 'emergency',
     skill: form.skill,
     transport_required: form.transport === '' ? null : form.transport,
     status: 'active',

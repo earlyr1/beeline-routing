@@ -30,6 +30,20 @@ class Priority(StrEnum):
     URGENT = "urgent"
 
 
+class RequestTier(StrEnum):
+    """Приоритет распределения из ответов организаторов (вопрос 15): авария → подключение → ремонт и дозаказ.
+
+    Уровень определяется типом работ (тип заявки BK) и за день не меняется, поэтому он не то же самое, что
+    Priority: «Срочная» отмечает состояние конкретной заявки (авария, просрочка, заявка от диспетчера), а
+    уровень — род работ. Ловушка данных: «Дозаказ» и «Подключение» делят навык connection, но лежат на разных
+    уровнях, поэтому уровень берётся из типа BK, а не из навыка.
+    """
+
+    EMERGENCY = "emergency"
+    CONNECTION = "connection"
+    ROUTINE = "routine"
+
+
 class RequestStatus(StrEnum):
     ACTIVE = "active"
     CANCELLED = "cancelled"
@@ -65,6 +79,11 @@ TRANSPORT_RU = {
     Transport.PUBLIC: "Общественный транспорт и пешком",
 }
 PRIORITY_RU = {Priority.NORMAL: "Обычная", Priority.URGENT: "Срочная"}
+TIER_RU = {
+    RequestTier.EMERGENCY: "Авария",
+    RequestTier.CONNECTION: "Подключение",
+    RequestTier.ROUTINE: "Ремонт и дозаказ",
+}
 
 # Подпись срочной заявки для диспетчера: «URG-<номер>». Так её подписывает и фронт (frontend/src/lib/format.ts).
 URGENT_PREFIX = "URG-"

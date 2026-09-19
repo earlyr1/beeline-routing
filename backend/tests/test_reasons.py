@@ -98,3 +98,22 @@ def test_request_reachable_only_through_its_own_stop_is_not_explained_by_the_win
         "а «Общественный транспорт и пешком» не дальше 25 км. "
         "По пути от своих заявок доехать можно, но вместе с ними заявка не помещается."
     )
+
+
+def test_no_equipment_left_in_any_brigade():
+    """Заявку с оборудованием взять некому: утренний запас бригад уже разобран."""
+    reason = _reason(
+        [req("R1", 1, 0, "10:00", "16:00", equipment=True)], [eng("E1", equipment_stock=0)], "R1"
+    )
+    assert reason.reason_code == ReasonCode.NO_FREE_ENGINEER
+    assert reason.reason_text == (
+        "Ни у одной подходящей бригады не осталось оборудования: утренний запас разобран (Инженер E1)."
+    )
+
+
+def test_equipment_spent_by_the_route_counts_as_spent():
+    requests = [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30, equipment=True) for k in range(2)]
+    problem = problem_of(requests, [eng("E1", equipment_stock=1)])
+    reason = unassigned_reason(problem, "R1", {"E1": ["R0"]})
+    assert reason.reason_code == ReasonCode.NO_FREE_ENGINEER
+    assert "не осталось оборудования" in reason.reason_text

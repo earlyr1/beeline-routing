@@ -30,6 +30,17 @@ describe('RequestsTab', () => {
     expect(within(rowOf('10135')).getByRole('button', { name: 'Вернуть' })).toBeEnabled();
   });
 
+  it('метит подключение уровнем распределения, а ремонт и аварию не метит', () => {
+    render(<RequestsTab />);
+    // Средний уровень виден меткой; нижний — это большинство заявок, у них метки нет.
+    const connection = within(rowOf('74198')).getByText('Подключение');
+    expect(connection).toHaveClass('badge');
+    expect(connection).toHaveAttribute('title', 'Приоритет распределения: авария → подключение → ремонт и дозаказ');
+    expect(within(rowOf('50104')).queryByText('Подключение')).not.toBeInTheDocument();
+    // Верхний уровень и так виден меткой «Срочная» и приставкой URG-.
+    expect(within(rowOf('URG-001')).queryByText('Авария')).not.toBeInTheDocument();
+  });
+
   it('shows an urgent request of the day as URG-… and keeps the raw number in the event and in the store', () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), clock: '13:30' });

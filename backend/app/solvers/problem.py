@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
 from app.domain.enums import ReasonCode, RequestStatus
@@ -50,6 +50,9 @@ class EngineerState:
     start_node: int
     available_from: int
     available_until: int
+    # Сколько единиц оборудования у бригады ещё с собой: утренний запас минус выданные до времени пересчёта.
+    # Новую в офисе не берут, поэтому на остаток дня это жёсткий предел.
+    equipment_left: int
 
     @property
     def active(self) -> bool:
@@ -61,7 +64,7 @@ def initial_state(engineer: Engineer, home_node: int) -> EngineerState:
     if not engineer.available:
         cutoff = engineer.unavailable_from if engineer.unavailable_from is not None else engineer.shift_start
         until = min(until, cutoff)
-    return EngineerState(engineer, home_node, engineer.shift_start, until)
+    return EngineerState(engineer, home_node, engineer.shift_start, until, engineer.equipment_stock)
 
 
 @dataclass
@@ -103,6 +106,10 @@ class Problem:
 
     def state(self, engineer_id: str) -> EngineerState:
         return self._states[engineer_id]
+
+    def equipment_used(self, request_ids: Iterable[str]) -> int:
+        """Сколько единиц оборудования разбирает набор заявок: по одной на заявку с needs_equipment."""
+        return sum(1 for rid in request_ids if self.has_request(rid) and self.request(rid).needs_equipment)
 
     def lunch_window(self, state: EngineerState) -> tuple[int, int] | None:
         """Самое раннее и самое позднее начало обеда инженера или None, если обед по плану ему не нужен.

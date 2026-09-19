@@ -11,7 +11,7 @@ from __future__ import annotations
 import random
 from collections import Counter
 
-from app.domain.enums import EventType, Priority, Skill, Transport
+from app.domain.enums import EventType, Priority, RequestTier, Skill, Transport
 from app.domain.models import Event, Plan, Request
 from app.domain.timeutil import DAY_MIN
 from app.ingest.beeline_csv import RawFile
@@ -72,6 +72,7 @@ def build_demo_events(
                     window_start=at,
                     window_end=min(DAY_MIN - 1, at + cfg.urgent_event.window_min),
                     priority=Priority.URGENT,
+                    tier=RequestTier.EMERGENCY,
                     skill=Skill.EMERGENCY,
                     transport_required=Transport.CAR,
                     source_type_bk="Глобальная проблема",

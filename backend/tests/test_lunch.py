@@ -129,7 +129,11 @@ def test_engineer_who_already_worked_today_gets_lunch_after_pinned_visits():
     pinned = Visit(request_id="P", arrival=544, start=660, end=750, leg_km=1.3, leg_min=4, pinned=True)
     problem = replace(
         base,
-        states=[EngineerState(state.engineer, base.request_node("P"), 750, state.available_until)],
+        states=[
+            EngineerState(
+                state.engineer, base.request_node("P"), 750, state.available_until, state.equipment_left
+            )
+        ],
         open_request_ids=[],
         pinned={"E1": [pinned]},
         now=740,

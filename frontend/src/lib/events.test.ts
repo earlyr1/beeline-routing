@@ -108,6 +108,12 @@ describe('events', () => {
     expect(event.request?.address).toBe('Точка на карте 55.71000, 37.80000');
   });
 
+  it('ставит срочной заявке диспетчера верхний уровень распределения', () => {
+    const { engineers } = makePlanningState();
+    // Сервер ставит уровень сам, но и клиент отправляет тот же: в списке заявка сразу как авария.
+    expect(buildUrgentEvent(form, 'URG-TIER', engineers).request).toMatchObject({ tier: 'emergency', priority: 'urgent' });
+  });
+
   it('несёт в срочной заявке отметку об оборудовании', () => {
     const { engineers } = makePlanningState();
     expect(buildUrgentEvent({ ...form, needsEquipment: true }, 'URG-EQ', engineers).request).toMatchObject({ needs_equipment: true });

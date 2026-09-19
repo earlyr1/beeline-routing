@@ -11,7 +11,15 @@ import {
   toMinutes,
   TRANSPORT_LABELS,
 } from '../lib/format';
-import { byId, displayedPlan, engineerIdsOf, routeRows, routeSummary, type RouteStop } from '../lib/planView';
+import {
+  byId,
+  displayedPlan,
+  engineerIdsOf,
+  equipmentLeft,
+  routeRows,
+  routeSummary,
+  type RouteStop,
+} from '../lib/planView';
 import { timelineStatusText } from '../lib/timeBar';
 import { dayScale, percent, timelineRow } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
@@ -23,9 +31,12 @@ function slackText(stop: RouteStop): string {
   return stop.slackMin < 0 ? `опоздание ${-stop.slackMin} мин` : `${stop.slackMin} мин`;
 }
 
-/** Сколько единиц оборудования брать с собой; без оборудования в итогах об этом ничего нет. */
-function equipmentText(count: number): string {
-  return count === 0 ? '' : ` · оборудование ${count} ${plural(count, 'единица', 'единицы', 'единиц')}`;
+/**
+ * Оборудование бригады в итогах: сколько единиц она взяла в офисе утром и сколько осталось к времени на часах.
+ * Запас общий на весь день, поэтому строка есть и у бригады, которой оборудование сегодня не понадобилось.
+ */
+function equipmentText(stock: number, left: number): string {
+  return ` · оборудование ${stock} ${plural(stock, 'единица', 'единицы', 'единиц')} утром, осталось ${left}`;
 }
 
 /**
@@ -49,7 +60,7 @@ export function RouteCard() {
   if (!summary) return null;
 
   const { engineer, stops } = summary;
-  const equipment = equipmentText(summary.equipmentCount);
+  const equipment = equipmentText(engineer.equipment_stock, equipmentLeft(summary, clock));
   const availability = engineer.available ? null : engineer.unavailable_from ? `недоступен с ${engineer.unavailable_from}` : 'недоступен';
   const profile = [
     engineer.skills.map((skill) => SKILL_LABELS[skill]).join(', '),

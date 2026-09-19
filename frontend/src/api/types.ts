@@ -5,6 +5,8 @@
 export type Skill = 'local' | 'connection' | 'emergency';
 export type Transport = 'car' | 'bike' | 'public';
 export type Priority = 'normal' | 'urgent';
+/** Приоритет распределения по роду работ (ответ организаторов, вопрос 15): авария → подключение → ремонт и дозаказ. */
+export type RequestTier = 'emergency' | 'connection' | 'routine';
 export type RequestStatus = 'active' | 'cancelled';
 export type EventType =
   | 'urgent'
@@ -46,6 +48,12 @@ export interface ServiceRequest {
    */
   asap: boolean;
   priority: Priority;
+  /**
+   * Уровень распределения по роду работ: при нехватке ресурсов первым снимается ремонт и дозаказ,
+   * затем подключение, последней — авария. Приходит из типа заявки BK; в старых данных нижний уровень.
+   * Это не то же самое, что priority: «Срочная» отмечает состояние заявки, уровень — род работ.
+   */
+  tier: RequestTier;
   skill: Skill;
   transport_required: Transport | null;
   status: RequestStatus;
@@ -53,7 +61,7 @@ export interface ServiceRequest {
   source_type_hd: string;
   /**
    * Инженеру нужно взять с собой единицу оборудования: роутер, приставку или колонку.
-   * На заявку приходится не больше одной единицы; на расчёт плана флаг не влияет, это информация для бригады.
+   * На заявку приходится ровно одна единица дневного запаса бригады (Engineer.equipment_stock).
    */
   needs_equipment: boolean;
   /**
@@ -74,6 +82,11 @@ export interface Engineer {
   transport: Transport;
   available: boolean;
   unavailable_from: HHMM | null;
+  /**
+   * Сколько единиц оборудования бригада получает в офисе утром сразу на весь день.
+   * Каждая заявка с needs_equipment тратит одну; больше этого числа таких заявок бригаде не назначают.
+   */
+  equipment_stock: number;
 }
 
 export interface Office {

@@ -6,6 +6,7 @@ import {
   diffBadge,
   diffMarks,
   displayedPlan,
+  equipmentLeft,
   routeRequestIds,
   routeRows,
   routeSummary,
@@ -66,6 +67,19 @@ describe('planView', () => {
     expect(diffBadge('added', 'URG-001', state.last_diff, engineers, true)).toEqual({ text: 'Будет назначена' });
     expect(diffBadge('shifted', '46393', state.last_diff, engineers, true)).toEqual({ text: 'Сдвинется время' });
     expect(diffBadge('removed', '10135', state.last_diff, engineers, true)).toEqual({ text: 'Будет снята' });
+  });
+
+  it('вычитает из утреннего запаса оборудования единицы, выданные к времени на часах', () => {
+    // У Арташкина 74198 с 10:00 и 86160 с 12:00, обе с оборудованием; запас бригады — 6 единиц.
+    const summary = routeSummary(state, state.plan, 'E01')!;
+    expect(equipmentLeft(summary, '09:00')).toBe(6);
+    expect(equipmentLeft(summary, '10:30')).toBe(5);
+    // К 86160 бригада выехала в 11:00: выезд в 11:30 задержал бы начало работы, и эту единицу солвер
+    // на бэкенде тоже считает выданной — цифра на странице бригады не должна с ним расходиться.
+    expect(equipmentLeft(summary, '11:30')).toBe(4);
+    expect(equipmentLeft(summary, '13:00')).toBe(4);
+    // Бригада без заявок с оборудованием держит запас весь день.
+    expect(equipmentLeft(routeSummary(state, state.plan, 'E02')!, '22:00')).toBe(6);
   });
 
   it('summarises a route for the dispatcher', () => {

@@ -6,6 +6,7 @@ import { BrigadePicker } from './BrigadePicker';
 import { EngineerLink } from './EngineerLink';
 import { EquipmentBadge } from './EquipmentBadge';
 import { RequestActions } from './RequestActions';
+import { TierBadge } from './TierBadge';
 import { useExplanation } from './useExplanation';
 import { WhyButton } from './WhyPanel';
 
@@ -52,7 +53,13 @@ export function ExplanationCard() {
               {request.duration_min} мин · {SKILL_LABELS[request.skill]}
               {request.transport_required ? ` · нужен транспорт «${TRANSPORT_LABELS[request.transport_required]}»` : ''}
               {request.priority === 'urgent' ? ' · срочная' : ''}
-              {/* Та же метка, что в строке списка заявок: инженер везёт с собой единицу оборудования. */}
+              {/* Те же метки, что в строке списка заявок: уровень распределения и единица оборудования. */}
+              {request.tier === 'connection' && (
+                <>
+                  {' '}
+                  <TierBadge tier={request.tier} />
+                </>
+              )}
               {request.needs_equipment && (
                 <>
                   {' '}

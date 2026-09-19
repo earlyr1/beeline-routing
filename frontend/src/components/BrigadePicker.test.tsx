@@ -26,6 +26,7 @@ const GOROKHOV: Engineer = {
   transport: 'car',
   available: true,
   unavailable_from: null,
+  equipment_stock: 6,
 };
 
 /** Бригада Белузин пересела на велосипед, и добавлена Бригада Горохов: между подходящими бригадами две неподходящие. */

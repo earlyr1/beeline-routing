@@ -82,3 +82,26 @@ def test_car_has_no_leg_limit():
     problem = problem_of([req("R1", 60, 0, "10:00", "16:00")], [eng("E1")])
     sim = simulate_route(problem, problem.states[0], ["R1"])
     assert sim.feasible and sim.visits[0].leg_km == 78.14
+
+
+def test_route_runs_out_of_equipment_when_the_morning_stock_is_spent():
+    """Оборудование бригада получает в офисе утром на весь день: третью единицу взять негде."""
+    problem = problem_of(
+        [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30, equipment=True) for k in range(3)],
+        [eng("E1", equipment_stock=2)],
+    )
+    state = problem.states[0]
+    assert simulate_route(problem, state, ["R0", "R1"]).feasible
+    sim = simulate_route(problem, state, ["R0", "R1", "R2"])
+    assert not sim.feasible
+    assert sim.violations == [
+        "R2: у Инженер E1 не осталось оборудования — в маршруте 3 заявок с оборудованием, а с собой 2 ед."
+    ]
+
+
+def test_requests_without_equipment_do_not_spend_the_stock():
+    problem = problem_of(
+        [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30) for k in range(3)],
+        [eng("E1", equipment_stock=0)],
+    )
+    assert simulate_route(problem, problem.states[0], ["R0", "R1", "R2"]).feasible

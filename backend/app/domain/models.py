@@ -6,10 +6,26 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.domain.enums import EventType, Priority, ReasonCode, RequestStatus, Skill, Transport
+from app.domain.enums import (
+    EventType,
+    Priority,
+    ReasonCode,
+    RequestStatus,
+    RequestTier,
+    Skill,
+    Transport,
+)
 from app.domain.timeutil import HHMM
 
 GeocodePrecision = Literal["house", "street", "locality", "none"]
+
+# Дневной запас оборудования бригады: сколько единиц (роутеров, приставок, колонок) она берёт в офисе утром
+# на весь день (ответ организаторов, вопрос 4; «допустимый запас можно определить самостоятельно»).
+# Шесть единиц выбраны по настоящим дням из выгрузки: ни в одном регионе диспетчеры не давали бригаде больше
+# пяти заявок с оборудованием (максимумы по регионам 5, 4, 2 и 4), так что запас покрывает любой реальный день
+# с единицей в запасе. При этом он не бесплатный: на Востоке, где 40 заявок с оборудованием на 12 бригад,
+# оптимум без ограничения складывает в одну бригаду семь единиц (tests/test_equipment_east.py).
+DEFAULT_EQUIPMENT_STOCK = 6
 
 
 class Request(BaseModel):
@@ -23,6 +39,9 @@ class Request(BaseModel):
     window_start: HHMM
     window_end: HHMM
     priority: Priority = Priority.NORMAL
+    # Приоритет распределения по роду работ: авария важнее подключения, подключение важнее ремонта и дозаказа.
+    # Ставится по типу заявки BK при сборке бандла. В старых бандлах поля нет — тогда это нижний уровень.
+    tier: RequestTier = RequestTier.ROUTINE
     # «Как можно скорее»: окно заявки задаёт backend, от времени события до самого позднего конца смен.
     asap: bool = False
     skill: Skill
@@ -30,8 +49,8 @@ class Request(BaseModel):
     status: RequestStatus = RequestStatus.ACTIVE
     source_type_bk: str = ""
     source_type_hd: str = ""
-    # Нужно привезти единицу оборудования: роутер, приставку или колонку. Подсказка инженеру, что взять с собой
-    # утром; на план она не влияет. В старых бандлах поля нет — тогда оборудование не нужно.
+    # Нужно привезти единицу оборудования: роутер, приставку или колонку. Заявка тратит одну единицу дневного
+    # запаса бригады (Engineer.equipment_stock). В старых бандлах поля нет — тогда оборудование не нужно.
     needs_equipment: bool = False
     # Диспетчер закрепил заявку за этой бригадой («Переназначение заявки»): солверы не отдают её другим. Закрепление
     # снимается, когда бригада больше не может взять заявку. Заполняет backend по событию, у заявок дня поле пустое.
@@ -43,6 +62,21 @@ class Request(BaseModel):
         if not self.asap and self.window_end < self.window_start:
             raise ValueError("конец временного окна раньше начала")
         return self
+
+
+def dispatch_order(request: Request) -> int:
+    """Очередь заявки, когда ресурсов дня не хватает на всех: чем меньше, тем важнее.
+
+    0 — заявка, закреплённая диспетчером: его выбор важнее любой оптимизации. 1 — верхний уровень: авария из
+    данных, просроченная заявка и срочная заявка диспетчера. 2 — подключение. 3 — ремонт, дозаказ и всё
+    остальное. По этому порядку живут и штраф за снятую заявку в цели OR-Tools, и жадная починка маршрутов,
+    и вставка заявки в маршрут при событии, поэтому они не могут разойтись.
+    """
+    if request.fixed_engineer_id is not None:
+        return 0
+    if request.priority == Priority.URGENT or request.tier == RequestTier.EMERGENCY:
+        return 1
+    return 2 if request.tier == RequestTier.CONNECTION else 3
 
 
 # Ожидание срочной заявки «как можно скорее» (начало работы минус начало окна) до 4 часов не штрафуется.
@@ -67,6 +101,9 @@ class Engineer(BaseModel):
     transport: Transport
     available: bool = True
     unavailable_from: HHMM | None = None
+    # Оборудование бригада получает в офисе утром сразу на весь день: сколько единиц она увезла с собой.
+    # Каждая заявка с needs_equipment тратит одну. В старых бандлах поля нет — тогда запас по умолчанию.
+    equipment_stock: int = Field(default=DEFAULT_EQUIPMENT_STOCK, ge=0)
 
     @model_validator(mode="after")
     def _shift_order(self) -> Engineer:

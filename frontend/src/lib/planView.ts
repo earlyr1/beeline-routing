@@ -113,7 +113,7 @@ export interface RouteSummary {
   totalKm: number;
   travelMin: number;
   endOfWork: HHMM | null;
-  /** Сколько единиц оборудования бригада берёт с собой: по единице на визит, которому оно нужно. */
+  /** Сколько единиц оборудования уходит на маршрут: по единице на визит, которому оно нужно. */
   equipmentCount: number;
   sentences: string[];
   /** Обед по плану; null, если обеда в маршруте нет. */
@@ -214,6 +214,34 @@ export function routeSummary(state: PlanningState, plan: Plan, engineerId: strin
   }
   const equipmentCount = stops.filter((stop) => stop.request?.needs_equipment).length;
   return { engineer, stops, totalKm, travelMin, endOfWork, equipmentCount, sentences, lunch: route?.lunch ?? null };
+}
+
+/**
+ * Визит, к которому бригада уже выехала: выезд был раньше времени на часах, и выезд прямо сейчас задержал бы
+ * начало работы. Те же правила, что у pin_problem на бэкенде: такой визит солвер не трогает.
+ */
+function onTheWay(stop: RouteStop, engineer: Engineer, now: number): boolean {
+  if (!engineer.available || stop.request?.status === 'cancelled') return false;
+  if (toMinutes(stop.visit.arrival) - stop.visit.leg_min >= now) return false;
+  const windowStart = stop.request ? toMinutes(stop.request.window_start) : 0;
+  return Math.max(now + stop.visit.leg_min, windowStart) > toMinutes(stop.visit.start);
+}
+
+/**
+ * Сколько единиц оборудования осталось у бригады к времени на часах: утренний запас минус выданные на уже
+ * начатых визитах и на визите, к которому бригада едет. Новых единиц днём бригада не берёт, поэтому остаток
+ * только убывает. Визит в пути считается выданным, потому что так же его считает солвер: иначе на странице
+ * бригады была бы одна цифра, а в плане следующего события — другая.
+ */
+export function equipmentLeft(summary: RouteSummary, clock: HHMM): number {
+  const now = toMinutes(clock);
+  const next = summary.stops.find((stop) => toMinutes(stop.visit.start) >= now);
+  const handed = summary.stops.filter(
+    (stop) =>
+      stop.request?.needs_equipment &&
+      (toMinutes(stop.visit.start) < now || (stop === next && onTheWay(stop, summary.engineer, now))),
+  ).length;
+  return Math.max(0, summary.engineer.equipment_stock - handed);
 }
 
 /** Прямые отрезки от старта инженера через заявки: запасной вариант, пока нет геометрии OSRM. */

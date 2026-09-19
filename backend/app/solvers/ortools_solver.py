@@ -1,7 +1,8 @@
 """Оптимизированный план: OR-Tools RoutingModel (VRPTW с навыками, транспортом и сменами).
 
-Цель лексикографическая через веса: сначала назначить все заявки (закреплённые диспетчером важнее всех,
-срочные важнее обычных), затем задействовать меньше инженеров, затем меньше километров. Насколько дорог
+Цель лексикографическая через веса: сначала назначить все заявки (закреплённые диспетчером важнее всех, дальше
+приоритет распределения — авария, подключение, ремонт и дозаказ), затем задействовать меньше инженеров, затем
+меньше километров. Утренний запас оборудования бригады — отдельное измерение вместимости. Насколько дорог
 новый инженер, задаёт нагрузка дня (app/planning/workload.py): в спокойный день он дешевле, на пределе дороже. При перепланировании
 добавляется штраф за перенос заявки к другому инженеру, а у инженеров с закреплёнными
 визитами фиксированная стоимость нулевая. Срочная заявка «как можно скорее» ждёт до 4 часов бесплатно,
@@ -15,7 +16,7 @@ from dataclasses import dataclass
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from app.domain.enums import Priority
-from app.domain.models import ASAP_FREE_WAIT_MIN, LUNCH_MIN, Plan, Request
+from app.domain.models import ASAP_FREE_WAIT_MIN, LUNCH_MIN, Plan, Request, dispatch_order
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.assemble import build_plan
 from app.solvers.eligibility import exclusion
@@ -35,6 +36,11 @@ class ObjectiveWeights:
     # только эту стоимость (app/planning/workload.py).
     vehicle_fixed_cost: int = 1_000_000
     drop_normal: int = 10_000_000
+    # Средний уровень приоритета распределения (ответ организаторов, вопрос 15): подключение важнее ремонта и
+    # дозаказа, но уступает аварии. Шаг между уровнями такой же мягкий, как между обычной и срочной заявкой:
+    # одно подключение стоит трёх ремонтов, одна авария — трёх подключений. Когда дня не хватает, решатель
+    # снимает сначала ремонт, потом подключение и только в последнюю очередь аварию.
+    drop_connection: int = 30_000_000
     drop_urgent: int = 100_000_000
     # Заявка, которую диспетчер закрепил за бригадой: его выбор важнее любой другой заявки, поэтому решатель скорее
     # снимет с бригады обычные и срочные заявки, чем оставит закреплённую без инженера.
@@ -46,10 +52,15 @@ class ObjectiveWeights:
 
 
 def drop_penalty(request: Request, weights: ObjectiveWeights) -> int:
-    """Штраф за заявку без инженера: закреплённая диспетчером дороже срочной, срочная дороже обычной."""
-    if request.fixed_engineer_id is not None:
-        return weights.drop_fixed
-    return weights.drop_urgent if request.priority == Priority.URGENT else weights.drop_normal
+    """Штраф за заявку без инженера по очереди распределения (app/domain/models.py, dispatch_order).
+
+    Закреплённая диспетчером дороже аварии и срочной, те дороже подключения, подключение дороже ремонта
+    и дозаказа. Через эту функцию идут и модель OR-Tools, и стоимость плана в портфеле, поэтому разойтись
+    в оценке они не могут.
+    """
+    return (weights.drop_fixed, weights.drop_urgent, weights.drop_connection, weights.drop_normal)[
+        dispatch_order(request)
+    ]
 
 
 @dataclass(frozen=True)
@@ -148,6 +159,19 @@ class OrToolsSolver:
         routing.AddDimensionWithVehicleTransits(time_callbacks, DAY_MIN, 2 * DAY_MIN, False, "Time")
         time_dimension = routing.GetDimensionOrDie("Time")
 
+        # Оборудование: заявка с needs_equipment забирает у бригады одну единицу утреннего запаса, вместимость
+        # каждой «машины» — то, что у бригады осталось на момент расчёта (EngineerState.equipment_left).
+        # То же ограничение проверяет прогон маршрута, поэтому починка, FCFS и причины видят его так же.
+        demand = [0] * (v_count + 1) + [int(problem.request(r).needs_equipment) for r in candidates]
+        if any(demand):
+            routing.AddDimensionWithVehicleCapacity(
+                routing.RegisterUnaryTransitVector(demand),
+                0,
+                [state.equipment_left for state in vehicles],
+                True,
+                "Equipment",
+            )
+
         for k, request_id in enumerate(candidates):
             request = problem.request(request_id)
             index = manager.NodeToIndex(v_count + 1 + k)
@@ -233,19 +257,15 @@ def _keep_feasible_prefix(problem: Problem, state: EngineerState, sequence: list
 def repair_unassigned(problem: Problem, sequences: dict[str, list[str]]) -> dict[str, list[str]]:
     """Страховка от недосмотра поиска за лимит времени: жадно вставляет оставшиеся заявки.
 
-    Первыми идут закреплённые диспетчером заявки, за ними срочные. Для каждой берётся допустимая позиция
+    Порядок тот же, что у штрафа за снятую заявку (dispatch_order): сначала закреплённые диспетчером, затем
+    аварии и срочные, затем подключения, затем ремонт и дозаказ. Для каждой берётся допустимая позиция
     с наименьшим приростом километров, причём инженеры, у которых уже есть работа сегодня, предпочтительнее
     простаивающих.
     """
     result = {engineer_id: list(sequence) for engineer_id, sequence in sequences.items()}
     placed = {request_id for sequence in result.values() for request_id in sequence}
     pending = [request_id for request_id in problem.open_request_ids if request_id not in placed]
-    pending.sort(
-        key=lambda request_id: (
-            problem.request(request_id).fixed_engineer_id is None,
-            problem.request(request_id).priority != Priority.URGENT,
-        )
-    )
+    pending.sort(key=lambda request_id: dispatch_order(problem.request(request_id)))
     for request_id in pending:
         request = problem.request(request_id)
         best: tuple[tuple[int, float], str, list[str]] | None = None

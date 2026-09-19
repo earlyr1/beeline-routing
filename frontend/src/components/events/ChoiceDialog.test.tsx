@@ -84,6 +84,7 @@ const ZVEREV: Engineer = {
   transport: 'car',
   available: true,
   unavailable_from: null,
+  equipment_stock: 6,
 };
 
 /** Бригада Соколов: вторая подходящая бригада, ей диспетчер отдаёт заявку, если цена Зверева не понравилась. */

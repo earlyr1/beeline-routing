@@ -1,6 +1,14 @@
-from app.domain.enums import Priority, ReasonCode, Transport
+from app.domain.enums import Priority, ReasonCode, RequestTier, Transport
+from app.domain.models import Request, dispatch_order
+from app.solvers.assemble import build_plan
 from app.solvers.fcfs import FcfsSolver
-from app.solvers.ortools_solver import OrToolsSolver, repair_unassigned
+from app.solvers.ortools_solver import (
+    ObjectiveWeights,
+    OrToolsSolver,
+    drop_penalty,
+    repair_unassigned,
+)
+from app.solvers.portfolio import plan_cost
 from tests.helpers import eng, problem_of, req
 
 
@@ -71,7 +79,10 @@ def test_engineer_who_already_worked_today_has_no_fixed_cost():
     pinned_visit = Visit(request_id="P", arrival=560, start=560, end=600, leg_km=5.2, leg_min=20, pinned=True)
     problem = replace(
         base,
-        states=[EngineerState(e1.engineer, base.request_node("P"), 600, e1.available_until), e2],
+        states=[
+            EngineerState(e1.engineer, base.request_node("P"), 600, e1.available_until, e1.equipment_left),
+            e2,
+        ],
         open_request_ids=["R1"],
         pinned={"E1": [pinned_visit]},
         now=600,
@@ -117,3 +128,100 @@ def test_without_the_limit_the_cheap_answer_uses_the_long_leg():
     problem = problem_of(FAR_REQUESTS, FAR_ENGINEERS, model=TravelModel(bike_leg_limit_km=1000))
     plan = OrToolsSolver(time_limit_s=1).solve(problem)
     assert _routes(plan) == {"E1": ["R2", "R1"], "E2": []}
+
+
+# --- Три уровня приоритета распределения (ответ организаторов, вопрос 15) -------------------------------------
+
+
+# День на одну заявку: четыре заявки в одно и то же узкое окно, одна бригада. Всё, что не первое, снимается.
+def _tiered_day(*tiers):
+    return problem_of(
+        [
+            req(
+                f"R{k}",
+                1,
+                k / 10,
+                "10:00",
+                "10:10",
+                duration=60,
+                tier=tier,
+                priority=Priority.URGENT if tier == RequestTier.EMERGENCY else Priority.NORMAL,
+            )
+            for k, tier in enumerate(tiers)
+        ],
+        [eng("E1")],
+    )
+
+
+def test_repair_drops_routine_before_connection_and_connection_before_emergency():
+    problem = _tiered_day(RequestTier.ROUTINE, RequestTier.CONNECTION)
+    assert repair_unassigned(problem, {"E1": []}) == {"E1": ["R1"]}
+    problem = _tiered_day(RequestTier.CONNECTION, RequestTier.EMERGENCY)
+    assert repair_unassigned(problem, {"E1": []}) == {"E1": ["R1"]}
+
+
+def test_solver_keeps_the_connection_and_drops_the_repair():
+    problem = _tiered_day(RequestTier.ROUTINE, RequestTier.CONNECTION)
+    plan = OrToolsSolver(time_limit_s=1).solve(problem)
+    assert _routes(plan)["E1"] == ["R1"]
+    assert [u.request_id for u in plan.unassigned] == ["R0"]
+
+
+def test_solver_keeps_the_emergency_and_drops_the_connection():
+    problem = _tiered_day(RequestTier.CONNECTION, RequestTier.EMERGENCY)
+    plan = OrToolsSolver(time_limit_s=1).solve(problem)
+    assert _routes(plan)["E1"] == ["R1"]
+    assert [u.request_id for u in plan.unassigned] == ["R0"]
+
+
+def test_extra_order_does_not_outrank_a_connection():
+    """«Дозаказ» и «Подключение» делят навык connection, но уровень у них разный."""
+    problem = _tiered_day(RequestTier.ROUTINE, RequestTier.CONNECTION)
+    extra, connection = problem.request("R0"), problem.request("R1")
+    assert extra.skill == connection.skill
+    weights = ObjectiveWeights()
+    assert drop_penalty(extra, weights) < drop_penalty(connection, weights)
+
+
+def test_drop_penalty_and_plan_cost_agree_on_the_tiers():
+    """Стоимость снятой заявки у модели и у сравнения планов в портфеле — одна и та же функция."""
+    problem = _tiered_day(RequestTier.ROUTINE, RequestTier.CONNECTION, RequestTier.EMERGENCY)
+    weights = ObjectiveWeights()
+    plan = build_plan(problem, "ortools", {"E1": []})
+    expected = sum(drop_penalty(problem.request(f"R{k}"), weights) for k in range(3))
+    assert plan_cost(problem, plan, weights) == expected
+    penalties = [drop_penalty(problem.request(f"R{k}"), weights) for k in range(3)]
+    assert penalties[0] < penalties[1] < penalties[2] < weights.drop_fixed
+
+
+def test_old_bundles_without_the_tier_load_on_the_lowest_level():
+    request = Request.model_validate_json(
+        '{"id": "R1", "address": "Москва", "duration_min": 30, "window_start": "10:00", '
+        '"window_end": "12:00", "skill": "local"}'
+    )
+    assert request.tier == RequestTier.ROUTINE
+    assert dispatch_order(request) == 3
+
+
+# --- Оборудование: утренний запас бригады (ответ организаторов, вопрос 4) --------------------------------------
+
+
+def test_brigade_at_its_equipment_limit_gets_no_more_equipment_requests():
+    problem = problem_of(
+        [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30, equipment=True) for k in range(4)],
+        [eng("E1", equipment_stock=2), eng("E2", equipment_stock=0)],
+    )
+    plan = OrToolsSolver(time_limit_s=2).solve(problem)
+    assert len(_routes(plan)["E1"]) == 2
+    assert _routes(plan)["E2"] == []
+    assert plan.metrics.violations == 0
+    assert len(plan.unassigned) == 2
+
+
+def test_equipment_stock_does_not_limit_requests_without_equipment():
+    problem = problem_of(
+        [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30) for k in range(4)],
+        [eng("E1", equipment_stock=0)],
+    )
+    plan = OrToolsSolver(time_limit_s=2).solve(problem)
+    assert len(_routes(plan)["E1"]) == 4

@@ -1,5 +1,7 @@
 """Варианты исправления плана на «ломающее» событие: стратегии, сравнение и тексты. Без шкалы и API."""
 
+from dataclasses import replace
+
 import pytest
 
 from app.domain.enums import EventType, ReasonCode, Skill, Transport
@@ -14,12 +16,14 @@ from app.planning.variants import (
     Outcome,
     assign_variant,
     build_choice,
+    insert_plan,
     is_choosable,
+    keep_plan,
     late_visits,
     variant_summary,
     variant_title,
 )
-from tests.helpers import eng, req
+from tests.helpers import eng, problem_of, req
 from tests.planning_helpers import busy_engineer, context, new_session, routes
 from tests.timeline_helpers import fcfs_solves
 
@@ -322,3 +326,47 @@ def test_choice_adds_giving_the_request_to_a_brigade_as_a_fourth_option_priced_a
     assert (chosen.title, chosen.summary) == ("Отдать: Бригада Зверев", "Выбор диспетчера")
     # Цена решения считается от «Оптимально по дню», хотя рекомендован другой вариант.
     assert (chosen.pros, chosen.cons) == ([], ["на 1 бригаду больше", "на 30,0 км больше"])
+
+
+# --- Оборудование в вариантах без решателя ---------------------------------------------------------------------
+
+
+def _equipment_day(stock):
+    """День из трёх заявок с оборудованием и бригады с запасом stock; прежний маршрут бригады — R0."""
+    requests = [req(f"R{k}", 1, k / 10, "10:00", "18:00", duration=30, equipment=True) for k in range(3)]
+    problem = problem_of(requests, [eng("E1", equipment_stock=stock)])
+    return replace(problem, previous_order={"E1": ["R0", "R1"]}, previous_assignment={"R0": "E1", "R1": "E1"})
+
+
+def test_keep_shows_that_the_previous_route_no_longer_has_equipment():
+    """«Ничего не менять» прогоняет прежний маршрут как есть: нехватка оборудования видна нарушением."""
+    plan = keep_plan(_equipment_day(1))
+    assert routes(plan)["E1"] == ["R0", "R1"]
+    assert plan.metrics.violations == 1
+    assert "не осталось оборудования" in plan.violations[0]
+
+
+def test_insert_skips_the_own_request_when_the_brigade_has_one_unit_left():
+    """«Вставить в маршрут»: бригада с одной единицей берёт переназначенную заявку и пропускает свою."""
+    problem = replace(_equipment_day(1), previous_order={"E1": ["R0"]}, previous_assignment={"R0": "E1"})
+    plan = insert_plan(problem, "R1", "E1")
+    assert routes(plan)["E1"] == ["R1"]
+    assert [item.request_id for item in plan.unassigned] == ["R0", "R2"]
+    assert plan.metrics.violations == 0
+
+
+def test_skipped_because_of_equipment_is_not_explained_by_time():
+    """Бригада с запасом 2 берёт третью заявку с оборудованием и пропускает свою: дело не во времени.
+
+    Все окна до 18:00, маршрут без опозданий и переработок (plan.violations пуст), так что «чтобы успеть
+    к заявке R2» было бы неправдой: единицы оборудования кончились, а днём их не берут.
+    """
+    plan = insert_plan(_equipment_day(2), "R2", "E1")
+    assert (routes(plan)["E1"], plan.violations) == (["R0", "R2"], [])
+    assert [(item.request_id, item.reason_text) for item in plan.unassigned] == [
+        (
+            "R1",
+            "Вариант «Вставить в маршрут»: у Инженер E1 не осталось оборудования на эту заявку: "
+            "утром бригада взяла 2 ед.",
+        )
+    ]

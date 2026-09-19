@@ -36,7 +36,7 @@ describe('RouteCard', () => {
     ).toBeInTheDocument();
     expect(
       within(card()).getByText(
-        'Визитов: 4 · оборудование 2 единицы · пробег 23,7 км · в пути 2 ч 15 мин · окончание работ 15:55, конец смены 22:00',
+        'Визитов: 4 · оборудование 6 единиц утром, осталось 4 · пробег 23,7 км · в пути 2 ч 15 мин · окончание работ 15:55, конец смены 22:00',
       ),
     ).toBeInTheDocument();
 
@@ -80,25 +80,29 @@ describe('RouteCard', () => {
     expect(timeline().querySelector('.timeline__lunch')).toBeNull();
   });
 
-  it('считает оборудование по визитам показанного плана и молчит, когда его везти не надо', () => {
+  it('показывает утренний запас оборудования и остаток к времени на часах', () => {
+    // У Белузина визитов с оборудованием нет: утренний запас цел, хотя строка про него есть у любой бригады.
     useAppStore.setState({ selectedEngineerId: 'E02' });
     const view = render(<RouteCard />);
-    expect(within(card()).getByText(/^Визитов: 2 · пробег/)).toBeInTheDocument();
-    expect(within(card()).queryByText(/оборудование/)).not.toBeInTheDocument();
+    expect(within(card()).getByText(/^Визитов: 2 · оборудование 6 единиц утром, осталось 6 · пробег/)).toBeInTheDocument();
     view.unmount();
 
-    // Одна заявка с оборудованием у Белузина: единица в единственном числе.
-    const state = makePlanningState();
-    const requests = state.requests.map((request) => (request.id === '84627' ? { ...request, needs_equipment: true } : request));
-    resetStore({ datasetId: 'd_test', state: { ...state, requests }, selectedEngineerId: 'E02' });
-    const single = render(<RouteCard />);
-    expect(within(card()).getByText(/^Визитов: 2 · оборудование 1 единица · пробег/)).toBeInTheDocument();
-    single.unmount();
+    // Часы дня на 13:00: у Арташкина обе заявки с оборудованием уже начаты, две единицы выданы.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01' });
+    const handed = render(<RouteCard />);
+    expect(within(card()).getByText(/^Визитов: 4 · оборудование 6 единиц утром, осталось 4 · пробег/)).toBeInTheDocument();
+    handed.unmount();
 
-    // В плане до события у Арташкина нет визита 50104, но обе заявки с оборудованием остаются.
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', showPrevious: true });
+    // Часы отмотаны на 10:30: вторая единица ещё не выдана, у бригады пять.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', clock: '10:30' });
+    const midday = render(<RouteCard />);
+    expect(within(card()).getByText(/^Визитов: 4 · оборудование 6 единиц утром, осталось 5 · пробег/)).toBeInTheDocument();
+    midday.unmount();
+
+    // В 11:30 бригада уже едет ко второй заявке с оборудованием: солвер считает единицу выданной, и карточка тоже.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', clock: '11:30' });
     render(<RouteCard />);
-    expect(within(card()).getByText(/^Визитов: 3 · оборудование 2 единицы · пробег/)).toBeInTheDocument();
+    expect(within(card()).getByText(/^Визитов: 4 · оборудование 6 единиц утром, осталось 4 · пробег/)).toBeInTheDocument();
   });
 
   it('keeps the route explanation behind «Почему?»', () => {

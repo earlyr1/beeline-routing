@@ -7,7 +7,15 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from app.domain.enums import SKILL_RU, TRANSPORT_RU, EventType, Priority, RequestStatus, request_label
+from app.domain.enums import (
+    SKILL_RU,
+    TRANSPORT_RU,
+    EventType,
+    Priority,
+    RequestStatus,
+    RequestTier,
+    request_label,
+)
 from app.domain.models import Engineer, Event, Lunch, Office, Plan, Request, Visit
 from app.domain.timeutil import fmt_hhmm
 from app.geo.kvcache import KVCache
@@ -241,6 +249,8 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
     Визит в пути к заявке из released (её только что изменили) не удерживается: солвер решает заново.
     Обед, начатый до now, остаётся как в прежнем плане (в том числе у инженера, который стал недоступен), и новый
     обед инженеру уже не нужен. Инженер на обеде свободен не раньше конца обеда.
+    Оборудование, выданное на закреплённых визитах, назад не возвращается: на остаток дня у бригады остаётся
+    утренний запас минус выданные единицы, и новых в офисе она не берёт.
     """
     routes = {route.engineer_id: route for route in plan.routes}
     open_ids = set(problem.open_request_ids)
@@ -275,7 +285,16 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
         pinned_ids.update(visit.request_id for visit in done)
         previous_order[engineer_id] = rest
         previous_assignment.update({request_id: engineer_id for request_id in rest})
-        states.append(EngineerState(state.engineer, start_node, available_from, state.available_until))
+        spent = problem.equipment_used(visit.request_id for visit in done)
+        states.append(
+            EngineerState(
+                state.engineer,
+                start_node,
+                available_from,
+                state.available_until,
+                state.equipment_left - spent,
+            )
+        )
     return replace(
         problem,
         states=states,
@@ -592,8 +611,15 @@ def _changed_inputs(
         engineer.unavailable_from = now
         return requests, engineers, event
 
+    # Срочная заявка диспетчера — авария дня: она попадает в верхний уровень распределения так же, как авария
+    # из данных, какой бы уровень ни прислал клиент.
     new = event.request.model_copy(
-        update={"priority": Priority.URGENT, "status": RequestStatus.ACTIVE, "fixed_engineer_id": None}
+        update={
+            "priority": Priority.URGENT,
+            "tier": RequestTier.EMERGENCY,
+            "status": RequestStatus.ACTIVE,
+            "fixed_engineer_id": None,
+        }
     )
     if new.id in by_id:
         taken = by_id[new.id]
@@ -632,7 +658,7 @@ def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Pr
 
 
 def _check_reachable(problem: Problem, event: Event, label: str) -> None:
-    """Переназначение: бригада доедет до заявки и успеет к ней хотя бы без других несделанных заявок.
+    """Переназначение: бригада доедет до заявки, у неё есть оборудование и она успеет хотя бы без других заявок.
 
     Иначе EventRejected. Проверка по задаче после события (закреплённая работа, задержки) и до выбора стратегии:
     отказ от неё не зависит. label — подпись заявки для диспетчера.
@@ -655,7 +681,15 @@ def _check_reachable(problem: Problem, event: Event, label: str) -> None:
             f"{name} не доедет до заявки {label}: до неё {far:.0f} км, "
             f"а «{transport}» не дальше {problem.leg_limit_km(state.engineer):g} км."
         )
-    request, visit = problem.request(request_id), alone.visits[0]
+    request = problem.request(request_id)
+    if request.needs_equipment and state.equipment_left <= 0:
+        # Оборудование бригада получила утром на весь день и раздала его: новую единицу днём взять негде,
+        # и дело не во времени — про окно и смену тут говорить нечего.
+        raise EventRejected(
+            f"У {name} не осталось оборудования для заявки {label}: утром бригада взяла "
+            f"{state.engineer.equipment_stock} ед., и все они уже розданы."
+        )
+    visit = alone.visits[0]
     # Без обеда бригада успела бы: не помещается именно обед.
     lunch_note = " и с учётом обеда" if alone.lunch_conflict else ""
     raise EventRejected(
