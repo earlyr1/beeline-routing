@@ -20,9 +20,10 @@ from app.ingest.beeline_csv import RawFile, parse_beeline_csv
 from app.ingest.bundle import save_bundle
 from app.ingest.geocode import Geocoder, JsonGeocodeCache, NominatimGeocoder, geocode_address
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
-from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
+from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, MAX_DEFAULT_SOLVER_WORKERS
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
+from app.solvers.portfolio import SolverPool
 from app.solvers.problem import make_problem
 from app.synth.config import SynthConfig
 from app.synth.control import build_control_plan
@@ -115,6 +116,7 @@ def prepare_region(
     cache: KVCache | None,
     time_limit_s: int,
     traffic: TrafficProfile,
+    pool: SolverPool | None = None,
 ) -> PrepareResult:
     region_cfg = cfg.regions[region]
     control = parse_beeline_csv((repo_root / region_cfg.control).read_bytes())
@@ -161,9 +163,13 @@ def prepare_region(
         lunch=True,
     )
     fcfs = FcfsSolver().solve(problem)
-    optimized = OrToolsSolver(
-        time_limit_s=time_limit_s, weights=workload_weights(DEFAULT_WORKLOAD_LEVEL)
-    ).solve(problem)
+    weights = workload_weights(DEFAULT_WORKLOAD_LEVEL)
+    # Бандл считается тем же портфелем стратегий, что и сервис при SOLVER_WORKERS > 1: иначе таблица
+    # результатов показывала бы план хуже того, который диспетчер увидит на экране.
+    if pool is not None:
+        optimized = pool.solve(problem, weights, time_limit_s, pool.strategies())
+    else:
+        optimized = OrToolsSolver(time_limit_s=time_limit_s, weights=weights).solve(problem)
     control_plan = build_control_plan(problem, control, synthetic, crew_to_engineer)
     events = build_demo_events(cfg, region, requests, control, synthetic, crew_to_engineer, optimized)
     bundle = Bundle(
@@ -201,6 +207,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--time-limit", type=int, default=DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, help="секунд на OR-Tools"
     )
+    parser.add_argument(
+        "--solver-workers",
+        type=int,
+        default=MAX_DEFAULT_SOLVER_WORKERS,
+        help="процессов поиска OR-Tools: несколько стратегий за тот же лимит; 1 — одна стратегия без пула",
+    )
     return parser
 
 
@@ -219,23 +231,29 @@ def main(argv: list[str] | None = None) -> int:
     cache = KVCache(REPO_ROOT / "data" / "cache.sqlite")
     traffic = TrafficProfile.load(BACKEND_DIR / "config" / "traffic_profile.yaml")
 
+    pool = SolverPool(args.solver_workers) if args.solver_workers > 1 else None
     all_ok = True
-    for region in regions:
-        result = prepare_region(
-            region,
-            cfg,
-            repo_root=REPO_ROOT,
-            geocoder=geocoder,
-            osrm=osrm,
-            cache=cache,
-            time_limit_s=args.time_limit,
-            traffic=traffic,
-        )
-        out_dir = REPO_ROOT / "data" / "bundles" / region
-        save_bundle(result.bundle, out_dir / "bundle.json")
-        (out_dir / "report.md").write_text(result.report, encoding="utf-8")
-        print(result.report)
-        all_ok = all_ok and result.self_check_ok
+    try:
+        for region in regions:
+            result = prepare_region(
+                region,
+                cfg,
+                repo_root=REPO_ROOT,
+                geocoder=geocoder,
+                osrm=osrm,
+                cache=cache,
+                time_limit_s=args.time_limit,
+                traffic=traffic,
+                pool=pool,
+            )
+            out_dir = REPO_ROOT / "data" / "bundles" / region
+            save_bundle(result.bundle, out_dir / "bundle.json")
+            (out_dir / "report.md").write_text(result.report, encoding="utf-8")
+            print(result.report)
+            all_ok = all_ok and result.self_check_ok
+    finally:
+        if pool is not None:
+            pool.shutdown()
     return 0 if all_ok else 1
 
 
