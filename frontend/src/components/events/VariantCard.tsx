@@ -40,15 +40,29 @@ interface CardProps {
   engineers: ReadonlyMap<string, Engineer>;
   /** Событие про одну заявку: карточка говорит, кто её берёт. */
   holder: boolean;
-  /** Заголовок над плюсами и минусами и подпись, когда отличий нет: у карточки «отдать бригаде». */
-  compare?: { head: string; same: string };
+  /** Заголовок над плюсами и минусами: у карточки «отдать бригаде» — цена решения. */
+  compareHead?: string;
+  /** Подпись вместо пустых «лучше / хуже»: с чем вариант совпал. Карточка покажет её, только когда отличий нет. */
+  sameText?: string;
   /** Под кнопкой «Выбрать»: у карточки «отдать бригаде» — список бригад. */
   children?: ReactNode;
   onChoose(variant: EventVariant): void;
 }
 
 /** Карточка варианта исправления: итоги плана, плюсы и минусы, кнопка выбора. */
-export function VariantCard({ option, before, lateBefore, current, locked, engineers, holder, compare, children, onChoose }: CardProps) {
+export function VariantCard({
+  option,
+  before,
+  lateBefore,
+  current,
+  locked,
+  engineers,
+  holder,
+  compareHead,
+  sameText,
+  children,
+  onChoose,
+}: CardProps) {
   const chosen = current === option.variant;
   const same = option.pros.length === 0 && option.cons.length === 0;
   return (
@@ -66,8 +80,8 @@ export function VariantCard({ option, before, lateBefore, current, locked, engin
         <VariantNumber label="Переносов" value={option.moved} />
         <VariantNumber label="Пробег" value={option.metrics.total_km} before={before.total_km} km />
       </dl>
-      {compare && <p className="variant__compare">{compare.head}</p>}
-      {compare && same && <p className="muted variant__same">{compare.same}</p>}
+      {compareHead && <p className="variant__compare">{compareHead}</p>}
+      {sameText && same && <p className="muted variant__same">{sameText}</p>}
       {option.pros.length > 0 && (
         <ul className="variant__pros">
           {option.pros.map((text) => (

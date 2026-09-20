@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from app.domain.enums import SKILL_RU, TRANSPORT_RU, RequestStatus
@@ -27,7 +27,12 @@ class SimResult:
 
 
 def simulate_route(
-    problem: Problem, state: EngineerState, request_ids: Sequence[str], *, lunch: bool = True
+    problem: Problem,
+    state: EngineerState,
+    request_ids: Sequence[str],
+    *,
+    lunch: bool = True,
+    not_before: Mapping[str, int] | None = None,
 ) -> SimResult:
     """Прогон визитов в заданном порядке. Если инженеру нужен обед (Problem.lunch_window), он ставится между визитами.
 
@@ -37,8 +42,11 @@ def simulate_route(
     маршрут допустим, и прежде всего место, где обед не сдвигает визиты (ожидания перед визитом хватает на обед).
     Если обед нужен, а допустимого места нет, маршрут недопустим. Обед ставится, только если у инженера есть визиты:
     в самом маршруте или закреплённые до события. lunch=False прогоняет маршрут без обеда, как план диспетчеров.
+
+    not_before — время, раньше которого визит не начинают, по номерам заявок: так «Ничего не менять» держит
+    времена, которые уже назвали клиентам. Приехав раньше, инженер ждёт; позже — визит идёт как обычно.
     """
-    plain = _drive(problem, state, request_ids)
+    plain = _drive(problem, state, request_ids, not_before=not_before)
     window = problem.lunch_window(state) if lunch else None
     if window is None or not (request_ids or problem.pinned.get(state.engineer.id)):
         return plain
@@ -51,7 +59,7 @@ def simulate_route(
     for position in range(len(request_ids) + 1):
         if max(free[position], earliest) > latest:
             continue
-        run = _drive(problem, state, request_ids, lunch_at=position, earliest=earliest)
+        run = _drive(problem, state, request_ids, lunch_at=position, earliest=earliest, not_before=not_before)
         keeps_times = [visit.start for visit in run.visits] == starts
         if run.feasible and keeps_times:
             return run
@@ -88,8 +96,10 @@ def _drive(
     *,
     lunch_at: int | None = None,
     earliest: int = 0,
+    not_before: Mapping[str, int] | None = None,
 ) -> SimResult:
     """Прогон без выбора места: обед перед визитом с номером lunch_at, при lunch_at == len(request_ids) после последнего."""
+    held = not_before or {}
     engineer = state.engineer
     limit_km = problem.leg_limit_km(engineer)
     node, clock = state.start_node, state.available_from
@@ -106,7 +116,8 @@ def _drive(
             lunch = _lunch_from(clock, earliest)
             clock = lunch.end
         arrival = clock + leg_min
-        start = max(arrival, request.window_start)
+        # Приехав раньше обещанного клиенту времени, инженер ждёт: клиента дома может ещё не быть.
+        start = max(arrival, request.window_start, held.get(request_id, 0))
         late = max(0, start - request.window_end)
         end = start + request.duration_min
         if request.status != RequestStatus.ACTIVE:

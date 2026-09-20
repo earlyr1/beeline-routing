@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Engineer, EventChoice, VariantOption } from '../../api/types';
 import { useAppStore, type AppState } from '../../store/useAppStore';
 import { reassignEvent } from '../../lib/events';
-import { assignVariant } from '../../lib/variants';
+import { ALL_SAME_TEXT, assignVariant } from '../../lib/variants';
 import { makeEventChoice, makePlanningState, makeTimelineItem, makeUrgentChoice, makeVariantOption } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { ChoiceDialog } from './ChoiceDialog';
@@ -60,6 +60,31 @@ describe('ChoiceDialog', () => {
     useAppStore.setState({ state: makePlanningState({ timeline }), choice: makeEventChoice({ entry_id: 'tl_7', event }) });
     render(<ChoiceDialog />);
     expect(screen.getByRole('dialog', { name: 'Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:00' })).toBeInTheDocument();
+  });
+
+  it('says which variant a card repeats instead of showing two empty lists', () => {
+    // «Минимум перестановок» дал тот же план, что рекомендованный: сравнивать их нечем.
+    const base = makeEventChoice();
+    const variants = base.variants.map((option) =>
+      option.variant === 'stable' ? makeVariantOption('stable', { compared_to: 'optimal' }) : option,
+    );
+    useAppStore.setState({ choice: { ...base, variants } });
+    render(<ChoiceDialog />);
+    expect(within(card('Минимум перестановок')).getByText('То же, что «Оптимально по дню»')).toBeInTheDocument();
+    expect(within(card('Оптимально по дню')).queryByText(/То же, что/)).not.toBeInTheDocument();
+  });
+
+  it('says that the choice changes nothing when every variant gives the same numbers', () => {
+    const base = makeEventChoice();
+    const variants = [
+      makeVariantOption('optimal', { recommended: true, compared_to: null }),
+      makeVariantOption('stable', { compared_to: 'optimal' }),
+      makeVariantOption('keep', { compared_to: 'optimal' }),
+    ];
+    useAppStore.setState({ choice: { ...base, variants } });
+    render(<ChoiceDialog />);
+    expect(within(card('Оптимально по дню')).getByText(ALL_SAME_TEXT)).toBeInTheDocument();
+    expect(within(card('Ничего не менять')).getByText('То же, что «Оптимально по дню»')).toBeInTheDocument();
   });
 
   it('says that variants are being computed and renders nothing when closed', () => {

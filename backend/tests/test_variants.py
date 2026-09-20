@@ -20,17 +20,30 @@ from app.planning.variants import (
     is_choosable,
     keep_plan,
     late_visits,
+    takes_variant,
     variant_summary,
     variant_title,
 )
 from tests.helpers import eng, problem_of, req
-from tests.planning_helpers import busy_engineer, context, new_session, routes
+from tests.planning_helpers import busy_engineer, context, new_session, routes, visit_times
 from tests.timeline_helpers import fcfs_solves
 
 
 @pytest.fixture
 def solves(monkeypatch):
     return fcfs_solves(monkeypatch)
+
+
+def starts(plan, engineer_id):
+    """Время начала каждого визита бригады по номерам заявок."""
+    route = next(route for route in plan.routes if route.engineer_id == engineer_id)
+    return {visit.request_id: visit.start for visit in route.visits}
+
+
+def _arrival(plan, request_id):
+    return next(
+        visit.arrival for route in plan.routes for visit in route.visits if visit.request_id == request_id
+    )
 
 
 def _upcoming(plan, engineer_id, minute):
@@ -206,8 +219,76 @@ def test_stable_moves_fewer_requests_to_other_brigades_than_optimal_with_or_tool
 def test_events_that_do_not_break_the_plan_ignore_the_variant(solves):
     ctx = context()
     base = new_session(ctx)
-    cancel = Event(type=EventType.CANCEL, time="09:30", request_id="R2")
-    assert apply_event(base, cancel, ctx, variant="keep").plan == apply_event(base, cancel, ctx).plan
+    cancelled = apply_event(base, Event(type=EventType.CANCEL, time="09:30", request_id="R2"), ctx)
+    restore = Event(type=EventType.RESTORE, time="10:30", request_id="R2")
+    assert (
+        apply_event(cancelled, restore, ctx, variant="keep").plan == apply_event(cancelled, restore, ctx).plan
+    )
+
+
+def test_a_cancelled_request_can_leave_the_other_routes_untouched(solves):
+    """Клиент отказался, а день не трогаем: заявка уходит из маршрута, бригада получает окно и едет дальше."""
+    ctx = context()
+    base = new_session(ctx)
+    before = routes(base.plan)
+    owner = busy_engineer(base.plan)
+    request_id = before[owner][-1]
+    solves.clear()
+
+    kept = apply_event(
+        base, Event(type=EventType.CANCEL, time="09:30", request_id=request_id), ctx, variant="keep"
+    )
+
+    after = routes(kept.plan)
+    assert after[owner] == [rid for rid in before[owner] if rid != request_id]
+    assert all(after[other] == before[other] for other in before if other != owner)
+    # Чужие бригады не тронуты не только составом маршрута, но и временами визитов.
+    assert all(
+        visit_times(kept.plan, other) == visit_times(base.plan, other) for other in before if other != owner
+    )
+    # Стратегия у отмены есть, а окна выбора нет: часы на ней не останавливаются.
+    assert takes_variant(kept.events[-1].event) and not is_choosable(kept.events[-1].event)
+    # Без решателя: «Ничего не менять» его не вызывает.
+    assert solves == []
+
+
+def test_keep_holds_the_times_already_promised_to_the_rest_of_the_route(solves):
+    """Заявка ушла из середины маршрута: следующие клиенты ждут инженера в своё время, а бригада получает окно."""
+    ctx = context()
+    requests = [
+        req("A", 0, 0, "09:00", "17:00", duration=60),
+        req("B", 1, 0, "09:00", "17:00", duration=60),
+        req("C", 2, 0, "09:00", "17:00", duration=60),
+    ]
+    base = new_session(ctx, requests=requests, engineers=[eng("E1")], lunch_enabled=False)
+    assert routes(base.plan)["E1"] == ["A", "B", "C"]
+    before = starts(base.plan, "E1")
+    solves.clear()
+
+    kept = apply_event(base, Event(type=EventType.CANCEL, time="09:00", request_id="A"), ctx, variant="keep")
+
+    assert routes(kept.plan)["E1"] == ["B", "C"]
+    # Окно у бригады в начале дня: к B она приезжает раньше, но работу начинает в обещанное время.
+    after = starts(kept.plan, "E1")
+    assert after == {"B": before["B"], "C": before["C"]}
+    assert _arrival(kept.plan, "B") < before["B"]
+    assert solves == []
+
+
+def test_optimal_moves_the_rest_of_the_route_forward_after_a_cancellation(solves):
+    """Тот же отказ с пересчётом остатка дня: времена держать нечего, бригада едет дальше сразу."""
+    ctx = context()
+    requests = [
+        req("A", 0, 0, "09:00", "17:00", duration=60),
+        req("B", 1, 0, "09:00", "17:00", duration=60),
+        req("C", 2, 0, "09:00", "17:00", duration=60),
+    ]
+    base = new_session(ctx, requests=requests, engineers=[eng("E1")], lunch_enabled=False)
+    before = starts(base.plan, "E1")
+
+    replanned = apply_event(base, Event(type=EventType.CANCEL, time="09:00", request_id="A"), ctx)
+
+    assert starts(replanned.plan, "E1")["B"] < before["B"]
 
 
 def _plan(unassigned, engineers, km, late=0, holder=None):
@@ -279,6 +360,35 @@ def test_choice_ties_go_to_the_earlier_strategy():
     assert [option.variant for option in choice.variants if option.recommended] == ["optimal"]
     assert choice.current == "stable"
     assert all(option.pros == [] and option.cons == [] for option in choice.variants)
+    # Все варианты дают одни и те же числа: остальные повторяют рекомендованный, а ему сравнивать себя не с чем —
+    # событие ничего не меняет, какой вариант ни возьми.
+    assert [option.compared_to for option in choice.variants] == [None, "optimal", "optimal"]
+
+
+def test_choice_compares_the_recommended_variant_with_the_nearest_one_that_differs():
+    before = _plan(0, 5, 100.0)
+    same = _plan(0, 5, 100.0)
+    keep = _plan(1, 5, 120.0)
+    outcomes = [
+        Outcome("optimal", same, _diff(before, same, 0)),
+        Outcome("stable", same, _diff(before, same, 0)),
+        Outcome("keep", keep, _diff(before, keep, 0)),
+    ]
+    event = Event(type=EventType.ENGINEER_UNAVAILABLE, time="13:00", engineer_id="E1")
+
+    choice = build_choice("tl_1", event, before, outcomes, None)
+
+    by_variant = {option.variant: option for option in choice.variants}
+    # «Минимум перестановок» повторяет рекомендованный вариант: отличий нет, и карточка скажет «то же самое».
+    stable = by_variant["stable"]
+    assert (stable.compared_to, stable.pros, stable.cons) == ("optimal", [], [])
+    # Рекомендованный сравнивается не со следующим по ключу, а с ближайшим вариантом с другими числами.
+    assert by_variant["optimal"].compared_to == "keep"
+    assert by_variant["optimal"].pros == [
+        "на 1 клиента без инженера или с опозданием меньше",
+        "на 20,0 км меньше",
+    ]
+    assert by_variant["optimal"].cons == []
 
 
 def test_choice_for_a_reassignment_offers_to_insert_into_the_route():

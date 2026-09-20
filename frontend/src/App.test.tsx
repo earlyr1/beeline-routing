@@ -79,6 +79,7 @@ describe('App', () => {
       'Неназначенные1',
       'Сравнение',
       'Рекомендуемые изменения',
+      'Коммуникации4',
     ]);
     const bar = screen.getByRole('region', { name: 'Время дня' });
     expect(within(bar).getByRole('slider', { name: 'Текущее время' })).toBeInTheDocument();

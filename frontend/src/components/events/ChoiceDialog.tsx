@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { describeEvent } from '../../lib/events';
 import { byId } from '../../lib/planView';
-import { choiceEvent, isAssignVariant } from '../../lib/variants';
+import { choiceEvent, isAssignVariant, sameAsText } from '../../lib/variants';
 import { useAppStore } from '../../store/useAppStore';
 import { AssignCard } from './AssignCard';
 import { VariantCard } from './VariantCard';
@@ -82,6 +82,7 @@ export function ChoiceDialog() {
                   locked={busy}
                   engineers={engineers}
                   holder={holder}
+                  sameText={sameAsText(choice, option, state?.engineers)}
                   onChoose={(variant) => void chooseVariant(variant)}
                 />
               ))}

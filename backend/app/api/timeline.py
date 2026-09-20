@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.api.registry import DatasetRecord
 from app.api.schemas import PlanningState, TimelineItem, to_planning_state
+from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
 from app.planning.models import EventChoice, EventVariant
 from app.planning.session import PlanningContext
@@ -26,6 +27,7 @@ from app.planning.variants import (
     build_choice,
     is_assignable,
     is_choosable,
+    takes_variant,
 )
 
 RunBackground = Callable[[Callable[[], None]], None]
@@ -44,21 +46,21 @@ class VariantUnavailable(Exception):
         self.status = status
 
 
-def check_variant(record: DatasetRecord, entry: TimelineEntry, variant: EventVariant) -> None:
-    """Под record.lock: проверяет стратегию из запроса для события entry. Бросает VariantUnavailable.
+def check_variant(record: DatasetRecord, event: Event, variant: EventVariant) -> None:
+    """Под record.lock: проверяет стратегию из запроса для события. Бросает VariantUnavailable.
 
-    По порядку: незнакомая строка — 422 у любого события, не «ломающее» событие — 409, «отдать бригаде» не
-    на срочной заявке или с бригадой не из этого дня — 422. Базовые стратегии подходят любому «ломающему»
-    событию.
+    По порядку: незнакомая строка — 422 у любого события, событие без стратегий — 409, «отдать бригаде» не
+    на срочной заявке или с бригадой не из этого дня — 422. Базовые стратегии подходят любому событию со
+    стратегией: «ломающему» и отмене заявки, у которой окна выбора нет, а стратегия есть.
     """
     engineer_id = assigned_engineer(variant)
     if variant not in VARIANTS and engineer_id is None:
         raise VariantUnavailable(422, f"Неизвестный вариант «{variant}».")
-    if not is_choosable(entry.event):
+    if not takes_variant(event):
         raise VariantUnavailable(409, NOT_CHOOSABLE_TEXT)
     if engineer_id is None:
         return
-    if not is_assignable(entry.event):
+    if not is_assignable(event):
         raise VariantUnavailable(422, NOT_ASSIGNABLE_TEXT)
     if record.base is None or record.base.engineer(engineer_id) is None:
         raise VariantUnavailable(422, f"Инженер {engineer_id} не найден.")
@@ -102,6 +104,8 @@ def planning_state(record: DatasetRecord) -> PlanningState:
             timeline=timeline,
             timeline_ready=ready,
             pending_choice=_choice(record, *pending) if pending is not None else None,
+            # Утро дня — план до событий шкалы, а не первая загрузка файла: пересборка дня делает его заново.
+            morning=record.base.plan if record.base is not None else None,
         )
 
 
@@ -251,7 +255,7 @@ def event_choice(
                 raise VariantUnavailable(409, NOT_CHOOSABLE_TEXT)
             variant = assign_variant(assign) if assign is not None else None
             if variant is not None:
-                check_variant(record, entry, variant)
+                check_variant(record, entry.event, variant)
             position = record.timeline.entries.index(entry)
         walk = compute_steps(record, ctx, position)
         if walk.done < position:

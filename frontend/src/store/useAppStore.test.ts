@@ -13,6 +13,7 @@ vi.mock('../api/client', async (importOriginal) => {
     addTimelineEvent: vi.fn(),
     deleteTimelineEvent: vi.fn(),
     moveCursor: vi.fn(),
+    clearTimeline: vi.fn(),
     getReverseGeocode: vi.fn(),
     getTimelineVariants: vi.fn(),
     setTimelineVariant: vi.fn(),
@@ -24,7 +25,7 @@ import type { DatasetStatus, EventChoice, PlanningState, ReverseGeocode, Timelin
 import { cancelEvent, reassignEvent } from '../lib/events';
 import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem, makeUrgentChoice, makeVariantOption } from '../test/fixtures';
 import { resetStore } from '../test/store';
-import { LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
+import { agreedKey, LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
 
 /** План на время дня cursor. */
 const at = (cursor: string, patch: Partial<PlanningState> = {}) => makePlanningState({ cursor, ...patch });
@@ -190,7 +191,7 @@ describe('useAppStore', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), showPrevious: true });
     vi.mocked(api.addTimelineEvent).mockRejectedValueOnce(new api.ApiError(422, 'Заявка 50104 уже в работе с 12:00.'));
     expect(await useAppStore.getState().applyEvent(cancelEvent('50104', '12:00'))).toBe(false);
-    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '12:00'));
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '12:00'), undefined);
     expect(useAppStore.getState().error).toBe('Заявка 50104 уже в работе с 12:00.');
     expect(useAppStore.getState().state?.version).toBe(4);
 
@@ -597,7 +598,7 @@ describe('clock of the day', () => {
 
     commit.resolve(at('14:10', { version: 5 }));
     expect(await adding).toBe(true);
-    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '14:10'));
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '14:10'), undefined);
     expect(useAppStore.getState().state?.version).toBe(6);
     expect(useAppStore.getState()).toMatchObject({ busy: false, committing: false, clock: '14:10' });
   });
@@ -936,7 +937,7 @@ describe('choice of a variant for an event that breaks the plan', () => {
     await vi.waitFor(() => expect(useAppStore.getState().choiceLoading).toBe(true));
     response.resolve(awaitingState('12:00'));
     await adding;
-    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', reassignEvent('50104', 'E02', '12:00'));
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', reassignEvent('50104', 'E02', '12:00'), undefined);
     expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
   });
 
@@ -1035,6 +1036,52 @@ describe('events being prepared on the server', () => {
     await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
     expect(api.getPlanningState).toHaveBeenCalledTimes(1);
     expect(useAppStore.getState().state).toMatchObject({ version: 4, cursor: '13:00', timeline: [], timeline_ready: false });
+  });
+});
+
+describe('agreed times of the calls to clients', () => {
+  it('remembers the time of the current plan and keeps it in localStorage of the dataset', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    useAppStore.getState().markAgreed('50104');
+    // Вместе со временем запоминается номер плана: с планом постарше отметку не сравнивают.
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { start: '14:00', engineer_id: 'E01', version: 4 } });
+    expect(JSON.parse(localStorage.getItem(agreedKey('d_test')) ?? '{}')).toEqual({
+      '50104': { start: '14:00', engineer_id: 'E01', version: 4 },
+    });
+  });
+
+  it('drops the agreed times when the events of the day are reset', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    useAppStore.getState().markAgreed('50104');
+    vi.mocked(api.clearTimeline).mockResolvedValue(makePlanningState({ version: 1, cursor: '00:00', timeline: [] }));
+
+    expect(await useAppStore.getState().resetEvents()).toBe(true);
+
+    // День начинается заново: обзвона ещё не было ни на экране, ни в localStorage.
+    expect(useAppStore.getState().agreed).toEqual({});
+    expect(localStorage.getItem(agreedKey('d_test'))).toBe('{}');
+  });
+
+  it('takes the marks of the opened dataset and does not carry them to another one', () => {
+    localStorage.setItem(agreedKey('d_test'), JSON.stringify({ '50104': { start: '14:00', engineer_id: 'E02' } }));
+    useAppStore.getState().setPlanningState(makePlanningState());
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { start: '14:00', engineer_id: 'E02' } });
+
+    // Тот же набор данных: ответы сервера отметки не сбрасывают.
+    useAppStore.getState().markAgreed('46393');
+    useAppStore.getState().setPlanningState(at('14:00'));
+    expect(Object.keys(useAppStore.getState().agreed).sort()).toEqual(['46393', '50104']);
+
+    // Другой набор данных: у него свои отметки, здесь их нет.
+    useAppStore.getState().setPlanningState(makePlanningState({ dataset_id: 'd_other' }));
+    expect(useAppStore.getState().agreed).toEqual({});
+  });
+
+  it('sends the cancellation of a client who refused with the chosen strategy', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(makePlanningState({ version: 5 }));
+    expect(await useAppStore.getState().applyEvent(cancelEvent('50104', '13:00'), 'keep')).toBe(true);
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '13:00'), 'keep');
   });
 });
 

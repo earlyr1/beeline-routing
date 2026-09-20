@@ -1,4 +1,14 @@
-import type { AssignVariant, BaseVariant, Engineer, EventChoice, EventType, EventVariant, PlanEvent, PlanningState } from '../api/types';
+import type {
+  AssignVariant,
+  BaseVariant,
+  Engineer,
+  EventChoice,
+  EventType,
+  EventVariant,
+  PlanEvent,
+  PlanningState,
+  VariantOption,
+} from '../api/types';
 import { brigadeName } from './format';
 
 /** «Ломающие» события: для них сервер предлагает варианты исправления. */
@@ -46,7 +56,27 @@ export function variantTitle(variant: EventVariant, eventType: EventType, engine
     return `Отдать: ${brigadeName(engineers.find((item) => item.id === assigned)?.name ?? assigned)}`;
   }
   if (variant === 'keep' && eventType === 'request_reassigned') return 'Вставить в маршрут';
+  // У отмены «keep» — «маршруты не трогать»: так называется кнопка, которой диспетчер её выбрал.
+  if (variant === 'keep' && eventType === 'cancel') return 'Маршруты не трогать';
   return VARIANT_TITLES[variant];
+}
+
+/** Название варианта в окне: у посчитанного берётся заголовок сервера, у остального — собранное по токену. */
+export function choiceVariantTitle(choice: EventChoice, variant: EventVariant, engineers: Engineer[] = []): string {
+  return choice.variants.find((item) => item.variant === variant)?.title ?? variantTitle(variant, choice.event.type, engineers);
+}
+
+/** Подпись рекомендованной карточки, когда у всех вариантов одни и те же числа. */
+export const ALL_SAME_TEXT = 'Все варианты одинаковые: выбор ничего не меняет';
+
+/**
+ * Что карточка скажет вместо пустых «чем лучше / хуже»: с каким вариантом она совпала или, у рекомендованного,
+ * что одинаковы все. undefined — сравнивать не с чем (вариант в окне один). Показывает эту подпись сама карточка,
+ * и только когда отличий нет.
+ */
+export function sameAsText(choice: EventChoice, option: VariantOption, engineers: Engineer[] = []): string | undefined {
+  if (option.compared_to) return `То же, что «${choiceVariantTitle(choice, option.compared_to, engineers)}»`;
+  return option.recommended && choice.variants.length > 1 ? ALL_SAME_TEXT : undefined;
 }
 
 /**

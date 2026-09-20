@@ -34,6 +34,7 @@ from app.planning.variants import (
     is_assignable,
     is_choosable,
     keep_plan,
+    takes_variant,
 )
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_LIMIT_S
@@ -251,6 +252,8 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
     обед инженеру уже не нужен. Инженер на обеде свободен не раньше конца обеда.
     Оборудование, выданное на закреплённых визитах, назад не возвращается: на остаток дня у бригады остаётся
     утренний запас минус выданные единицы, и новых в офисе она не берёт.
+    Времена несделанных визитов запоминаются в previous_start: это то, что обещано клиентам, и «Ничего
+    не менять» их держит.
     """
     routes = {route.engineer_id: route for route in plan.routes}
     open_ids = set(problem.open_request_ids)
@@ -258,6 +261,7 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
     pinned_lunch: dict[str, Lunch] = {}
     previous_assignment: dict[str, str] = {}
     previous_order: dict[str, list[str]] = {}
+    previous_start: dict[str, int] = {}
     pinned_ids: set[str] = set()
     states: list[EngineerState] = []
     for state in problem.states:
@@ -285,6 +289,7 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
         pinned_ids.update(visit.request_id for visit in done)
         previous_order[engineer_id] = rest
         previous_assignment.update({request_id: engineer_id for request_id in rest})
+        previous_start.update({visit.request_id: visit.start for visit in upcoming})
         spent = problem.equipment_used(visit.request_id for visit in done)
         states.append(
             EngineerState(
@@ -303,6 +308,7 @@ def pin_problem(problem: Problem, plan: Plan, now: int, released: Collection[str
         pinned_lunch=pinned_lunch,
         previous_assignment=previous_assignment,
         previous_order=previous_order,
+        previous_start=previous_start,
         now=now,
     )
 
@@ -732,11 +738,12 @@ def apply_event(
     сессии. Лимит OR-Tools обычный и с обедом: перепланирование стартует от текущего плана. version — номер нового
     плана (у сессии и у применённого события); без него следующий за номером входной сессии.
 
-    variant — стратегия для «ломающего» события (app/planning/variants.py); у остальных событий не влияет.
+    variant — стратегия события (app/planning/variants.py): «ломающего» или отмены заявки, у которой «keep»
+    оставляет маршруты как есть и бригада просто получает окно. У остальных событий не влияет.
     """
     _check_time(session, event)
     requests, engineers, stored_event = _apply_to_inputs(session, event, ctx)
-    strategy: EventVariant = variant if is_choosable(stored_event) else "optimal"
+    strategy: EventVariant = variant if takes_variant(stored_event) else "optimal"
     chosen = assigned_engineer(strategy) if is_assignable(stored_event) else None
     if chosen is not None:
         # «Отдать заявку бригаде»: закрепляем её до сборки задачи, как это делает переназначение, и дальше

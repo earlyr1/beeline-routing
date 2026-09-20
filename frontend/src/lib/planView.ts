@@ -32,6 +32,11 @@ export function displayedPlan(state: PlanningState, showPrevious: boolean): Plan
   return showPrevious && state.previous_plan ? state.previous_plan : state.plan;
 }
 
+/** Номер плана на экране: «До события» показывает предыдущий, он на версию младше текущего. */
+export function displayedVersion(state: PlanningState, showPrevious: boolean): number {
+  return showPrevious && state.previous_plan ? state.version - 1 : state.version;
+}
+
 export function byId<T extends { id: string }>(items: T[]): Map<string, T> {
   return new Map(items.map((item) => [item.id, item]));
 }

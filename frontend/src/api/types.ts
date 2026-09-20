@@ -275,6 +275,13 @@ export interface PlanDiff {
   delay_forecast?: DelayForecast | null;
 }
 
+/** Визит утреннего плана: время и бригада, которые клиент услышал бы до событий дня. */
+export interface MorningVisit {
+  request_id: string;
+  engineer_id: string;
+  start: HHMM;
+}
+
 export interface PlanningState {
   dataset_id: string;
   version: number;
@@ -288,6 +295,11 @@ export interface PlanningState {
   baseline: Plan;
   control: Plan | null;
   last_diff: PlanDiff | null;
+  /**
+   * Утренний план дня (время 00:00, ни одного события шкалы) — только время и бригада каждого визита.
+   * С ним вкладка «Коммуникации» сравнивает план, когда клиенту ещё ничего не говорили.
+   */
+  morning: MorningVisit[];
   events: AppliedEvent[];
   matrix_source: MatrixSource;
   /** Нагрузка инженеров сессии от 0 (спокойный день) до 2 (на пределе): её используют все расчёты дня. */

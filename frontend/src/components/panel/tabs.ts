@@ -1,7 +1,9 @@
 import type { ComponentType } from 'react';
+import { callContext, callList } from '../../lib/communications';
 import { displayedPlan } from '../../lib/planView';
 import type { AppState } from '../../store/useAppStore';
 import { BrigadesTab } from './BrigadesTab';
+import { CommunicationsTab } from './CommunicationsTab';
 import { ComparisonTab } from './ComparisonTab';
 import { ProposalsTab } from './ProposalsTab';
 import { RequestsTab } from './RequestsTab';
@@ -28,4 +30,12 @@ export const PANEL_TABS: PanelTab[] = [
   },
   { id: 'comparison', title: 'Сравнение', component: ComparisonTab },
   { id: 'proposals', title: 'Рекомендуемые изменения', component: ProposalsTab },
+  {
+    id: 'communications',
+    title: 'Коммуникации',
+    component: CommunicationsTab,
+    // В бейдже — сколько клиентов ждут звонка: согласованные строки в него не входят.
+    badge: (app) =>
+      app.state ? callList(app.state, app.agreed, callContext(app.state, app.showPrevious, app.clock)).pending.length || null : null,
+  },
 ];

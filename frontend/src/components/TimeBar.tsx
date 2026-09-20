@@ -194,21 +194,22 @@ export function TimeBar() {
                     <span>{describeEvent(item.event, engineers, requests)}</span>
                   )}
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
+                  {/* Стратегию видно у любого события, которое её слушает: у отмены окна выбора нет, а стратегия есть. */}
+                  {(item.choosable || item.variant) && (
+                    <span className="muted">{item.variant ? `Вариант: ${variantTitle(item.variant, item.event.type, state.engineers)}` : 'Вариант не выбран'}</span>
+                  )}
                   {item.choosable && (
-                    <>
-                      <span className="muted">{item.variant ? `Вариант: ${variantTitle(item.variant, item.event.type, state.engineers)}` : 'Вариант не выбран'}</span>
-                      <button
-                        type="button"
-                        className="btn btn-small"
-                        disabled={deleteLocked || item.status === 'rejected'}
-                        onClick={() => {
-                          setOpenMinute(null);
-                          void openChoice(item.id);
-                        }}
-                      >
-                        Варианты…
-                      </button>
-                    </>
+                    <button
+                      type="button"
+                      className="btn btn-small"
+                      disabled={deleteLocked || item.status === 'rejected'}
+                      onClick={() => {
+                        setOpenMinute(null);
+                        void openChoice(item.id);
+                      }}
+                    >
+                      Варианты…
+                    </button>
                   )}
                   <button type="button" className="btn btn-small" disabled={deleteLocked} onClick={() => void remove(item.id)}>
                     Удалить событие

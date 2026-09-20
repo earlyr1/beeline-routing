@@ -2,7 +2,8 @@
 
 Спецификация: docs/superpowers/specs/2026-09-17-event-variants-design.md. «Ломающие» события — те, после которых
 есть разные способы спасти день: недоступность, смена транспорта, задержка инженера, срочная заявка и
-переназначение заявки диспетчером. Отмена, возврат и изменение заявки применяются одним планом, как раньше.
+переназначение заявки диспетчером. Возврат и изменение заявки применяются одним планом, как раньше. Отмена
+плана не ломает и окна выбора не открывает, но стратегию ей диспетчер задаёт: см. takes_variant.
 
 У срочной заявки к трём посчитанным заранее вариантам добавляется четвёртый — «отдать заявку названной
 бригаде» (стратегия «assign:<инженер>»). Его считают по запросу диспетчера и сравнивают с «Оптимально по дню»:
@@ -31,6 +32,8 @@ BREAKING_EVENTS = frozenset(
         EventType.REQUEST_REASSIGNED,
     }
 )
+# События, у которых apply_event слушает стратегию из запроса: «ломающие» и отмена заявки.
+VARIANT_EVENTS = BREAKING_EVENTS | {EventType.CANCEL}
 # «Минимум перестановок»: условные 500 км за перенос заявки к другому инженеру вместо 20. Снять заявку всё равно
 # дороже (drop_normal), поэтому заявки пострадавшей бригады уходят другим, а чужие маршруты почти не трогаются.
 STABLE_REASSIGNMENT = 500_000
@@ -63,7 +66,18 @@ MAX_LINES = 3
 
 
 def is_choosable(event: Event) -> bool:
+    """Событие, на котором план останавливается и диспетчер выбирает вариант в окне."""
     return event.type in BREAKING_EVENTS
+
+
+def takes_variant(event: Event) -> bool:
+    """Событие, у которого стратегия из запроса меняет план.
+
+    «Диспетчер может выбрать» и «часы встают на событии» — разные вещи. У отмены заявки часы не встают и окна
+    выбора нет: спасать нечего, клиент сам отказался. Но пересчитывать из-за него остаток дня или оставить
+    маршруты как есть, отдав бригаде окно, — решает диспетчер, и стратегия события это решение хранит.
+    """
+    return event.type in VARIANT_EVENTS
 
 
 def is_assignable(event: Event) -> bool:
@@ -126,9 +140,13 @@ def keep_plan(problem: Problem, unassigned_before: Collection[str] = ()) -> Plan
     транспорт, которого у инженера теперь нет, остаются без инженера. Новая срочная заявка ни в чей маршрут
     не попадает. unassigned_before — заявки без инженера в плане до события: их причину считает build_plan,
     как обычно, а не пишет этот вариант.
+
+    Времена визитов тоже остаются прежними (Problem.previous_start): маршрут, из которого заявка ушла, не
+    сжимается, бригада получает окно, а следующим клиентам не приходится звонить, что инженер приедет раньше.
+    Опоздать визит по-прежнему может: задержку и объезд времена держать не мешают.
     """
     sequences, fixed = _previous_routes(problem, KEEP_TEXT)
-    return _routes_plan(problem, sequences, fixed, unassigned_before, KEEP_TEXT)
+    return _routes_plan(problem, sequences, fixed, unassigned_before, KEEP_TEXT, problem.previous_start)
 
 
 def insert_plan(
@@ -300,8 +318,13 @@ def _routes_plan(
     fixed: dict[str, Unassigned],
     unassigned_before: Collection[str],
     text: str,
+    not_before: Mapping[str, int] | None = None,
 ) -> Plan:
-    """План варианта без решателя. Открытые заявки вне маршрутов получают причину text, кроме бывших без инженера."""
+    """План варианта без решателя. Открытые заявки вне маршрутов получают причину text, кроме бывших без инженера.
+
+    not_before — времена визитов, которые вариант держит: их задаёт только «Ничего не менять». «Вставить
+    в маршрут» меняет маршрут бригады нарочно, и времена в нём считаются заново.
+    """
     before = set(unassigned_before)
     placed = {request_id for sequence in sequences.values() for request_id in sequence}
     for request_id in problem.open_request_ids:
@@ -309,7 +332,7 @@ def _routes_plan(
             fixed[request_id] = Unassigned(
                 request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text
             )
-    return build_plan(problem, "ortools", sequences, fixed_unassigned=fixed)
+    return build_plan(problem, "ortools", sequences, fixed_unassigned=fixed, not_before=not_before)
 
 
 @dataclass(frozen=True)
@@ -325,14 +348,18 @@ def _clients(option: VariantOption) -> int:
     return option.metrics.unassigned + option.late
 
 
-def _rank(option: VariantOption) -> tuple[int, int, int, float, int]:
+def _numbers(option: VariantOption) -> tuple[int, int, int, float]:
+    """Итоги варианта, по которым считаются «лучше / хуже»: с одинаковыми числами сравнивать варианты нечем."""
     return (
         _clients(option),
         option.metrics.engineers_used,
         option.moved,
         round(option.metrics.total_km, 1),
-        VARIANTS.index(option.variant),
     )
+
+
+def _rank(option: VariantOption) -> tuple[int, int, int, float, int]:
+    return (*_numbers(option), VARIANTS.index(option.variant))
 
 
 def _plural(count: int, one: str, few: str, many: str) -> str:
@@ -390,6 +417,11 @@ def _compare(option: VariantOption, reference: VariantOption) -> tuple[list[str]
     return pros[:MAX_LINES], cons[:MAX_LINES]
 
 
+def _differing(best: VariantOption, ranked: Sequence[VariantOption]) -> VariantOption | None:
+    """Ближайший к рекомендованному вариант с другими числами; None — все варианты одинаковые."""
+    return next((option for option in ranked if _numbers(option) != _numbers(best)), None)
+
+
 def _order(outcome: Outcome) -> int:
     """Порядок вариантов в окне: три базовых, затем «отдать бригаде»."""
     return VARIANTS.index(outcome.variant) if outcome.variant in VARIANTS else len(VARIANTS)
@@ -421,6 +453,10 @@ def build_choice(
     """Варианты в порядке VARIANTS с рекомендацией и строками «лучше / хуже»; names — имена бригад по номеру.
 
     Базовые варианты сравниваются с рекомендованным, рекомендованный — со следующим по ключу рекомендации.
+    Если у него те же числа, рекомендованный сравнивается с ближайшим вариантом, у которого они другие: сравнение
+    с таким же вариантом не объясняет ничего. compared_to называет этот вариант, чтобы его назвал и экран; у
+    рекомендованного он пустой, только когда все варианты дают одни и те же числа — тогда событие ничего не меняет,
+    какой вариант ни возьми.
     Вариант «отдать бригаде» идёт последним, в рекомендации не участвует и всегда сравнивается с «Оптимально
     по дню»: диспетчер видит цену своего решения относительно оптимума дня.
     """
@@ -443,7 +479,7 @@ def build_choice(
     described = []
     for option in options:
         if option.variant in VARIANTS:
-            reference = ranked[1] if option is best and len(ranked) > 1 else best
+            reference = _differing(option, ranked) if option is best else best
         else:
             reference = optimal
         compared = reference if reference is not None and reference is not option else None

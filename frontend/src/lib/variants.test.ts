@@ -1,8 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import type { BaseVariant, EventType } from '../api/types';
-import { makeEventChoice, makePlanningState, makeReassignEvent, makeTimelineItem } from '../test/fixtures';
+import { makeEventChoice, makePlanningState, makeReassignEvent, makeTimelineItem, makeVariantOption } from '../test/fixtures';
 import { reassignEvent } from './events';
-import { assignedEngineer, assignVariant, CHOOSABLE_EVENTS, choiceEvent, isAssignVariant, VARIANT_TITLES, variantTitle } from './variants';
+import {
+  ALL_SAME_TEXT,
+  assignedEngineer,
+  assignVariant,
+  CHOOSABLE_EVENTS,
+  choiceEvent,
+  isAssignVariant,
+  sameAsText,
+  VARIANT_TITLES,
+  variantTitle,
+} from './variants';
 
 describe('variants', () => {
   it('offers variants for a reassignment like for the other breaking events', () => {
@@ -34,6 +44,42 @@ describe('variants', () => {
     expect(variantTitle('assign:E02', 'urgent', makePlanningState().engineers)).toBe('Отдать: Бригада Белузин');
     // Бригады дня нет под рукой: остаётся номер.
     expect(variantTitle('assign:E09', 'urgent')).toBe('Отдать: Бригада E09');
+  });
+
+  describe('sameAsText', () => {
+    /** Варианты, у которых «Минимум перестановок» повторяет рекомендованный, а «Ничего не менять» отличается. */
+    const tied = () =>
+      makeEventChoice({
+        variants: [
+          makeVariantOption('optimal', { recommended: true, compared_to: 'keep', pros: ['на 1 клиента без инженера или с опозданием меньше'] }),
+          makeVariantOption('stable', { compared_to: 'optimal' }),
+          makeVariantOption('keep', { compared_to: 'optimal', cons: ['на 1 клиента без инженера или с опозданием больше'] }),
+        ],
+      });
+
+    it('names the variant a card repeats instead of leaving both lists empty', () => {
+      const choice = tied();
+      expect(sameAsText(choice, choice.variants[1])).toBe('То же, что «Оптимально по дню»');
+      // Подпись готовится по compared_to, а показывает её карточка — только когда отличий нет.
+      expect(sameAsText(choice, choice.variants[0])).toBe('То же, что «Ничего не менять»');
+    });
+
+    it('says that every variant is the same when the recommended one has nothing to compare itself with', () => {
+      const choice = makeEventChoice({
+        variants: [
+          makeVariantOption('optimal', { recommended: true, compared_to: null }),
+          makeVariantOption('stable', { compared_to: 'optimal' }),
+          makeVariantOption('keep', { compared_to: 'optimal' }),
+        ],
+      });
+      expect(sameAsText(choice, choice.variants[0])).toBe(ALL_SAME_TEXT);
+      expect(sameAsText(choice, choice.variants[2])).toBe('То же, что «Оптимально по дню»');
+    });
+
+    it('says nothing when the window has a single variant', () => {
+      const choice = makeEventChoice({ variants: [makeVariantOption('optimal', { recommended: true, compared_to: null })] });
+      expect(sameAsText(choice, choice.variants[0])).toBeUndefined();
+    });
   });
 
   describe('choiceEvent', () => {

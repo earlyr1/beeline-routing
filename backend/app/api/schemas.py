@@ -103,6 +103,14 @@ class VariantRequest(BaseModel):
     variant: EventVariant
 
 
+class MorningVisit(BaseModel):
+    """Визит утреннего плана: время и бригада, которые клиент услышал бы до событий дня."""
+
+    request_id: str
+    engineer_id: str
+    start: HHMM
+
+
 class PlanningState(BaseModel):
     dataset_id: str
     version: int
@@ -118,6 +126,9 @@ class PlanningState(BaseModel):
     baseline: Plan
     control: Plan | None = None
     last_diff: PlanDiff | None = None
+    # Утренний план дня (текущее время 00:00, ни одного события шкалы) — только время и бригада каждого визита:
+    # с ним вкладка «Коммуникации» сравнивает план, когда клиенту ещё ничего не говорили.
+    morning: list[MorningVisit] = Field(default_factory=list)
     events: list[AppliedEvent] = Field(default_factory=list)
     matrix_source: Literal["osrm", "haversine"]
     # Текущее время плана. now, events, last_diff и previous_plan относятся к плану на это время.
@@ -156,6 +167,15 @@ class ClientConfig(BaseModel):
     osrm_available: bool
 
 
+def morning_visits(plan: Plan | None) -> list[MorningVisit]:
+    """Время и бригада каждого визита утреннего плана; пустой список, если утреннего плана нет."""
+    return [
+        MorningVisit(request_id=visit.request_id, engineer_id=route.engineer_id, start=visit.start)
+        for route in (plan.routes if plan is not None else [])
+        for visit in route.visits
+    ]
+
+
 def to_planning_state(
     session: PlanningSession,
     *,
@@ -163,8 +183,12 @@ def to_planning_state(
     timeline: list[TimelineItem] | None = None,
     timeline_ready: bool = True,
     pending_choice: EventChoice | None = None,
+    morning: Plan | None = None,
 ) -> PlanningState:
-    """Состояние на текущее время cursor (по умолчанию время последнего события сессии)."""
+    """Состояние на текущее время cursor (по умолчанию время последнего события сессии).
+
+    morning — утренний план дня: из него в ответ идут время и бригада визитов, а не весь план.
+    """
     return PlanningState(
         dataset_id=session.dataset_id,
         version=session.version,
@@ -180,6 +204,7 @@ def to_planning_state(
         baseline=session.baseline,
         control=session.control,
         last_diff=session.last_diff,
+        morning=morning_visits(morning),
         events=session.events,
         matrix_source=session.problem.travel.base.source,
         cursor=session.now if cursor is None else cursor,

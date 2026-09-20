@@ -1,7 +1,7 @@
 import type { Engineer, EventChoice, EventVariant, VariantOption } from '../../api/types';
 import { brigadeOptions, eventRequestId } from '../../lib/events';
 import { brigadeName } from '../../lib/format';
-import { assignedEngineer, variantTitle } from '../../lib/variants';
+import { assignedEngineer, choiceVariantTitle } from '../../lib/variants';
 import { useAppStore } from '../../store/useAppStore';
 import { BrigadeListbox } from '../BrigadeListbox';
 import { VariantCard } from './VariantCard';
@@ -32,8 +32,6 @@ export function AssignCard({ choice, option, engineers, holder, locked, onChoose
   // «В плане» отмечена бригада, которая берёт заявку в оптимальном плане: с ним диспетчер и спорит.
   const optimal = choice.variants.find((item) => item.variant === 'optimal');
   const options = state && request ? brigadeOptions(request, state.engineers, state.plan, optimal?.request_engineer_id) : [];
-  const titleOf = (variant: EventVariant) =>
-    choice.variants.find((item) => item.variant === variant)?.title ?? variantTitle(variant, choice.event.type, state?.engineers);
   // Выбор диспетчера, сделанный раньше: варианты, открытые заново, приходят без посчитанного плана.
   const chosenId = choice.current ? assignedEngineer(choice.current) : null;
 
@@ -67,7 +65,7 @@ export function AssignCard({ choice, option, engineers, holder, locked, onChoose
     );
   }
 
-  const base = titleOf(option.compared_to ?? 'optimal');
+  const base = choiceVariantTitle(choice, option.compared_to ?? 'optimal', state?.engineers);
   return (
     <VariantCard
       option={option}
@@ -77,7 +75,8 @@ export function AssignCard({ choice, option, engineers, holder, locked, onChoose
       locked={locked || loading}
       engineers={engineers}
       holder={holder}
-      compare={{ head: `Цена решения против «${base}»`, same: `То же, что «${base}»` }}
+      compareHead={`Цена решения против «${base}»`}
+      sameText={`То же, что «${base}»`}
       onChoose={onChoose}
     >
       <div className="variant__picker">

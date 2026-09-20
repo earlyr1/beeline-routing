@@ -15,6 +15,7 @@ import {
   uploadFile,
 } from '../api/client';
 import type { ClientConfig, DatasetStatus, EventChoice, EventVariant, HHMM, PlanEvent, PlanningState, TimelineItem } from '../api/types';
+import { plannedPromise, type AgreedTimes } from '../lib/communications';
 import type { PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
@@ -28,6 +29,8 @@ export const POLL_INTERVAL_MS = 1000;
 export const POLL_RETRIES = 3;
 /** Ключ localStorage с набором данных открытого плана: план переживает перезагрузку страницы и закрытие браузера. */
 export const SESSION_DATASET_KEY = 'routing.datasetId';
+/** Ключ localStorage с согласованными временами набора данных: отметки звонков переживают перезагрузку страницы. */
+export const agreedKey = (datasetId: string) => `routing.agreed.${datasetId}`;
 /** Шаг проигрывания дня: минута плана за 100 мс, то есть час дня за 6 секунд. */
 export const PLAY_TICK_MS = 100;
 /** Часы до первого ответа сервера: плана ещё нет, и шкалы дня, на начало которой их поставить, тоже. */
@@ -108,14 +111,22 @@ export interface AppData {
   workloadLevel: number;
   /** Обед по плану: диспетчер выбирает его вместе с нагрузкой, сервер возвращает выбор сессии. */
   lunchEnabled: boolean;
+  /**
+   * Что уже согласовано с клиентом: номер заявки → время и бригада, о которых ему сказали.
+   * С ними вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда визит снова уезжает.
+   */
+  agreed: AgreedTimes;
 }
 
 export interface AppActions {
   loadConfig(): Promise<void>;
   upload(file: File): Promise<void>;
   plan(): Promise<void>;
-  /** Поставить событие на шкалу дня. Сначала сервер переводит план на время часов, чтобы событие у часов применилось сразу. */
-  applyEvent(event: PlanEvent): Promise<boolean>;
+  /**
+   * Поставить событие на шкалу дня. Сначала сервер переводит план на время часов, чтобы событие у часов применилось сразу.
+   * variant — стратегия события сразу, без окна выбора: так отменяется заявка отказавшегося клиента.
+   */
+  applyEvent(event: PlanEvent, variant?: EventVariant): Promise<boolean>;
   /** Сброс событий: все события шкалы убираются, план — утренний, часы на начале дня. */
   resetEvents(): Promise<boolean>;
   /** Убрать событие со шкалы дня. */
@@ -154,6 +165,8 @@ export interface AppActions {
   closeWhy(): void;
   setTab(tabId: string): void;
   setShowPrevious(value: boolean): void;
+  /** Отметить, что с клиентом согласовали время визита из текущего плана. */
+  markAgreed(requestId: string): void;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
   setWorkloadLevel(level: number): void;
   /** Включить или выключить обед по плану для следующего расчёта плана с нуля. */
@@ -220,6 +233,7 @@ export const initialAppData: AppData = {
   urgentSuggestedAddress: null,
   workloadLevel: DEFAULT_WORKLOAD_LEVEL,
   lunchEnabled: DEFAULT_LUNCH_ENABLED,
+  agreed: {},
 };
 
 /** Плавающие диалоги открываются на одном месте, поэтому открытый диалог закрывает остальные. */
@@ -269,6 +283,24 @@ function savedDatasetId(): string | null {
     return localStorage.getItem(SESSION_DATASET_KEY) ?? sessionStorage.getItem(SESSION_DATASET_KEY);
   } catch {
     return null;
+  }
+}
+
+function loadAgreed(datasetId: string): AgreedTimes {
+  try {
+    const saved = localStorage.getItem(agreedKey(datasetId));
+    return saved ? (JSON.parse(saved) as AgreedTimes) : {};
+  } catch {
+    // Хранилище недоступно или в нём мусор: считаем, что клиентам ещё не звонили.
+    return {};
+  }
+}
+
+function saveAgreed(datasetId: string, agreed: AgreedTimes): void {
+  try {
+    localStorage.setItem(agreedKey(datasetId), JSON.stringify(agreed));
+  } catch {
+    // Хранилище недоступно (приватный режим или запрет браузера): отметки живут до перезагрузки страницы.
   }
 }
 
@@ -379,6 +411,8 @@ export const useAppStore = create<AppState>()((set, get) => {
       // Нагрузка и обед сессии на сервере: «Применить» и восстановленный план продолжают с ними.
       workloadLevel: clampWorkloadLevel(next.workload_level),
       lunchEnabled: lunchEnabledOf(next.lunch_enabled),
+      // Открыли другой набор данных (или этот же после перезагрузки страницы): берём его отметки звонков.
+      ...(same ? {} : { agreed: loadAgreed(next.dataset_id) }),
       ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
     });
     // Время плана остановилось на «ломающем» событии без выбора: часы ждут на нём, открывается окно выбора.
@@ -615,7 +649,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       }
     },
 
-    async applyEvent(event) {
+    async applyEvent(event, variant) {
       const { datasetId, clock } = get();
       if (!datasetId) return false;
       const current = generation;
@@ -625,7 +659,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       try {
         // Диспетчер видит на часах их время и ждёт, что событие в это время применится сразу.
         await get().commitClock();
-        const state = await enqueue(current, () => addTimelineEvent(datasetId, event));
+        const state = await enqueue(current, () => addTimelineEvent(datasetId, event, variant));
         if (!isCurrent(current)) return false;
         // Окно «Считаем варианты…» закрыли до ответа: как закрытое без выбора, оно откроется на «Запустить» или сдвиге вперёд.
         const { choice, choiceLoading } = get();
@@ -653,7 +687,9 @@ export const useAppStore = create<AppState>()((set, get) => {
         const state = await enqueue(current, () => clearTimeline(datasetId));
         if (!isCurrent(current)) return false;
         get().setPlanningState(state);
-        set({ clock: fromMinutes(dayScale(state, state.plan).from) });
+        // День начинается заново: обзвона ещё не было, отметки «Согласовано» снимаются вместе с событиями.
+        saveAgreed(datasetId, {});
+        set({ agreed: {}, clock: fromMinutes(dayScale(state, state.plan).from) });
         await get().commitClock();
         return true;
       } catch (error) {
@@ -894,6 +930,15 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     setShowPrevious(value) {
       set({ showPrevious: value && Boolean(get().state?.previous_plan) });
+    },
+
+    markAgreed(requestId) {
+      const { state, datasetId, agreed } = get();
+      if (!state || !datasetId) return;
+      // Запоминаем время и бригаду текущего плана: когда визит снова уедет, отметка сама перестанет совпадать.
+      const next = { ...agreed, [requestId]: plannedPromise(state.plan, requestId, state.version) };
+      saveAgreed(datasetId, next);
+      set({ agreed: next });
     },
 
     setWorkloadLevel(level) {

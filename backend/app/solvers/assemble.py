@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from app.domain.models import Plan, Route, Unassigned
 from app.solvers.metrics import compute_metrics
 from app.solvers.problem import Problem
@@ -16,15 +18,22 @@ def build_plan(
     *,
     fixed_unassigned: dict[str, Unassigned] | None = None,
     lunch: bool = True,
+    not_before: Mapping[str, int] | None = None,
 ) -> Plan:
-    """План по последовательностям. lunch=False — план без обеда (план диспетчеров показывается как есть)."""
+    """План по последовательностям. lunch=False — план без обеда (план диспетчеров показывается как есть).
+
+    not_before — времена, раньше которых визиты не начинают: ими «Ничего не менять» держит то, что уже
+    обещано клиентам (см. simulate_route).
+    """
     fixed_unassigned = fixed_unassigned or {}
     routes: list[Route] = []
     violations: list[str] = []
     placed: set[str] = set()
     for state in problem.states:
         engineer_id = state.engineer.id
-        sim = simulate_route(problem, state, sequences.get(engineer_id, []), lunch=lunch)
+        sim = simulate_route(
+            problem, state, sequences.get(engineer_id, []), lunch=lunch, not_before=not_before
+        )
         # Флаг pinned у закреплённых визитов задаёт pin_problem: True только у начатой работы.
         visits = list(problem.pinned.get(engineer_id, [])) + sim.visits
         violations.extend(sim.violations)

@@ -78,6 +78,9 @@ class Problem:
     pinned: dict[str, list[Visit]] = field(default_factory=dict)
     previous_assignment: dict[str, str] = field(default_factory=dict)
     previous_order: dict[str, list[str]] = field(default_factory=dict)
+    # Время визита в плане до события: «Ничего не менять» держит его, чтобы бригада не приехала к клиенту
+    # раньше обещанного, когда маршрут впереди освободился.
+    previous_start: dict[str, int] = field(default_factory=dict)
     now: int = 0
     buffer: TravelBuffer = NO_BUFFER  # запас на дорогу по нагрузке дня, входит в travel_min
     # Обед, начатый до события: остаётся как в прежнем плане, новый обед инженеру уже не нужен.

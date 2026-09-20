@@ -621,8 +621,8 @@ describe('event dialogs on the clock of the day', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
     await waitFor(() => expect(useAppStore.getState().engineerDialog).toBeNull());
     expect(vi.mocked(api.addTimelineEvent).mock.calls).toEqual([
-      ['d_test', unavailableEvent('E02', '13:00')],
-      ['d_test', unavailableEvent('E02', '13:00')],
+      ['d_test', unavailableEvent('E02', '13:00'), undefined],
+      ['d_test', unavailableEvent('E02', '13:00'), undefined],
     ]);
     expect(useAppStore.getState().state?.version).toBe(5);
     expect(api.postEvent).not.toHaveBeenCalled();
@@ -633,7 +633,7 @@ describe('event dialogs on the clock of the day', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
     vi.mocked(api.addTimelineEvent).mockResolvedValue(makePlanningState({ version: 5 }));
     expect(await useAppStore.getState().applyEvent(cancelEvent('46393', '11:30'))).toBe(true);
-    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('46393', '11:30'));
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('46393', '11:30'), undefined);
     expect(api.postEvent).not.toHaveBeenCalled();
   });
 });

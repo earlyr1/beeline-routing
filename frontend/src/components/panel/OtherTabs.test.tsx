@@ -19,7 +19,15 @@ beforeEach(() => {
 
 describe('panel tabs', () => {
   it('registers the base tabs, the brigades right after the requests and the proposals tab with an unassigned badge', () => {
-    expect(PANEL_TABS.map((tab) => tab.id)).toEqual(['requests', 'brigades', 'timeline', 'unassigned', 'comparison', 'proposals']);
+    expect(PANEL_TABS.map((tab) => tab.id)).toEqual([
+      'requests',
+      'brigades',
+      'timeline',
+      'unassigned',
+      'comparison',
+      'proposals',
+      'communications',
+    ]);
     expect(PANEL_TABS[1].title).toBe('Бригады');
     const unassigned = PANEL_TABS.find((tab) => tab.id === 'unassigned');
     expect(unassigned?.badge?.(useAppStore.getState())).toBe(1);

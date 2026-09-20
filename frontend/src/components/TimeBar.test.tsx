@@ -254,6 +254,18 @@ describe('TimeBar', () => {
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
+  it('shows the strategy of a cancellation, which has no choice window of its own', () => {
+    // Отмену диспетчер выбирал кнопкой «Отменить, маршруты не трогать»: на шкале должно быть видно, что он выбрал.
+    const timeline = [makeTimelineItem({ id: 'tl_1', status: 'applied', variant: 'keep' })];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 10135/));
+    const events = screen.getByRole('group', { name: 'События 09:30' });
+    expect(within(events).getByText('Вариант: Маршруты не трогать')).toBeInTheDocument();
+    // Окна выбора у отмены нет: кнопку «Варианты…» ей не показывают.
+    expect(within(events).queryByRole('button', { name: 'Варианты…' })).not.toBeInTheDocument();
+  });
+
   it('blocks play and the slider while the choice is open', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), choice: makeEventChoice() });
     render(<TimeBar />);

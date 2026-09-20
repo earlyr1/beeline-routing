@@ -700,14 +700,75 @@ def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(tmp_path, solve
 def test_variant_errors(tmp_path, solves):
     client, _, base, background = dataset(tmp_path, solves)
     added(client, base, cancel("R1", "16:00"))
+    added(client, base, restore("R1", "16:30"))
     background.run()
-    assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "keep"}).status_code == 409
+    # У отмены стратегия есть, а окна выбора нет: выбор проходит, а вариантов для окна сервер не предлагает.
+    assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "keep"}).status_code == 200
     assert client.get(f"{base}/timeline/events/tl_1/variants").status_code == 409
+    # У возврата заявки стратегий нет вовсе.
+    assert client.put(f"{base}/timeline/events/tl_2/variant", json={"variant": "keep"}).status_code == 409
+    assert client.get(f"{base}/timeline/events/tl_2/variants").status_code == 409
     assert client.put(f"{base}/timeline/events/tl_9/variant", json={"variant": "keep"}).status_code == 404
     assert client.get(f"{base}/timeline/events/tl_9/variants").status_code == 404
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "best"}).status_code == 422
     # Строка без номера бригады тоже неизвестна: до решателя она не доходит.
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:"}).status_code == 422
+    # Бригаду выбирают только у срочной заявки, отмене её не назначить.
+    assert (
+        client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:E1"}).status_code == 422
+    )
+
+
+def test_a_cancelled_request_can_be_added_with_its_own_strategy(tmp_path, solves):
+    """Клиент отказался: диспетчер сам говорит, трогать ли маршруты. Часы на отмене не встают, окна выбора нет."""
+    client, _, base, _ = dataset(tmp_path, solves)
+    before = at(client, base, "13:00")
+    owner = next(route["engineer_id"] for route in before["plan"]["routes"] if route["visits"])
+    request_id = route_ids(before, owner)[-1]
+    solves.clear()
+
+    response = client.post(
+        f"{base}/timeline/events", params={"variant": "keep"}, json=body(cancel(request_id, "13:00"))
+    )
+
+    assert response.status_code == 200, response.text
+    state = response.json()
+    assert state["pending_choice"] is None
+    assert [(item["status"], item["variant"], item["choosable"]) for item in state["timeline"]] == [
+        ("applied", "keep", False)
+    ]
+    assert route_ids(state, owner) == [rid for rid in route_ids(before, owner) if rid != request_id]
+    # «Маршруты не трогать»: остаток дня не пересчитывается, решатель не запускается.
+    assert solves == []
+
+
+def test_a_strategy_for_an_event_without_strategies_is_409_and_the_event_is_not_added(tmp_path, solves):
+    client, _, base, _ = dataset(tmp_path, solves)
+    response = client.post(
+        f"{base}/timeline/events", params={"variant": "keep"}, json=body(restore("R1", "12:00"))
+    )
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Для этого события варианты не предлагаются."
+    assert state_of(client, base)["timeline"] == []
+
+
+def test_the_state_carries_the_morning_times_of_the_day_next_to_the_plan(tmp_path, solves):
+    """Утренние время и бригада визитов: с ними видно, что клиенту обещали до всех событий дня."""
+    client, _, base, _ = dataset(tmp_path, solves)
+    start = state_of(client, base)
+    morning = [
+        {"request_id": visit["request_id"], "engineer_id": route["engineer_id"], "start": visit["start"]}
+        for route in start["plan"]["routes"]
+        for visit in route["visits"]
+    ]
+    assert start["morning"] == morning and morning
+
+    added(client, base, cancel("R3", "13:00"))
+    state = at(client, base, "13:00")
+
+    # План на 13:00 уже без отменённой заявки, а утренний план остался прежним.
+    assert "R3" not in planned(state)
+    assert state["morning"] == morning
 
 
 def test_legacy_events_and_proposals_apply_the_optimal_variant_without_asking(tmp_path, solves):

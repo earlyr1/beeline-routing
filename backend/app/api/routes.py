@@ -75,6 +75,13 @@ def _check_known(record: DatasetRecord, event: Event) -> None:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+def _check_variant(record: DatasetRecord, event: Event, variant: str) -> None:
+    try:
+        check_variant(record, event, variant)
+    except VariantUnavailable as error:
+        raise HTTPException(status_code=error.status, detail=str(error)) from error
+
+
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -202,12 +209,17 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
 
 
 @router.post("/datasets/{dataset_id}/timeline/events", response_model=PlanningState)
-def add_timeline_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
+def add_timeline_event(
+    dataset_id: str, event: Event, deps: Deps, variant: str | None = None
+) -> PlanningState:
     """Событие на шкале в любое время дня; текущее время плана не меняется.
 
     Событие не позже текущего времени применяется сразу, план пересчитывается от его места. Если оно не
     применяется, на шкале его нет, а ответ 422 с причиной. Событие позже текущего времени ждёт своего времени, его
     шаг считается в фоне.
+
+    variant — стратегия события сразу, без окна выбора: так диспетчер отменяет заявку отказавшегося клиента,
+    выбирая между пересчётом остатка дня и «маршруты не трогать». Событию без стратегий ответ 409.
     """
     record = _record(deps, dataset_id)
     ctx = deps.ingest.planning
@@ -216,6 +228,8 @@ def add_timeline_event(dataset_id: str, event: Event, deps: Deps) -> PlanningSta
     with record.lock:
         _session(record)
         _check_known(record, event)
+        if variant is not None:
+            _check_variant(record, event, variant)
         requests = known_requests(record.base, record.timeline.entries)
     event, geo = geocode_entry(event, requests, ctx)
     try:
@@ -225,7 +239,7 @@ def add_timeline_event(dataset_id: str, event: Event, deps: Deps) -> PlanningSta
                 _session(record)
                 _check_known(record, event)
                 cursor = record.cursor
-                entry = record.timeline.create(event, geo)
+                entry = record.timeline.create(event, geo, variant=variant)
             if event.time <= cursor:
                 step = insert_and_replay(record, ctx, entry)
                 if step is not None and step.reason is not None:
@@ -300,7 +314,7 @@ def put_timeline_variant(dataset_id: str, entry_id: str, body: VariantRequest, d
                 entry = record.timeline.find(entry_id)
                 if entry is None:
                     raise VariantUnavailable(404, f"Событие {entry_id} не найдено.")
-                check_variant(record, entry, body.variant)
+                check_variant(record, entry.event, body.variant)
                 record.timeline.set_variant(entry_id, body.variant)
             settle(record, ctx)
             return planning_state(record)

@@ -6,6 +6,7 @@ import type {
   EventVariant,
   Explanation,
   Metrics,
+  MorningVisit,
   PlanEvent,
   PlanningState,
   Route,
@@ -125,6 +126,20 @@ const UNASSIGNED_18754 = {
     'Работа не помещается в окно 18:00–20:00 или в смену: даже без других заявок Бригада Белузин начнёт не раньше 20:10.',
 };
 
+/**
+ * Утренний план дня, до всех трёх событий фикстуры: E03 ещё доступен и везёт 10135 и 18754, 50104 у Белузина,
+ * 46393 начинается в 15:00. Срочной заявки утром не было.
+ */
+const morningVisits: MorningVisit[] = [
+  { request_id: '74198', engineer_id: 'E01', start: '10:00' },
+  { request_id: '86160', engineer_id: 'E01', start: '12:00' },
+  { request_id: '46393', engineer_id: 'E01', start: '15:00' },
+  { request_id: '84627', engineer_id: 'E02', start: '12:00' },
+  { request_id: '50104', engineer_id: 'E02', start: '14:00' },
+  { request_id: '10135', engineer_id: 'E03', start: '14:05' },
+  { request_id: '18754', engineer_id: 'E03', start: '18:00' },
+];
+
 export function makePlanningState(overrides: Partial<PlanningState> = {}): PlanningState {
   const currentRoutes = [
     route('E01', [
@@ -212,6 +227,7 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       metrics_before: previousMetrics,
       metrics_after: currentMetrics,
     },
+    morning: morningVisits.map((item) => ({ ...item })),
     events: [
       { id: 'ev_1', event: { type: 'cancel', time: '09:30', request: null, request_id: '10135', engineer_id: null }, version: 2 },
       { id: 'ev_2', event: { type: 'engineer_unavailable', time: '13:00', request: null, request_id: null, engineer_id: 'E03' }, version: 3 },

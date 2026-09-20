@@ -96,9 +96,15 @@ export const getPlanningState = (datasetId: string) => request<PlanningState>(`$
 export const postEvent = (datasetId: string, event: PlanEvent) =>
   request<PlanningState>(`${dataset(datasetId)}/events`, postJson(event));
 
-/** Событие на шкалу дня: время плана не меняется, событие позже него остаётся впереди. */
-export const addTimelineEvent = (datasetId: string, event: PlanEvent) =>
-  request<PlanningState>(`${dataset(datasetId)}/timeline/events`, postJson(event));
+/**
+ * Событие на шкалу дня: время плана не меняется, событие позже него остаётся впереди.
+ * variant — стратегия события сразу, без окна выбора: так отменяется заявка отказавшегося клиента.
+ */
+export const addTimelineEvent = (datasetId: string, event: PlanEvent, variant?: EventVariant) =>
+  request<PlanningState>(
+    `${dataset(datasetId)}/timeline/events${variant ? `?${new URLSearchParams({ variant })}` : ''}`,
+    postJson(event),
+  );
 
 export const deleteTimelineEvent = (datasetId: string, entryId: string) =>
   request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
