@@ -81,16 +81,28 @@ export interface MapModelInput {
   selectedEngineerId: string | null;
 }
 
+/**
+ * Чей маршрут выделен на карте, а остальные приглушены: бригада открытой заявки, без неё — открытая бригада.
+ * Заявка главнее: диспетчер смотрит на неё, и карточка поверх страницы бригады показывает бригаду самой заявки,
+ * даже если это другая бригада. У заявки без бригады и у отменённой выделять нечего — остаётся открытая бригада
+ * или вся карта как есть.
+ */
+export function focusedEngineerId(plan: Plan, selectedRequestId: string | null, selectedEngineerId: string | null): string | null {
+  const holder = selectedRequestId ? assignmentIndex(plan).get(selectedRequestId)?.engineerId : undefined;
+  return holder ?? selectedEngineerId;
+}
+
 /** Всё, что рисуется на карте, в порядке отрисовки: линии маршрутов, офис, старты инженеров, заявки. */
 export function buildMapModel({ state, plan, legs, showPrevious, selectedRequestId, selectedEngineerId }: MapModelInput): MapModel {
   const ids = engineerIdsOf(state);
   const assignments = assignmentIndex(plan);
+  const focus = focusedEngineerId(plan, selectedRequestId, selectedEngineerId);
   const marks: Map<string, DiffMark> = showPrevious ? new Map() : diffMarks(state.last_diff);
 
   const polylines = plan.routes.flatMap((route) => {
     const color = engineerColor(route.engineer_id, ids);
-    const dimmed = selectedEngineerId !== null && selectedEngineerId !== route.engineer_id;
-    const width = selectedEngineerId === route.engineer_id ? 6 : 3;
+    const dimmed = focus !== null && focus !== route.engineer_id;
+    const width = focus === route.engineer_id ? 6 : 3;
     return (legs.get(route.engineer_id) ?? []).map(
       (leg, index): MapPolyline => ({
         key: `${route.engineer_id}-${index}-${leg.to_request_id}`,
@@ -118,7 +130,7 @@ export function buildMapModel({ state, plan, legs, showPrevious, selectedRequest
 
   const starts = state.engineers.map((engineer): MapMarker => {
     const color = engineerColor(engineer.id, ids);
-    const dimmed = !engineer.available || (selectedEngineerId !== null && selectedEngineerId !== engineer.id);
+    const dimmed = !engineer.available || (focus !== null && focus !== engineer.id);
     return {
       key: `start-${engineer.id}`,
       target: { kind: 'engineer', engineerId: engineer.id },
@@ -143,7 +155,7 @@ export function buildMapModel({ state, plan, legs, showPrevious, selectedRequest
       cancelled ? 'marker--cancelled' : '',
       marks.has(request.id) ? 'marker--changed' : '',
       selected ? 'marker--selected' : '',
-      selectedEngineerId && info?.engineerId !== selectedEngineerId ? 'marker--dimmed' : '',
+      focus && info?.engineerId !== focus ? 'marker--dimmed' : '',
     ]
       .filter(Boolean)
       .join(' ');
@@ -191,6 +203,7 @@ export interface ClockLayerInput {
   plan: Plan;
   legs: Map<string, RouteLeg[]>;
   clock: HHMM;
+  selectedRequestId: string | null;
   selectedEngineerId: string | null;
 }
 
@@ -202,8 +215,9 @@ export interface ClockLayer {
 }
 
 /** Где инженеры в момент на часах: маркер каждому, у кого есть визиты, и текущий отрезок пути, разрезанный этой точкой. */
-export function buildClockLayer({ state, plan, legs, clock, selectedEngineerId }: ClockLayerInput): ClockLayer {
+export function buildClockLayer({ state, plan, legs, clock, selectedRequestId, selectedEngineerId }: ClockLayerInput): ClockLayer {
   const ids = engineerIdsOf(state);
+  const focus = focusedEngineerId(plan, selectedRequestId, selectedEngineerId);
   const requests = byId(state.requests);
   const markers: MapMarker[] = [];
   const polylines: MapPolyline[] = [];
@@ -216,9 +230,9 @@ export function buildClockLayer({ state, plan, legs, clock, selectedEngineerId }
     if (!place) continue;
     for (const requestId of place.driven) passed.add(legKey(engineer.id, requestId));
     const color = engineerColor(engineer.id, ids);
-    const dimmed = selectedEngineerId !== null && selectedEngineerId !== engineer.id;
+    const dimmed = focus !== null && focus !== engineer.id;
     const dim = dimmed ? DIMMED_ROUTE_OPACITY : 1;
-    const width = selectedEngineerId === engineer.id ? 6 : 3;
+    const width = focus === engineer.id ? 6 : 3;
 
     if (place.split) {
       split.add(legKey(engineer.id, place.split.requestId));

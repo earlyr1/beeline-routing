@@ -127,6 +127,37 @@ describe('buildMapModel', () => {
     expect(markerOf(model, '46393')).toMatchObject({ className: 'marker marker--changed', label: '4' });
   });
 
+  it('focuses the route of the brigade that holds the selected request, as if the brigade itself were open', () => {
+    const model = buildMapModel(input({ selectedRequestId: '50104' }));
+    const e01 = model.polylines.filter((line) => line.engineerId === 'E01');
+    const e02 = model.polylines.filter((line) => line.engineerId === 'E02');
+    expect(e01.every((line) => line.width === 6 && line.opacity === 1)).toBe(true);
+    expect(e02.every((line) => line.width === 3 && line.opacity === DIMMED_ROUTE_OPACITY)).toBe(true);
+    expect(markerOf(model, '84627').className).toBe('marker marker--dimmed');
+    expect(markerOf(model, 'start-E02').className).toBe('marker marker--start marker--dimmed');
+    expect(markerOf(model, 'start-E01').className).toBe('marker marker--start');
+  });
+
+  it('leaves the map as it is when the selected request has no brigade', () => {
+    const model = buildMapModel(input({ selectedRequestId: '18754' }));
+    expect(model.polylines.every((line) => line.width === 3 && line.opacity === 1)).toBe(true);
+    expect(markerOf(model, '84627').className).not.toContain('marker--dimmed');
+    expect(markerOf(model, 'start-E02').className).toBe('marker marker--start');
+  });
+
+  it('keeps the open brigade in focus when the selected request has no brigade', () => {
+    const model = buildMapModel(input({ selectedRequestId: '18754', selectedEngineerId: 'E02' }));
+    expect(model.polylines.filter((line) => line.engineerId === 'E02').every((line) => line.width === 6)).toBe(true);
+    expect(markerOf(model, 'start-E01').className).toBe('marker marker--start marker--dimmed');
+  });
+
+  it('moves the focus to the request’s own brigade when it is opened over another brigade’s page', () => {
+    const model = buildMapModel(input({ selectedRequestId: '84627', selectedEngineerId: 'E01' }));
+    expect(model.polylines.filter((line) => line.engineerId === 'E02').every((line) => line.width === 6)).toBe(true);
+    expect(model.polylines.filter((line) => line.engineerId === 'E01').every((line) => line.opacity === DIMMED_ROUTE_OPACITY)).toBe(true);
+    expect(markerOf(model, '84627').className).not.toContain('marker--dimmed');
+  });
+
   it('highlights the selected request and dims everything outside the selected engineer', () => {
     const model = buildMapModel(input({ selectedRequestId: '50104', selectedEngineerId: 'E01' }));
     expect(markerOf(model, '50104')).toMatchObject({ zIndex: 100, className: 'marker marker--changed marker--selected' });
@@ -176,10 +207,16 @@ describe('buildMapModel', () => {
 
 function clockInput(patch: Partial<ClockLayerInput> = {}): ClockLayerInput {
   const base = input();
-  return { state: base.state, plan: base.plan, legs: base.legs, clock: '13:20', selectedEngineerId: null, ...patch };
+  return { state: base.state, plan: base.plan, legs: base.legs, clock: '13:20', selectedRequestId: null, selectedEngineerId: null, ...patch };
 }
 
 describe('buildClockLayer', () => {
+  it('приглушает маркеры «где сейчас» всех, кроме бригады открытой заявки', () => {
+    const layer = buildClockLayer(clockInput({ selectedRequestId: '50104' }));
+    expect(layer.markers.find((marker) => marker.key === 'now-E01')?.className).not.toContain('marker--dimmed');
+    expect(layer.markers.find((marker) => marker.key === 'now-E02')?.className).toContain('marker--dimmed');
+  });
+
   it('ставит маркер «где сейчас» каждому инженеру с визитами и никому без них', () => {
     const layer = buildClockLayer(clockInput());
     expect(layer.markers.map((marker) => marker.key)).toEqual(['now-E01', 'now-E02']);

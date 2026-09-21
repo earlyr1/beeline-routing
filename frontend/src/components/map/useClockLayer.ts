@@ -10,10 +10,11 @@ import { useAppStore } from '../../store/useAppStore';
  */
 export function useClockLayer(state: PlanningState | null, plan: Plan | null, legs: Map<string, RouteLeg[]>): ClockLayer | null {
   const clock = useAppStore((s) => s.clock);
+  const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const layer = useMemo(
-    () => (state && plan ? buildClockLayer({ state, plan, legs, clock, selectedEngineerId }) : null),
-    [state, plan, legs, clock, selectedEngineerId],
+    () => (state && plan ? buildClockLayer({ state, plan, legs, clock, selectedRequestId, selectedEngineerId }) : null),
+    [state, plan, legs, clock, selectedRequestId, selectedEngineerId],
   );
   const passed = layer ? [...layer.legs.passed].join(' ') : '';
   const split = layer ? [...layer.legs.split].join(' ') : '';
