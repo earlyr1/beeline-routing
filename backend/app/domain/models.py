@@ -61,6 +61,8 @@ class Request(BaseModel):
     @model_validator(mode="after")
     def _window_order(self) -> Request:
         # Окно из запроса у заявки «как можно скорее» не используется: клиент может прислать любое.
+        # Нулевое окно здесь не ловится нарочно: у события его отклоняет проверка дня с именем заявки в тексте
+        # (app/planning/session.py), а у бандла — Bundle._unique_ids.
         if not self.asap and self.window_end < self.window_start:
             raise ValueError("конец временного окна раньше начала")
         return self
@@ -243,6 +245,12 @@ class Bundle(BaseModel):
         inverted = [request.id for request in self.requests if request.window_end < request.window_start]
         if inverted:
             raise ValueError(f"конец временного окна раньше начала у заявок: {_listed(inverted)}")
+        # Нулевое окно приехать в себя не даёт так же, как перевёрнутое, и строка выгрузки с ним выпадает
+        # (app/ingest/window_check.py). Бандл собирает наш же prepare, но загрузить JSON диспетчер может любой,
+        # поэтому путь бандла и путь CSV сходятся здесь.
+        empty = [r.id for r in self.requests if not r.asap and r.window_end == r.window_start]
+        if empty:
+            raise ValueError(f"временное окно нулевой длины у заявок: {_listed(empty)}")
         return self
 
 

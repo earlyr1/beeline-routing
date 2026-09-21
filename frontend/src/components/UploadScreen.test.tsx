@@ -32,6 +32,8 @@ describe('UploadScreen', () => {
     expect(screen.getByText('Не найдены на карте: 1')).toBeInTheDocument();
     expect(screen.getByText('Пропущено строк: 2')).toBeInTheDocument();
     expect(screen.getByText('Дорожный граф OSRM')).toBeInTheDocument();
+    // Чистые окна — чистый отчёт: пустого раздела в нём не появляется.
+    expect(screen.queryByText(/Замечания к окнам/)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Спланировать' }));
     await waitFor(() => expect(useAppStore.getState().state?.version).toBe(4));
@@ -109,6 +111,29 @@ describe('UploadScreen', () => {
     expect(screen.getByRole('button', { name: 'Считаем план…' })).toBeDisabled();
     expect(screen.getByRole('slider', { name: 'Нагрузка инженеров' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: 'Обед по плану' })).toBeDisabled();
+  });
+
+  it('shows what is wrong with the windows from the file and says that those requests stayed in the day', () => {
+    const windowWarnings = [
+      'строка 5: у заявки N4 окно 02:00–04:00 вне рабочего дня 10:00–22:00 — приехать в него некому',
+      'строка 6: у заявки N5 окно приезда 10:00–10:10 — всего 10 мин, бригада должна попасть ровно в них, а работ по типу «Подключение» на 70 мин',
+      'окна не по сетке: 3 из 5 (в том числе названные выше), например строка 7 — заявка N6, 11:30–13:30. Слоты сетки: 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00',
+    ];
+    const status = makeDatasetStatus();
+    resetStore({ datasetStatus: { ...status, report: { ...status.report!, window_warnings: windowWarnings } } });
+    render(<UploadScreen />);
+
+    expect(screen.getByText('Замечания к окнам: 3')).toBeInTheDocument();
+    for (const warning of windowWarnings) {
+      expect(screen.getByText(warning)).toBeInTheDocument();
+    }
+    // Диспетчер должен видеть, что эти заявки остались в дне, — в отличие от пропущенных строк.
+    expect(
+      screen.getByText(/Эти заявки остались в дне со своими окнами/),
+    ).toHaveClass('muted');
+    // Выпавшая строка важнее оставшейся с замечанием, поэтому «Пропущено строк» стоит выше.
+    const summaries = screen.getAllByText(/Пропущено строк: 2|Замечания к окнам: 3/).map((node) => node.textContent);
+    expect(summaries).toEqual(['Пропущено строк: 2', 'Замечания к окнам: 3']);
   });
 
   it('shows the backend error', () => {

@@ -39,6 +39,9 @@ class UploadReport(BaseModel):
     requests: int
     engineers: int
     skipped_rows: list[str] = Field(default_factory=list)
+    # Что не так с окнами самих данных (app/ingest/window_check.py): окно вне рабочего дня, короткое окно
+    # приезда, окна не по сетке. Окна при этом остаются как в файле — список только показывает их диспетчеру.
+    window_warnings: list[str] = Field(default_factory=list)
     geocoding: GeocodingCounts
     not_found: list[NotFoundAddress] = Field(default_factory=list)
     matrix_source: Literal["osrm", "haversine"]

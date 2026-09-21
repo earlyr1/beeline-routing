@@ -506,6 +506,8 @@ export function makeDatasetStatus(overrides: Partial<DatasetStatus> = {}): Datas
       requests: 66,
       engineers: 12,
       skipped_rows: ['строка 68: нет номера заявки или временного окна', 'строка 69: нет номера заявки или временного окна'],
+      // Чистый день: замечаний к окнам нет, и раздела в отчёте тоже.
+      window_warnings: [],
       geocoding: { house: 50, street: 12, locality: 3, none: 1 },
       not_found: [{ request_id: '86160', address: 'Город Москва, пер.Маяковского, д. 2' }],
       matrix_source: 'osrm',

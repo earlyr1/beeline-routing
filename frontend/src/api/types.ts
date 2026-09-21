@@ -174,6 +174,9 @@ export interface UploadReport {
   requests: number;
   engineers: number;
   skipped_rows: string[];
+  // Замечания к окнам из файла: окно вне рабочего дня, короткое окно приезда, окна не по сетке. Заявки при этом
+  // остаются в дне с теми окнами, что в файле, — сервис их не подменяет.
+  window_warnings: string[];
   geocoding: Record<GeocodePrecision, number>;
   not_found: { request_id: string; address: string }[];
   matrix_source: MatrixSource;
