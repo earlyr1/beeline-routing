@@ -55,7 +55,6 @@ class SynthConfig(BaseModel):
     duration_round_to: int
     duration_by_bk: dict[str, int]
     urgent_bk_types: list[str]
-    urgent_control_statuses: list[str]
     cancelled_control_statuses: list[str]
     equipment_stock: int = Field(ge=0)
     equipment_hd_types: list[str]

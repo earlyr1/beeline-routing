@@ -106,7 +106,7 @@ def test_work_type_fills_what_the_bundle_gets_for_the_same_type(cfg):
         )
         for index, work_type in enumerate(urgent_work_types(cfg))
     ]
-    built = build_requests(cfg, RawFile(rows=rows, office_address="x", is_control=False), None, _geo)
+    built = build_requests(cfg, RawFile(rows=rows, office_address="x", is_control=False), _geo)
     assert [
         (t.skill, t.tier, t.duration_min, t.transport_required, t.needs_equipment)
         for t in urgent_work_types(cfg)

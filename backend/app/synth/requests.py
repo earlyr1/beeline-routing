@@ -78,17 +78,19 @@ def check_alignment(synthetic: RawFile, control: RawFile) -> None:
 def build_requests(
     cfg: SynthConfig,
     synthetic: RawFile,
-    control: RawFile | None,
     geocode: Callable[[str, str], GeoResult],
 ) -> list[Request]:
-    statuses = [row.status_bk for row in control.rows] if control is not None else None
+    """Заявки дня только из синтетического файла: то, что диспетчер знает утром.
+
+    Контрольный файл сюда не попадает. Его статусы — итог настоящего дня: «Просрочена» значит, что диспетчеры
+    на этой заявке опоздали, а утром этого никто не знает. Поэтому «Срочная» — только по типу работ.
+    """
     requests: list[Request] = []
     for row in synthetic.rows:
         skill = cfg.skill_by_bk.get(row.type_bk)
         if skill is None:
             raise ValueError(f"Неизвестный тип заявки BK «{row.type_bk}» (заявка {row.request_id})")
-        status = statuses[row.row_index] if statuses is not None else ""
-        urgent = row.type_bk in cfg.urgent_bk_types or status in cfg.urgent_control_statuses
+        urgent = row.type_bk in cfg.urgent_bk_types
         geo = geocode(row.address, row.district)
         requests.append(
             Request(

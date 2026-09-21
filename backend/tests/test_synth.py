@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -5,6 +6,7 @@ import pytest
 from app.domain.enums import EventType, Priority, RequestTier, Skill, Transport
 from app.domain.models import Metrics, Office, Plan, Route, Visit, dispatch_order
 from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
+from app.ingest.bundle import load_bundle
 from app.ingest.geocode import GeoResult
 from app.settings import REPO_ROOT
 from app.synth.config import ShiftTemplate, SynthConfig
@@ -119,9 +121,9 @@ def test_build_requests_marks_equipment_from_hd_type_and_connection(cfg):
         office_address="x",
         is_control=False,
     )
-    requests = build_requests(cfg, synthetic, None, _fake_geo)
+    requests = build_requests(cfg, synthetic, _fake_geo)
     assert [r.needs_equipment for r in requests] == [False, True, True]
-    assert build_requests(cfg, synthetic, None, _fake_geo) == requests
+    assert build_requests(cfg, synthetic, _fake_geo) == requests
 
 
 def test_largest_remainder_sums_to_total(cfg):
@@ -180,23 +182,61 @@ def _fake_geo(address, district):
     return GeoResult(55.75, 37.62, "house", address)
 
 
-def test_build_requests_marks_urgent_from_type_and_control_status(cfg):
+def test_build_requests_marks_urgent_only_from_the_work_type(cfg):
     synthetic = RawFile(
         rows=[row(0, "1"), row(1, "2", type_bk="Глобальная проблема", type_hd="Авария", ws=1, we=1439)],
         office_address="x",
         is_control=False,
     )
-    control = RawFile(
-        rows=[
-            row(0, "305", status="Просрочена"),
-            row(1, "306", type_bk="Глобальная проблема", type_hd="Авария", ws=1, we=1439),
-        ],
-        office_address=None,
-        is_control=True,
-    )
-    requests = build_requests(cfg, synthetic, control, _fake_geo)
-    assert [r.priority for r in requests] == [Priority.URGENT, Priority.URGENT]
+    requests = build_requests(cfg, synthetic, _fake_geo)
+    assert [r.priority for r in requests] == [Priority.NORMAL, Priority.URGENT]
     assert requests[1].skill == Skill.EMERGENCY and requests[1].transport_required == Transport.CAR
+
+
+def test_overdue_request_keeps_the_priority_and_tier_of_its_work_type(cfg):
+    """«Просрочена» в контрольном файле — итог настоящего дня: диспетчеры на заявке опоздали.
+
+    Утром этого никто не знает, поэтому статус не поднимает приоритет. Просроченная заявка остаётся заявкой своего
+    типа работ, а авария срочная при любом статусе.
+    """
+    overdue = []
+    for region, region_cfg in cfg.regions.items():
+        control = parse_beeline_csv((REPO_ROOT / region_cfg.control).read_bytes())
+        synthetic = parse_beeline_csv((REPO_ROOT / region_cfg.synthetic).read_bytes())
+        requests = build_requests(cfg, synthetic, _fake_geo)
+        for control_row, request in zip(control.rows, requests, strict=True):
+            if control_row.status_bk == "Просрочена":
+                overdue.append((region, request))
+    assert Counter((region, request.source_type_bk) for region, request in overdue) == {
+        ("east", "Подключение"): 3,
+        ("east", "Дозаказ"): 1,
+        ("south_east", "Подключение"): 2,
+        ("south_east", "Локальная заявка"): 4,
+        ("north_west", "Локальная заявка"): 4,
+        ("north_west", "Глобальная проблема"): 1,
+    }
+    for _, request in overdue:
+        urgent = request.source_type_bk in cfg.urgent_bk_types
+        assert request.priority == (Priority.URGENT if urgent else Priority.NORMAL), request.id
+        assert request.tier == cfg.tier_by_bk[request.source_type_bk], request.id
+
+
+# Срочных заявок в бандлах репозитория: только аварии («Глобальная проблема») выгрузки дня.
+SHIPPED_URGENT = {"east": 8, "south_east": 12, "south_center": 1, "north_west": 9}
+
+
+@pytest.mark.parametrize("region", sorted(SHIPPED_URGENT))
+def test_shipped_bundle_marks_urgent_only_by_the_work_type(cfg, region):
+    """Бандлы репозитория — то, что диспетчер видит на экране: заявки из них берёт и загрузка JSON, и сырой CSV
+    с теми же номерами. Бандл, собранный по старому правилу «Просрочена → срочная» или возвращённый к прежней
+    сборке, падает здесь, даже если build_requests уже правильный.
+    """
+    bundle = load_bundle(REPO_ROOT / "data" / "bundles" / region / "bundle.json")
+    for request in bundle.requests:
+        urgent = request.source_type_bk in cfg.urgent_bk_types
+        assert request.priority == (Priority.URGENT if urgent else Priority.NORMAL), (region, request.id)
+        assert request.tier == cfg.tier_by_bk[request.source_type_bk], (region, request.id)
+    assert sum(request.priority == Priority.URGENT for request in bundle.requests) == SHIPPED_URGENT[region]
 
 
 def test_tier_comes_from_the_bk_type_and_not_from_the_skill(cfg):
@@ -214,7 +254,7 @@ def test_tier_comes_from_the_bk_type_and_not_from_the_skill(cfg):
         office_address="x",
         is_control=False,
     )
-    requests = build_requests(cfg, synthetic, None, _fake_geo)
+    requests = build_requests(cfg, synthetic, _fake_geo)
     assert [r.tier for r in requests] == [
         RequestTier.ROUTINE,
         RequestTier.CONNECTION,
@@ -248,7 +288,7 @@ def test_build_requests_puts_the_official_norm_into_the_request(cfg):
         office_address="x",
         is_control=False,
     )
-    requests = build_requests(cfg, synthetic, None, _fake_geo)
+    requests = build_requests(cfg, synthetic, _fake_geo)
     # «Информация» стоила 15 минут по типу HD, теперь делит 80 минут норматива своего типа BK.
     assert [request.duration_min for request in requests] == [30, 70, 80, 20]
 
@@ -256,7 +296,7 @@ def test_build_requests_puts_the_official_norm_into_the_request(cfg):
 def test_build_requests_rejects_unknown_bk_type(cfg):
     synthetic = RawFile(rows=[row(0, "1", type_bk="Непонятно")], office_address="x", is_control=False)
     with pytest.raises(ValueError, match="Неизвестный тип"):
-        build_requests(cfg, synthetic, None, _fake_geo)
+        build_requests(cfg, synthetic, _fake_geo)
 
 
 def test_build_engineers_from_crew_history(cfg):
@@ -290,7 +330,7 @@ def test_demo_events_cover_three_event_types(cfg):
         office_address=None,
         is_control=True,
     )
-    requests = build_requests(cfg, synthetic, control, _fake_geo)
+    requests = build_requests(cfg, synthetic, _fake_geo)
     events = build_demo_events(cfg, "east", requests, control, synthetic, {"Бригада А": "E01"})
     assert [e.type for e in events] == [EventType.CANCEL, EventType.ENGINEER_UNAVAILABLE, EventType.URGENT]
     assert events[0].request_id == "1"
@@ -357,7 +397,7 @@ def test_demo_events_follow_the_optimized_plan(cfg):
         office_address=None,
         is_control=True,
     )
-    requests = build_requests(cfg, synthetic, control, _fake_geo)
+    requests = build_requests(cfg, synthetic, _fake_geo)
 
     def visit(request_id, start):
         return Visit(request_id=request_id, arrival=start, start=start, end=start + 30, leg_km=1.0, leg_min=5)
@@ -389,7 +429,7 @@ def test_demo_cancel_prefers_window_starting_after_event_time(cfg):
         office_address=None,
         is_control=True,
     )
-    requests = build_requests(cfg, synthetic, control, _fake_geo)
+    requests = build_requests(cfg, synthetic, _fake_geo)
     visits = [
         Visit(request_id="1", arrival=786, start=786, end=816, leg_km=1.0, leg_min=5),
         Visit(request_id="2", arrival=960, start=960, end=990, leg_km=1.0, leg_min=5),

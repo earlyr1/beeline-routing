@@ -156,7 +156,7 @@ def _read_upload(
     else:
         raw = _drop_repeated_ids(raw)
         _set(record, stage="geocoding", done=0, total=len(raw.rows))
-        requests = build_requests(deps.synth_config, raw, None, _counting_geocoder(record, deps.geocode))
+        requests = build_requests(deps.synth_config, raw, _counting_geocoder(record, deps.geocode))
         control = None
     day = PreparedDay(
         reference.region,

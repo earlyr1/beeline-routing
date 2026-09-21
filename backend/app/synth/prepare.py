@@ -140,7 +140,6 @@ def prepare_region(
         requests = build_requests(
             cfg,
             synthetic,
-            control,
             lambda address, district: geocode_address(address, district, geocoder, geo_cache),
         )
     finally:
