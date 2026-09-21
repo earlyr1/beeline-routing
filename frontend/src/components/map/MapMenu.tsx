@@ -10,7 +10,7 @@ const keepInside = (event: SyntheticEvent) => event.stopPropagation();
 /** Меню после клика по пустому месту карты: добавить срочную заявку в этой точке. Одно для Яндекс Карт и OpenStreetMap. */
 export function MapMenu() {
   const point = useAppStore((s) => s.mapMenu);
-  const locked = useAppStore((s) => s.busy || s.showPrevious);
+  const busy = useAppStore((s) => s.busy);
   const addRequestAt = useAppStore((s) => s.addRequestAt);
   const closeMapMenu = useAppStore((s) => s.closeMapMenu);
 
@@ -38,7 +38,7 @@ export function MapMenu() {
       onMouseDown={keepInside}
       onPointerDown={keepInside}
     >
-      <button type="button" className="btn btn-small btn-primary" disabled={locked} onClick={() => void addRequestAt(point)}>
+      <button type="button" className="btn btn-small btn-primary" disabled={busy} onClick={() => void addRequestAt(point)}>
         Добавить заявку здесь
       </button>
       <button type="button" className="btn btn-ghost btn-small" aria-label="Закрыть меню карты" onClick={closeMapMenu}>

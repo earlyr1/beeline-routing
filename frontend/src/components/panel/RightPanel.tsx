@@ -9,6 +9,7 @@ export function RightPanel() {
   const activeTab = useAppStore((s) => s.activeTab);
   const setTab = useAppStore((s) => s.setTab);
   const badges = useAppStore(useShallow((s) => PANEL_TABS.map((item) => item.badge?.(s) ?? null)));
+  // Вкладка, которой нет в панели, открывает «Заявки».
   const tab = PANEL_TABS.find((item) => item.id === activeTab) ?? PANEL_TABS[0];
   const Active = tab.component;
   return (
@@ -28,7 +29,11 @@ export function RightPanel() {
               onClick={() => setTab(item.id)}
             >
               {item.title}
-              {badge ? <span className="tabs__badge">{badge}</span> : null}
+              {badge ? (
+                <span className="tabs__badge" title={item.badgeTitle}>
+                  {badge}
+                </span>
+              ) : null}
             </button>
           );
         })}

@@ -18,7 +18,15 @@ def _ready_dataset(client):
 def test_health_and_config(tmp_path):
     client, _ = make_client(tmp_path)
     assert client.get("/api/health").json() == {"status": "ok"}
-    assert client.get("/api/config").json() == {
+    config = client.get("/api/config").json()
+    # Типы работ срочной заявки с нормативами проверяет tests/test_work_types.py.
+    assert [work_type["title"] for work_type in config.pop("work_types")] == [
+        "Авария",
+        "Подключение",
+        "Ремонт у клиента",
+        "Дозаказ оборудования",
+    ]
+    assert config == {
         "yandex_maps_api_key": "test-key",
         "llm_enabled": False,
         "osrm_available": False,

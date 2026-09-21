@@ -73,10 +73,9 @@ describe('App', () => {
     ]);
     expect(banner.getByRole('combobox', { name: 'Нагрузка инженеров' })).toHaveValue('1');
     expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual([
-      'Заявки',
+      'Заявки1',
       'Бригады',
       'Таймлайн',
-      'Неназначенные1',
       'Сравнение',
       'Рекомендуемые изменения',
       'Коммуникации4',
@@ -84,24 +83,14 @@ describe('App', () => {
     const bar = screen.getByRole('region', { name: 'Время дня' });
     expect(within(bar).getByRole('slider', { name: 'Текущее время' })).toBeInTheDocument();
     expect(within(bar).getByRole('button', { name: 'Запустить' })).toBeInTheDocument();
+    // Меню «Добавить событие» у часов нет: каждое событие открывается там, где его объект, — страница бригады,
+    // «Срочная заявка» и клик по карте.
+    expect(within(bar).getAllByRole('button').map((button) => button.getAttribute('aria-label') ?? button.textContent)).toEqual([
+      'Запустить',
+    ]);
+    expect(screen.queryByRole('button', { name: 'Добавить событие' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(screen.getByRole('banner').contains(bar)).toBe(false);
-    expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
-  });
-
-  it('opens «Инженер заболел» from the clock of the day with the busiest engineer at the clock time', async () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState() });
-    render(<App />);
-    const bar = within(screen.getByRole('region', { name: 'Время дня' }));
-    fireEvent.click(bar.getByRole('button', { name: 'Добавить событие' }));
-    fireEvent.click(bar.getByRole('menuitem', { name: 'Инженер заболел' }));
-    expect(openDialogs()).toEqual(['Инженер недоступен']);
-    expect(engineerIn('Инженер недоступен')).toBe('E01');
-    expect(within(screen.getByRole('dialog', { name: 'Инженер недоступен' })).getByLabelText('Недоступен с')).toHaveValue('13:00');
-
-    fireEvent.click(bar.getByRole('button', { name: 'Добавить событие' }));
-    fireEvent.click(bar.getByRole('menuitem', { name: 'Задержка инженера' }));
-    expect(openDialogs()).toEqual(['Задержка инженера']);
-    expect(engineerIn('Задержка инженера')).toBe('E01');
     expect(await screen.findByText(NO_KEY_NOTE)).toBeInTheDocument();
   });
 
@@ -166,7 +155,7 @@ describe('App', () => {
     expect(screen.getByRole('dialog', { name: 'Инженер недоступен' })).toHaveClass('dialog--floating');
     expect(engineerIn('Инженер недоступен')).toBe('E02');
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Заявки' }));
+    fireEvent.click(screen.getByRole('tab', { name: /^Заявки/ }));
     const urgentRow = within(screen.getByRole('tabpanel')).getByText('URG-001').closest('li') as HTMLElement;
     fireEvent.click(within(urgentRow).getByRole('button', { name: 'Изменить' }));
     expect(openDialogs()).toEqual(['Изменить заявку']);

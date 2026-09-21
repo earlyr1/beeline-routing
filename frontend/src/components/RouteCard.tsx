@@ -11,15 +11,7 @@ import {
   toMinutes,
   TRANSPORT_LABELS,
 } from '../lib/format';
-import {
-  byId,
-  displayedPlan,
-  engineerIdsOf,
-  equipmentLeft,
-  routeRows,
-  routeSummary,
-  type RouteStop,
-} from '../lib/planView';
+import { byId, engineerIdsOf, equipmentLeft, routeRows, routeSummary, type RouteStop } from '../lib/planView';
 import { timelineStatusText } from '../lib/timeBar';
 import { dayScale, percent, timelineRow } from '../lib/timeline';
 import { useAppStore } from '../store/useAppStore';
@@ -45,7 +37,6 @@ function equipmentText(stock: number, left: number): string {
  */
 export function RouteCard() {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const selectEngineer = useAppStore((s) => s.selectEngineer);
@@ -55,8 +46,7 @@ export function RouteCard() {
   const openEngineerDialog = useAppStore((s) => s.openEngineerDialog);
   const clock = useAppStore((s) => s.clock);
   if (!state || !selectedEngineerId || selectedRequestId) return null;
-  const plan = displayedPlan(state, showPrevious);
-  const summary = routeSummary(state, plan, selectedEngineerId);
+  const summary = routeSummary(state, state.plan, selectedEngineerId);
   if (!summary) return null;
 
   const { engineer, stops } = summary;
@@ -70,13 +60,11 @@ export function RouteCard() {
   ]
     .filter(Boolean)
     .join(' · ');
-  // События меняют текущий план, поэтому в плане до события и во время расчёта кнопки недоступны.
-  const locked = busy || showPrevious;
   // Недоступному инженеру сервер не принимает ни задержку, ни смену транспорта, ни повторную недоступность.
   const unavailable = !engineer.available;
   // Та же шкала дня, что у часов: линия текущего времени стоит там же, где ползунок.
-  const scale = dayScale(state, plan);
-  const row = timelineRow(state, plan, scale, engineer);
+  const scale = dayScale(state);
+  const row = timelineRow(state, state.plan, scale, engineer);
   // События шкалы дня в порядке применения, а показываем с последнего: применённые, впереди и отклонённые.
   // Переназначение заявки видно и у бригады, от которой заявка ушла.
   const events = (state.timeline ?? [])
@@ -96,7 +84,7 @@ export function RouteCard() {
           <button
             type="button"
             className="btn btn-small"
-            disabled={locked || unavailable}
+            disabled={busy || unavailable}
             title={unavailable ? 'Инженер недоступен, сменить транспорт нельзя' : undefined}
             onClick={() => openEngineerDialog('transport', engineer.id)}
           >
@@ -105,7 +93,7 @@ export function RouteCard() {
           <button
             type="button"
             className="btn btn-small"
-            disabled={locked || unavailable}
+            disabled={busy || unavailable}
             title={unavailable ? 'Инженер недоступен, задержку поставить нельзя' : undefined}
             onClick={() => startDelay(engineer.id)}
           >
@@ -114,7 +102,7 @@ export function RouteCard() {
           <button
             type="button"
             className="btn btn-small"
-            disabled={locked || unavailable}
+            disabled={busy || unavailable}
             title={unavailable ? `Инженер уже недоступен${engineer.unavailable_from ? ` с ${engineer.unavailable_from}` : ''}` : undefined}
             onClick={() => openEngineerDialog('unavailable', engineer.id)}
           >
@@ -125,7 +113,6 @@ export function RouteCard() {
           </button>
         </div>
       </header>
-      {showPrevious && state.previous_plan && <p className="note">Маршрут по плану до события.</p>}
       <div className="timeline timeline--personal" role="group" aria-label="Таймлайн бригады">
         <div className="timeline__row timeline__row--header">
           <div className="timeline__track">

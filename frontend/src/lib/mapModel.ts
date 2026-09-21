@@ -3,7 +3,7 @@ import type { LngLat } from '../components/map/yandexLoader';
 import { enginePlace, type PhaseKind } from './clock';
 import { engineerColor } from './colors';
 import { requestLabel, shortAddress } from './format';
-import { assignmentIndex, byId, diffMarks, engineerIdsOf, type DiffMark } from './planView';
+import { assignmentIndex, byId, diffMarks, engineerIdsOf } from './planView';
 
 /** Прозрачность маршрутов других инженеров, когда выбран один: то же, что суффикс `40` у цвета. */
 export const DIMMED_ROUTE_OPACITY = 0x40 / 0xff;
@@ -76,7 +76,6 @@ export interface MapModelInput {
   state: PlanningState;
   plan: Plan;
   legs: Map<string, RouteLeg[]>;
-  showPrevious: boolean;
   selectedRequestId: string | null;
   selectedEngineerId: string | null;
 }
@@ -93,11 +92,11 @@ export function focusedEngineerId(plan: Plan, selectedRequestId: string | null, 
 }
 
 /** Всё, что рисуется на карте, в порядке отрисовки: линии маршрутов, офис, старты инженеров, заявки. */
-export function buildMapModel({ state, plan, legs, showPrevious, selectedRequestId, selectedEngineerId }: MapModelInput): MapModel {
+export function buildMapModel({ state, plan, legs, selectedRequestId, selectedEngineerId }: MapModelInput): MapModel {
   const ids = engineerIdsOf(state);
   const assignments = assignmentIndex(plan);
   const focus = focusedEngineerId(plan, selectedRequestId, selectedEngineerId);
-  const marks: Map<string, DiffMark> = showPrevious ? new Map() : diffMarks(state.last_diff);
+  const marks = diffMarks(state.last_diff);
 
   const polylines = plan.routes.flatMap((route) => {
     const color = engineerColor(route.engineer_id, ids);

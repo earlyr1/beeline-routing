@@ -26,7 +26,7 @@ function input(patch: Partial<MapModelInput> = {}): MapModelInput {
     const engineer = engineers.get(route.engineer_id);
     if (engineer && route.visits.length > 0) legs.set(route.engineer_id, straightLegs(route, engineer, requests));
   }
-  return { state, plan: state.plan, legs, showPrevious: false, selectedRequestId: null, selectedEngineerId: null, ...patch };
+  return { state, plan: state.plan, legs, selectedRequestId: null, selectedEngineerId: null, ...patch };
 }
 
 const markerOf = (model: ReturnType<typeof buildMapModel>, key: string) => {
@@ -195,13 +195,6 @@ describe('buildMapModel', () => {
       opacity: 1,
       width: 3,
     });
-  });
-
-  it('does not mark changes while the previous plan is shown', () => {
-    const state = makePlanningState();
-    const model = buildMapModel(input({ plan: state.previous_plan ?? state.plan, showPrevious: true }));
-    expect(model.markers.some((marker) => marker.className.includes('marker--changed'))).toBe(false);
-    expect(markerOf(model, 'URG-001')).toMatchObject({ className: 'marker marker--unassigned marker--urgent', label: '!' });
   });
 });
 

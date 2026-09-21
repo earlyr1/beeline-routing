@@ -185,7 +185,6 @@ describe('BrigadePicker', () => {
     ['a visit that started before the clock', '50104', { clock: '14:10' }, 'Работа уже началась, переназначить нельзя'],
     ['a cancelled request', '10135', {}, 'Заявка отменена'],
     ['an event being applied', '50104', { busy: true }, null],
-    ['the plan before the event', '50104', { showPrevious: true }, null],
   ])('disables the trigger for %s', (_, requestId, patch, title) => {
     renderPicker(requestId, patch);
     expect(trigger()).toBeDisabled();

@@ -1,11 +1,13 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../store/useAppStore';
-import { makeAsapState, makeDataUrgentState, makePlanningState } from '../../test/fixtures';
+import { makeAsapRequest, makeAsapState, makeDataUrgentState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { RequestsTab } from './RequestsTab';
 
 const rowOf = (requestId: string) => screen.getByText(requestId).closest('li') as HTMLElement;
+const titles = () => screen.getAllByRole('listitem').map((item) => item.querySelector('strong')?.textContent);
+const filter = () => screen.getByRole('button', { name: /^Без исполнителя/ });
 
 beforeEach(() => {
   resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:30' });
@@ -84,21 +86,9 @@ describe('RequestsTab', () => {
   it('filters by engineer in route order and blocks cancelling started work', () => {
     render(<RequestsTab />);
     fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: 'E01' } });
-    const titles = screen.getAllByRole('listitem').map((item) => item.querySelector('strong')?.textContent);
-    expect(titles).toEqual(['74198', '86160', '50104', '46393']);
+    expect(titles()).toEqual(['74198', '86160', '50104', '46393']);
     expect(within(rowOf('74198')).getByRole('button', { name: 'Отменить' })).toBeDisabled();
     expect(useAppStore.getState().selectedEngineerId).toBe('E01');
-  });
-
-  it('shows the previous plan with upcoming changes marked and actions disabled', () => {
-    useAppStore.setState({ showPrevious: true });
-    render(<RequestsTab />);
-    expect(within(rowOf('50104')).getByText('Бригада Белузин')).toBeInTheDocument();
-    expect(within(rowOf('50104')).getByText('Будет перенесена к «Бригада Арташкин»')).toBeInTheDocument();
-    expect(within(rowOf('URG-001')).getByText('Будет назначена')).toBeInTheDocument();
-    expect(screen.queryByText('Перенесена от «Бригада Белузин»')).not.toBeInTheDocument();
-    expect(within(rowOf('46393')).getByRole('button', { name: 'Отменить' })).toBeDisabled();
-    expect(within(rowOf('46393')).getByRole('button', { name: 'Изменить' })).toBeDisabled();
   });
 
   it('opens the request edit from a row without selecting it', () => {
@@ -156,6 +146,108 @@ describe('RequestsTab', () => {
     act(() => useAppStore.getState().setClock('14:10'));
     expect(within(rowOf('50104')).getByText('В работе')).toBeInTheDocument();
     expect(within(rowOf('50104')).queryByText('В пути')).not.toBeInTheDocument();
+  });
+
+  it('показывает у заявки без бригады причину и вид работ', () => {
+    render(<RequestsTab />);
+    const row = rowOf('18754');
+    expect(within(row).getByText('Не назначена')).toBeInTheDocument();
+    expect(within(row).getByText('Не помещается в окно или смену')).toHaveClass('badge', 'badge--warn');
+    expect(
+      within(row).getByText(
+        'Работа не помещается в окно 18:00–20:00 или в смену: даже без других заявок Бригада Белузин начнёт не раньше 20:10.',
+      ),
+    ).toHaveClass('request-row__reason');
+    // Бригады у заявки нет: на её месте вид работ, по нему видно, кто мог бы её взять.
+    expect(within(row).getByText('Работы на подключение и дозаказы')).toBeInTheDocument();
+    expect(within(rowOf('50104')).queryByText('Локальные работы')).not.toBeInTheDocument();
+    expect(rowOf('50104').querySelector('.request-row__reason')).toBeNull();
+  });
+
+  it('фильтр «Без исполнителя» оставляет только заявки без бригады, их число — на самой кнопке', () => {
+    render(<RequestsTab />);
+    expect(filter()).toHaveAttribute('aria-pressed', 'false');
+    expect(within(filter()).getByText('1')).toHaveClass('requests-tab__count');
+
+    fireEvent.click(filter());
+    expect(filter()).toHaveAttribute('aria-pressed', 'true');
+    expect(useAppStore.getState().unassignedOnly).toBe(true);
+    expect(titles()).toEqual(['18754']);
+    expect(screen.getByText('Заявок: 1')).toBeInTheDocument();
+    expect(within(rowOf('18754')).getByText(/даже без других заявок Бригада Белузин/)).toBeInTheDocument();
+    fireEvent.click(rowOf('18754'));
+    expect(useAppStore.getState().selectedRequestId).toBe('18754');
+
+    fireEvent.click(filter());
+    expect(titles()).toHaveLength(makePlanningState().requests.length);
+  });
+
+  it('в фильтре срочная заявка подписана URG-…, а у «как можно скорее» вместо окна начало ожидания', () => {
+    const state = makeDataUrgentState(['18754']);
+    const asap = { request_id: 'URG-002', reason_code: 'no_free_engineer_in_window' as const, reason_text: 'Сегодня никто не успевает.' };
+    resetStore({
+      datasetId: 'd_test',
+      state: { ...state, requests: [...state.requests, makeAsapRequest()], plan: { ...state.plan, unassigned: [...state.plan.unassigned, asap] } },
+      clock: '13:30',
+      unassignedOnly: true,
+    });
+    render(<RequestsTab />);
+    expect(within(filter()).getByText('2')).toBeInTheDocument();
+    expect(titles()).toEqual(['URG-002', 'URG-18754']);
+    const waiting = rowOf('URG-002');
+    expect(within(waiting).getByText('Как можно скорее с 13:00')).toBeInTheDocument();
+    expect(within(waiting).getByText('Аварийные работы')).toBeInTheDocument();
+    expect(within(waiting).getByText('Сегодня никто не успевает.')).toBeInTheDocument();
+    expect(within(rowOf('URG-18754')).getByText('Окно 18:00–20:00')).toBeInTheDocument();
+    fireEvent.click(rowOf('URG-18754'));
+    expect(useAppStore.getState().selectedRequestId).toBe('18754');
+  });
+
+  it('в фильтре без заявок без бригады пишет, что все распределены, и оставляет кнопку, чтобы снять фильтр', () => {
+    const state = makePlanningState();
+    resetStore({ datasetId: 'd_test', state: { ...state, plan: { ...state.plan, unassigned: [] } }, unassignedOnly: true });
+    render(<RequestsTab />);
+    expect(screen.getByText('Все заявки распределены.')).toBeInTheDocument();
+    expect(screen.queryByRole('listitem')).not.toBeInTheDocument();
+    expect(filter()).toHaveTextContent(/^Без исполнителя$/);
+    expect(filter()).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('фильтр оставляет страницу бригады открытой и показывает под ней заявки без бригады, пока его не снимут', () => {
+    useAppStore.setState({ selectedEngineerId: 'E01' });
+    render(<RequestsTab />);
+    expect(titles()).toEqual(['74198', '86160', '50104', '46393']);
+    fireEvent.click(filter());
+    expect(useAppStore.getState().selectedEngineerId).toBe('E01');
+    expect(filter()).toHaveAttribute('aria-pressed', 'true');
+    // Список показывает не маршрут бригады, поэтому в списке инженеров «Все инженеры».
+    expect(screen.getByLabelText('Инженер')).toHaveValue('');
+    expect(titles()).toEqual(['18754']);
+
+    // Бригада, открытая поверх фильтра, его не снимает.
+    act(() => useAppStore.getState().openBrigade('E02'));
+    expect(filter()).toHaveAttribute('aria-pressed', 'true');
+    expect(titles()).toEqual(['18754']);
+
+    // Снятый фильтр возвращает маршрут открытой бригады.
+    fireEvent.click(filter());
+    expect(screen.getByLabelText('Инженер')).toHaveValue('E02');
+    expect(titles()).toEqual(['84627', 'URG-001']);
+  });
+
+  it('выбор в списке инженеров снимает фильтр: это явный выбор, чей маршрут показать', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:30', unassignedOnly: true });
+    render(<RequestsTab />);
+    fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: 'E01' } });
+    expect(filter()).toHaveAttribute('aria-pressed', 'false');
+    expect(useAppStore.getState().selectedEngineerId).toBe('E01');
+    expect(titles()).toEqual(['74198', '86160', '50104', '46393']);
+
+    // После закрытия бригады фильтр не возвращается.
+    fireEvent.change(screen.getByLabelText('Инженер'), { target: { value: '' } });
+    expect(useAppStore.getState().selectedEngineerId).toBeNull();
+    expect(filter()).toHaveAttribute('aria-pressed', 'false');
+    expect(titles()).toHaveLength(makePlanningState().requests.length);
   });
 
   it('disables editing while an event is being applied', () => {

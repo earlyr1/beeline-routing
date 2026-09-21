@@ -5,7 +5,6 @@ import {
   byId,
   diffBadge,
   diffMarks,
-  displayedPlan,
   equipmentLeft,
   routeRequestIds,
   routeRows,
@@ -17,13 +16,6 @@ import {
 
 describe('planView', () => {
   const state = makePlanningState();
-
-  it('shows the previous plan only when requested and available', () => {
-    expect(displayedPlan(state, false)).toBe(state.plan);
-    expect(displayedPlan(state, true)).toBe(state.previous_plan);
-    const noPrevious = { ...state, previous_plan: null };
-    expect(displayedPlan(noPrevious, true)).toBe(noPrevious.plan);
-  });
 
   it('indexes assignments with visit order and unassigned reasons', () => {
     const index = assignmentIndex(state.plan);
@@ -53,20 +45,15 @@ describe('planView', () => {
     expect(ids).toEqual(['74198', '84627', '86160', 'URG-001', '50104', '46393', '18754', '10135']);
   });
 
-  it('labels diff badges with engineers and with the upcoming change in the plan before the event', () => {
+  it('labels diff badges with engineers', () => {
     const engineers = byId(state.engineers);
-    expect(diffBadge('moved', '50104', state.last_diff, engineers, false)).toEqual({
+    expect(diffBadge('moved', '50104', state.last_diff, engineers)).toEqual({
       text: 'Перенесена от «Бригада Белузин»',
       title: 'Перенос от «Бригада Белузин» к «Бригада Арташкин»',
     });
-    expect(diffBadge('moved', '50104', state.last_diff, engineers, true)).toEqual({
-      text: 'Будет перенесена к «Бригада Арташкин»',
-      title: 'Перенос от «Бригада Белузин» к «Бригада Арташкин»',
-    });
-    expect(diffBadge('added', 'URG-001', state.last_diff, engineers, false)).toEqual({ text: 'Новое назначение' });
-    expect(diffBadge('added', 'URG-001', state.last_diff, engineers, true)).toEqual({ text: 'Будет назначена' });
-    expect(diffBadge('shifted', '46393', state.last_diff, engineers, true)).toEqual({ text: 'Сдвинется время' });
-    expect(diffBadge('removed', '10135', state.last_diff, engineers, true)).toEqual({ text: 'Будет снята' });
+    expect(diffBadge('added', 'URG-001', state.last_diff, engineers)).toEqual({ text: 'Новое назначение' });
+    expect(diffBadge('shifted', '46393', state.last_diff, engineers)).toEqual({ text: 'Сдвиг времени' });
+    expect(diffBadge('removed', '10135', state.last_diff, engineers)).toEqual({ text: 'Снята' });
   });
 
   it('вычитает из утреннего запаса оборудования единицы, выданные к времени на часах', () => {

@@ -88,14 +88,6 @@ describe('CommunicationsTab', () => {
     expect(within(rowOf('18754')).getByText('было 18:00 → сегодня не приедем')).toBeInTheDocument();
   });
 
-  it('follows «До события» like the rest of the screen and does not let the dispatcher agree on a plan that is gone', () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', showPrevious: true });
-    render(<CommunicationsTab />);
-    // До срочной заявки план совпадал с утренним у всех, кроме 18754: её бригада стала недоступна.
-    expect(rows()).toHaveLength(1);
-    expect(within(rowOf('18754')).getByRole('button', { name: '✓ Согласовано' })).toBeDisabled();
-  });
-
   it('warns that the clock has not reached the events on the time bar yet', () => {
     const state = makePlanningState();
     resetStore({ datasetId: 'd_test', clock: '13:00', state: { ...state, timeline: makeTimeline() } });

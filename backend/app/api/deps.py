@@ -95,6 +95,7 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
     if solver_pool is not None:
         threading.Thread(target=solver_pool.warm_up, name="solver-pool-warm-up", daemon=True).start()
 
+    synth_config = SynthConfig.load(BACKEND_DIR / "config" / "synth_config.yaml")
     planning = PlanningContext(
         model=TravelModel(),
         traffic=TrafficProfile.load(BACKEND_DIR / "config" / "traffic_profile.yaml"),
@@ -107,10 +108,12 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         time_limit_s=settings.solver_time_limit_s,
         time_limit_lunch_s=settings.solver_time_limit_lunch_s,
         geocode=geocode,
+        # Уровень срочной заявки диспетчера по её типу работ — из того же конфига, что у заявок бандлов.
+        tier_by_bk=synth_config.tier_by_bk,
     )
     ingest = IngestDeps(
         bundles=BundleStore(settings.bundles_dir),
-        synth_config=SynthConfig.load(BACKEND_DIR / "config" / "synth_config.yaml"),
+        synth_config=synth_config,
         geocode=geocode,
         planning=planning,
     )

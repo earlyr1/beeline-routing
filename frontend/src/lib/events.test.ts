@@ -8,6 +8,9 @@ import {
   makePlanningState,
   makeReassignEvent,
   makeRequestUpdateEvent,
+  WORK_TYPE_EVENTS,
+  WORK_TYPES,
+  workTypeOf,
 } from '../test/fixtures';
 import {
   BEFORE_SHIFTS_HINT,
@@ -44,12 +47,15 @@ import {
   validateRequestEdit,
   validateUrgentForm,
   visitsFrom,
+  workTypeFields,
+  workTypeSummary,
   type UrgentForm,
 } from './events';
 import { EVENT_LABELS } from './format';
 import { assignmentIndex, byId } from './planView';
 
 const form: UrgentForm = {
+  workType: null,
   address: 'Город Москва, ул.Ташкентская, д. 16к2',
   point: null,
   windowStart: '13:00',
@@ -108,7 +114,7 @@ describe('events', () => {
     expect(event.request?.address).toBe('Точка на карте 55.71000, 37.80000');
   });
 
-  it('ставит срочной заявке диспетчера верхний уровень распределения', () => {
+  it('ставит срочной заявке диспетчера без типа работ верхний уровень распределения', () => {
     const { engineers } = makePlanningState();
     // Сервер ставит уровень сам, но и клиент отправляет тот же: в списке заявка сразу как авария.
     expect(buildUrgentEvent(form, 'URG-TIER', engineers).request).toMatchObject({ tier: 'emergency', priority: 'urgent' });
@@ -125,6 +131,60 @@ describe('events', () => {
     expect(buildUrgentEvent(asap, 'URG-ASAP', engineers).request).toMatchObject({ asap: true, window_start: '13:20', window_end: '22:00' });
     expect(buildUrgentEvent(asap, 'URG-ASAP', []).request).toMatchObject({ asap: true, window_start: '13:20', window_end: '13:20' });
     expect(buildUrgentEvent(form, 'URG-WINDOW', engineers).request).toMatchObject({ asap: false, window_start: '13:00', window_end: '15:00' });
+  });
+
+  it('fills the urgent request from the norms of every work type the server sends', () => {
+    expect(WORK_TYPES.map((workType) => [workType.title, workTypeFields(workType)])).toEqual([
+      [
+        'Авария',
+        { workType: WORK_TYPES[0], skill: 'emergency', durationMin: 80, transport: 'car', needsEquipment: false, asap: true },
+      ],
+      [
+        'Подключение',
+        { workType: WORK_TYPES[1], skill: 'connection', durationMin: 70, transport: '', needsEquipment: true, asap: false },
+      ],
+      [
+        'Ремонт у клиента',
+        { workType: WORK_TYPES[2], skill: 'local', durationMin: 30, transport: '', needsEquipment: false, asap: false },
+      ],
+      [
+        'Дозаказ оборудования',
+        { workType: WORK_TYPES[3], skill: 'connection', durationMin: 20, transport: 'car', needsEquipment: true, asap: false },
+      ],
+    ]);
+  });
+
+  it('builds for every work type exactly the event the backend test posts to the server', () => {
+    // Эталон общий с backend/tests/test_work_types.py: сервер принимает ровно эти события.
+    const { engineers } = makePlanningState();
+    const place = { address: 'Город Москва, ул.Таганская, д. 1', point: { lat: 55.755, lon: 37.61 }, windowStart: '14:00', windowEnd: '16:00', time: '13:00' };
+    const events = WORK_TYPES.map((workType, index) =>
+      buildUrgentEvent({ ...place, ...workTypeFields(workType) }, `URG-GOLDEN${index + 1}`, engineers),
+    );
+    expect(events).toEqual(WORK_TYPE_EVENTS);
+    // Тип работ уходит с заявкой, как у заявок дня, и с уровнем своего типа BK, как его ставит сервер;
+    // срочной заявку делает priority «urgent» при любом типе.
+    expect(
+      events.map((event) => [event.request?.source_type_bk, event.request?.source_type_hd, event.request?.tier, event.request?.priority]),
+    ).toEqual([
+      ['Глобальная проблема', 'Авария', 'emergency', 'urgent'],
+      ['Подключение', 'Заявка на подключение', 'connection', 'urgent'],
+      ['Локальная заявка', '', 'routine', 'urgent'],
+      ['Дозаказ', 'Дозаказ оборудования', 'routine', 'urgent'],
+    ]);
+  });
+
+  it('keeps the old source mark of an urgent request without work types from the server', () => {
+    const { engineers } = makePlanningState();
+    expect(buildUrgentEvent(form, 'URG-OLD', engineers).request).toMatchObject({ source_type_bk: 'Срочная заявка диспетчера', source_type_hd: '' });
+  });
+
+  it('sums up what the work type filled in one line', () => {
+    const emergency = { ...form, ...workTypeFields(workTypeOf('Глобальная проблема')) };
+    expect(workTypeSummary(emergency)).toBe('Авария · 80 мин · автомобиль · как можно скорее');
+    const extra = { ...form, ...workTypeFields(workTypeOf('Дозаказ')), windowStart: '14:00', windowEnd: '16:00' };
+    expect(workTypeSummary(extra)).toBe('Дозаказ оборудования · 20 мин · автомобиль · с оборудованием · окно 14:00–16:00');
+    expect(workTypeSummary({ ...form, transport: '' })).toBe('Аварийные работы · 60 мин · любой транспорт · окно 13:00–15:00');
   });
 
   it('skips the window checks of an urgent request as soon as possible', () => {
@@ -430,7 +490,7 @@ describe('request update', () => {
 
   it('shares one rule for the edit, cancel and restore buttons of a request at the clock', () => {
     const visits = assignmentIndex(state.plan);
-    const idle = { busy: false, showPrevious: false, clock: '13:30' };
+    const idle = { busy: false, clock: '13:30' };
     const actionsOf = (id: string, patch = {}) => requestActionState(requestOf(id), visits.get(id)?.visit, { ...idle, ...patch });
 
     expect(actionsOf('50104')).toEqual({
@@ -454,7 +514,6 @@ describe('request update', () => {
       cancelTitle: 'Работа уже началась, отменить нельзя',
     });
     expect(actionsOf('50104', { busy: true })).toMatchObject({ disabled: true, editTitle: undefined, cancelTitle: undefined });
-    expect(actionsOf('50104', { showPrevious: true }).disabled).toBe(true);
   });
 
   it('describes an applied request update with its changes and a client event without them', () => {
@@ -600,7 +659,7 @@ describe('request reassignment', () => {
 
   it('allows the reassignment by the rule of the request buttons and refuses cancelled requests and requests off the map', () => {
     const visits = assignmentIndex(state.plan);
-    const idle = { busy: false, showPrevious: false, clock: '13:30' };
+    const idle = { busy: false, clock: '13:30' };
     const lockOf = (request: ServiceRequest, patch = {}) => reassignState(request, visits.get(request.id)?.visit, { ...idle, ...patch });
     expect(lockOf(requestOf('50104'))).toEqual({ disabled: false, title: undefined });
     expect(lockOf(requestOf('18754'))).toEqual({ disabled: false, title: undefined });
@@ -612,6 +671,5 @@ describe('request reassignment', () => {
       title: 'Адрес не найден на карте, назначить бригаду нельзя',
     });
     expect(lockOf(requestOf('50104'), { busy: true })).toEqual({ disabled: true, title: undefined });
-    expect(lockOf(requestOf('50104'), { showPrevious: true })).toEqual({ disabled: true, title: undefined });
   });
 });

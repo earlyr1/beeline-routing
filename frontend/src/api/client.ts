@@ -133,8 +133,8 @@ export const moveCursor = (datasetId: string, time: HHMM) =>
 export const getExplanation = (datasetId: string, requestId: string) =>
   request<Explanation>(`${dataset(datasetId)}/explain/${encodeURIComponent(requestId)}`);
 
-export const getRouteGeometry = (datasetId: string, engineerId: string, plan: 'current' | 'previous' = 'current') =>
-  request<RouteGeometry>(`${dataset(datasetId)}/routes/${encodeURIComponent(engineerId)}/geometry?plan=${plan}`);
+export const getRouteGeometry = (datasetId: string, engineerId: string) =>
+  request<RouteGeometry>(`${dataset(datasetId)}/routes/${encodeURIComponent(engineerId)}/geometry`);
 
 /** Адрес по точке на карте: подставляется в срочную заявку, добавленную кликом по карте. */
 export const getReverseGeocode = (lat: number, lon: number) =>

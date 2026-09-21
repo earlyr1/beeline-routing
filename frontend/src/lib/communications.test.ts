@@ -4,7 +4,6 @@ import { makePlanningState, makeTimelineItem } from '../test/fixtures';
 import {
   callAgreedText,
   callChangeText,
-  callContext,
   callList,
   eventsAhead,
   plannedPromise,
@@ -16,7 +15,7 @@ const state = (overrides: Partial<PlanningState> = {}) => makePlanningState(over
 
 /** Список звонков по текущему плану; на часах фикстуры 13:00. */
 const calls = (planning: PlanningState, agreed: AgreedTimes = {}, clock: HHMM = '13:00') =>
-  callList(planning, agreed, callContext(planning, false, clock));
+  callList(planning, agreed, clock);
 
 const ids = (rows: { requestId: string }[]) => rows.map((row) => row.requestId);
 const row = (list: ReturnType<typeof calls>['pending'], requestId: string) =>
@@ -144,12 +143,6 @@ describe('callList', () => {
     expect(eventsAhead(state())).toBe(false);
     expect(eventsAhead(state({ timeline: [makeTimelineItem({ status: 'pending' })] }))).toBe(true);
     expect(eventsAhead(state({ timeline: [makeTimelineItem({ status: 'applied' })] }))).toBe(false);
-  });
-
-  it('shows the plan before the event and its promises when «До события» is on', () => {
-    // До срочной заявки план совпадал с утренним у всех, кроме 18754: её бригада стала недоступна.
-    const before = callList(state(), {}, callContext(state(), true, '13:00'));
-    expect(ids(before.pending)).toEqual(['18754']);
   });
 
   it('takes the promise to remember from the current plan', () => {

@@ -11,15 +11,14 @@ import { useAppStore } from '../store/useAppStore';
 export function RequestActions({ request }: { request: ServiceRequest }) {
   const state = useAppStore((s) => s.state);
   const busy = useAppStore((s) => s.busy);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const clock = useAppStore((s) => s.clock);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const startEdit = useAppStore((s) => s.startEdit);
   if (!state) return null;
 
-  // Начатую работу проверяем по текущему плану: события меняют его, даже когда на экране план до события.
+  // Начатую работу проверяем по текущему плану: события меняют именно его.
   const visit = assignmentIndex(state.plan).get(request.id)?.visit;
-  const actions = requestActionState(request, visit, { busy, showPrevious, clock });
+  const actions = requestActionState(request, visit, { busy, clock });
   // Кнопки стоят и внутри строки списка: клик по ним не выбирает заявку.
   const handle = (action: () => void) => (event: MouseEvent) => {
     event.stopPropagation();

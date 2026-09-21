@@ -528,28 +528,7 @@ h4 {
   flex: 1;
 }
 
-.segmented {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  overflow: hidden;
-  background: var(--surface);
-}
-
-.segmented button {
-  border: 0;
-  background: transparent;
-  padding: 6px 12px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.segmented button[aria-pressed='true'] {
-  background: var(--primary);
-  color: #fff;
-}
-
-/* Часы дня под верхней панелью: запуск, время, ползунок по шкале дня с отметками событий и меню «Добавить событие». */
+/* Часы дня под верхней панелью: запуск, время, ползунок по шкале дня с отметками событий. */
 .time-bar {
   position: relative;
   display: flex;
@@ -695,49 +674,18 @@ h4 {
   white-space: nowrap;
 }
 
-.time-bar__menu {
-  position: relative;
-}
-
-/* Меню и список событий отметки открываются поверх карты, поэтому выше её слоёв и элементов управления. */
-.time-bar__menu-list,
+/* Список событий отметки открывается поверх карты, поэтому выше её слоёв и элементов управления. */
 .time-bar__popover {
   position: absolute;
   z-index: 1100;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-}
-
-.time-bar__menu-list {
-  top: calc(100% + 4px);
-  right: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 190px;
-  padding: 4px;
-}
-
-.time-bar__menu-list button {
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  padding: 7px 10px;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.time-bar__menu-list button:hover {
-  background: var(--primary-soft);
-}
-
-.time-bar__popover {
   top: 22px;
   width: 340px;
   max-width: calc(100vw - 32px);
   padding: 8px 10px 10px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   transform: translateX(-50%);
 }
 
@@ -1068,7 +1016,9 @@ h4 {
   font-weight: 600;
 }
 
-.tabs__badge {
+/* Число на вкладке и на фильтре «Без исполнителя» одного цвета: глаз находит фильтр по бейджу вкладки. */
+.tabs__badge,
+.requests-tab__count {
   margin-left: 6px;
   background: var(--warn-soft);
   color: var(--warn);
@@ -1090,8 +1040,24 @@ h4 {
   margin-bottom: 8px;
 }
 
-.request-list,
-.unassigned-list {
+/* В узкой панели фильтр и число заявок уходят на вторую строку, а не за край панели. */
+.requests-tab .tab-toolbar {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+
+/* Фильтр «Без исполнителя» стоит рядом со списком инженеров, число заявок остаётся справа. */
+.requests-tab__unassigned {
+  margin: 0 auto 0 8px;
+}
+
+.requests-tab__unassigned[aria-pressed='true'] {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.request-list {
   list-style: none;
   margin: 0;
   padding: 0;
@@ -1150,6 +1116,12 @@ h4 {
   color: var(--muted);
   font-size: 12px;
   margin: 2px 0 4px;
+}
+
+/* Почему заявка осталась без бригады. */
+.request-row__reason {
+  margin: 4px 0 0;
+  font-size: 12px;
 }
 
 .request-row__actions,
@@ -1234,23 +1206,6 @@ h4 {
 .brigade-row__meta {
   color: var(--muted);
   font-size: 12px;
-}
-
-.unassigned-item {
-  padding: 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  margin-bottom: 8px;
-  cursor: pointer;
-}
-
-.unassigned-item__head {
-  display: flex;
-  justify-content: space-between;
-}
-
-.unassigned-item p {
-  margin: 6px 0 0;
 }
 
 /* Вкладка «Коммуникации»: кому звонить после переносов. Цвет слева — насколько срочен звонок. */
@@ -1409,7 +1364,7 @@ h4 {
   font-size: 12px;
 }
 
-/* Список привязан к окну: карточка заявки прокручивается и обрезала бы его. Поверх карты, как меню часов. */
+/* Список привязан к окну: карточка заявки прокручивается и обрезала бы его. Поверх карты, как список событий на часах. */
 .brigade-picker__list {
   position: fixed;
   z-index: 1100;
@@ -1822,6 +1777,16 @@ h4 {
   margin: 0;
 }
 
+/* Что заполнил тип работ срочной заявки, одной строкой; «Изменить» раскрывает поля. */
+.work-type-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+
 .badge--asap {
   background: transparent;
   color: var(--danger);
@@ -1845,7 +1810,7 @@ h4 {
 /* Плавающие диалоги (изменение заявки, задержка, смена транспорта, недоступность) открываются из панели и привязаны к окну, а не к панели событий. */
 .dialog--floating {
   position: fixed;
-  /* Ниже верхней панели и часов дня: ползунок и меню «Добавить событие» остаются доступны. */
+  /* Ниже верхней панели и часов дня: ползунок и отметки событий остаются доступны. */
   top: 128px;
   right: 16px;
   max-width: calc(100vw - 32px);

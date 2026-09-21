@@ -13,6 +13,7 @@ from app.planning.models import AppliedEvent, EventChoice, EventVariant, PlanDif
 from app.planning.session import PlanningSession
 from app.planning.timeline import CURSOR_RANGE_TEXT, LAST_MINUTE, TimelineStatus
 from app.planning.workload import WORKLOAD_LEVEL_TEXT, is_workload_level
+from app.synth.work_types import WorkType
 
 DatasetStatusValue = Literal["processing", "ready", "failed"]
 DatasetStage = Literal["parsing", "geocoding", "matrix", "solving", "ready"]
@@ -165,6 +166,8 @@ class ClientConfig(BaseModel):
     yandex_maps_api_key: str | None
     llm_enabled: bool
     osrm_available: bool
+    # Типы работ диалога срочной заявки с нормативами организаторов; первый — выбор по умолчанию («Авария»).
+    work_types: list[WorkType] = Field(default_factory=list)
 
 
 def morning_visits(plan: Plan | None) -> list[MorningVisit]:

@@ -57,7 +57,9 @@ describe('RouteCard', () => {
   });
 
   it('lists the lunch among the visits in time order and the lunch row opens nothing', () => {
-    useAppStore.setState({ showPrevious: true });
+    // В плане фикстуры до срочной заявки обед у Арташкина стоит между визитами.
+    const state = makePlanningState();
+    useAppStore.setState({ state: { ...state, plan: state.previous_plan! } });
     render(<RouteCard />);
     const rows = bodyRows();
     expect(rows.map((row) => cells(row).slice(0, 3))).toEqual([
@@ -129,14 +131,6 @@ describe('RouteCard', () => {
     expect(screen.queryByRole('region', { name: 'Бригада' })).not.toBeInTheDocument();
   });
 
-  it('shows the route of the plan before the event when it is displayed', () => {
-    useAppStore.setState({ showPrevious: true });
-    render(<RouteCard />);
-    expect(within(card()).getByText('Маршрут по плану до события.')).toBeInTheDocument();
-    expect(bodyRows().map((row) => cells(row)[1])).toEqual(['74198Закреплена', '86160Закреплена', 'Обед', '46393']);
-    expect(within(timeline()).getByRole('button', { name: 'Заявка 46393 15:00–15:45' })).toBeInTheDocument();
-  });
-
   it('explains an unavailable engineer without visits', () => {
     useAppStore.setState({ selectedEngineerId: 'E03' });
     render(<RouteCard />);
@@ -164,14 +158,11 @@ describe('RouteCard', () => {
     expect(useAppStore.getState()).toMatchObject({ engineerDialog: { kind: 'unavailable', engineerId: 'E01' }, delayDialogOpen: false });
   });
 
-  it('disables every action while replanning and in the plan before the event', () => {
-    for (const patch of [{ busy: true }, { showPrevious: true }]) {
-      resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', ...patch });
-      const view = render(<RouteCard />);
-      for (const name of ['Смена транспорта', 'Задержка', 'Недоступен']) expect(action(name)).toBeDisabled();
-      expect(action('Задержка')).not.toHaveAttribute('title');
-      view.unmount();
-    }
+  it('disables every action while replanning', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedEngineerId: 'E01', busy: true });
+    render(<RouteCard />);
+    for (const name of ['Смена транспорта', 'Задержка', 'Недоступен']) expect(action(name)).toBeDisabled();
+    expect(action('Задержка')).not.toHaveAttribute('title');
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, engineerDialog: null });
   });
 

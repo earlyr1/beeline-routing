@@ -16,7 +16,9 @@ import type {
   TimelineItem,
   VariantOption,
   Visit,
+  WorkType,
 } from '../api/types';
+import urgentWorkTypes from './urgentWorkTypes.golden.json';
 
 const OFFICE = { region: 'east', title: 'Восток', address: 'г. Москва, ул Юных Ленинцев, д 83с 4', lat: 55.7075, lon: 37.7862 };
 
@@ -531,4 +533,20 @@ export function makeRouteGeometry(): RouteGeometry {
       { to_request_id: 'URG-001', coordinates: [[37.805, 55.76], [37.809, 55.712]] },
     ],
   };
+}
+
+/**
+ * Общий эталон фронтенда и backend (urgentWorkTypes.golden.json). work_types — типы работ, как их отдаёт
+ * GET /api/config: backend/tests/test_work_types.py сверяет их с нормативами конфига, поэтому цифры тестов
+ * фронтенда не расходятся с сервером. events — события, которые диалог срочной заявки собирает из каждого типа
+ * (src/lib/events.test.ts); тот же тест backend отправляет их в сервер и проверяет, что он их принял.
+ */
+export const WORK_TYPES = urgentWorkTypes.work_types as WorkType[];
+export const WORK_TYPE_EVENTS = urgentWorkTypes.events as PlanEvent[];
+
+/** Тип работ эталона по его типу заявки BK. */
+export function workTypeOf(sourceTypeBk: string): WorkType {
+  const workType = WORK_TYPES.find((item) => item.source_type_bk === sourceTypeBk);
+  if (!workType) throw new Error(`Нет типа работ ${sourceTypeBk}`);
+  return workType;
 }

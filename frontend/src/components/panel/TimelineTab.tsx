@@ -1,6 +1,6 @@
 import { engineerColor } from '../../lib/colors';
 import { toMinutes } from '../../lib/format';
-import { displayedPlan, engineerIdsOf } from '../../lib/planView';
+import { engineerIdsOf } from '../../lib/planView';
 import { dayScale, percent, timelineRows } from '../../lib/timeline';
 import { useAppStore } from '../../store/useAppStore';
 import { EngineerLink } from '../EngineerLink';
@@ -8,16 +8,14 @@ import { TimelineTicks, TimelineTrack } from './TimelineTrack';
 
 export function TimelineTab() {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const selectRequest = useAppStore((s) => s.selectRequest);
   const clock = useAppStore((s) => s.clock);
   if (!state) return null;
 
-  const plan = displayedPlan(state, showPrevious);
   // Та же шкала дня, что у часов: линия текущего времени идёт вместе с ползунком.
-  const scale = dayScale(state, plan);
-  const rows = timelineRows(state, plan, scale);
+  const scale = dayScale(state);
+  const rows = timelineRows(state, state.plan, scale);
   const ids = engineerIdsOf(state);
   const nowLeft = percent(scale, toMinutes(clock));
 

@@ -42,6 +42,7 @@ from app.planning.session import (
 )
 from app.planning.timeline import EVENT_TIME_RANGE_TEXT, LAST_MINUTE, check_known, known_requests
 from app.planning.variants import is_choosable
+from app.synth.work_types import urgent_work_types
 
 router = APIRouter(prefix="/api")
 
@@ -93,6 +94,8 @@ def client_config(deps: Deps) -> ClientConfig:
         yandex_maps_api_key=deps.settings.yandex_maps_api_key,
         llm_enabled=deps.llm is not None,
         osrm_available=deps.osrm.health() if deps.osrm is not None else False,
+        # Нормативы из того же конфига, по которому собраны бандлы дня.
+        work_types=urgent_work_types(deps.ingest.synth_config),
     )
 
 

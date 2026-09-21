@@ -30,13 +30,6 @@ describe('MetricsStrip', () => {
     expect(screen.getByRole('button', { name: 'Другой файл' })).toBeEnabled();
   });
 
-  it('hides baseline deltas while the plan before the event is shown', () => {
-    useAppStore.setState({ showPrevious: true });
-    render(<MetricsStrip />);
-    expect(screen.getByText(/показан план до события/)).toBeInTheDocument();
-    expect(screen.queryByText(/к базовому/)).not.toBeInTheDocument();
-  });
-
   it('blocks switching to another file while a calculation is running', () => {
     useAppStore.setState({ busy: true });
     render(<MetricsStrip />);

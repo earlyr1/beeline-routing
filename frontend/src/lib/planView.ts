@@ -28,15 +28,6 @@ export const DIFF_MARK_LABELS: Record<DiffMark, string> = {
   shifted: 'Сдвиг времени',
 };
 
-export function displayedPlan(state: PlanningState, showPrevious: boolean): Plan {
-  return showPrevious && state.previous_plan ? state.previous_plan : state.plan;
-}
-
-/** Номер плана на экране: «До события» показывает предыдущий, он на версию младше текущего. */
-export function displayedVersion(state: PlanningState, showPrevious: boolean): number {
-  return showPrevious && state.previous_plan ? state.version - 1 : state.version;
-}
-
 export function byId<T extends { id: string }>(items: T[]): Map<string, T> {
   return new Map(items.map((item) => [item.id, item]));
 }
@@ -79,27 +70,13 @@ export interface DiffBadge {
   title?: string;
 }
 
-/** Подписи для плана до события: что произойдёт с заявкой после него. */
-const UPCOMING_LABELS: Record<DiffMark, string> = {
-  added: 'Будет назначена',
-  moved: 'Будет перенесена',
-  removed: 'Будет снята',
-  shifted: 'Сдвинется время',
-};
-
 /** Бейдж изменения заявки; у переноса видно, от кого и к кому она ушла. */
-export function diffBadge(
-  mark: DiffMark,
-  requestId: string,
-  diff: PlanDiff | null,
-  engineers: Map<string, Engineer>,
-  previous: boolean,
-): DiffBadge {
+export function diffBadge(mark: DiffMark, requestId: string, diff: PlanDiff | null, engineers: Map<string, Engineer>): DiffBadge {
   const move = mark === 'moved' ? diff?.moved.find((item) => item.request_id === requestId) : undefined;
-  if (!move) return { text: previous ? UPCOMING_LABELS[mark] : DIFF_MARK_LABELS[mark] };
+  if (!move) return { text: DIFF_MARK_LABELS[mark] };
   const name = (engineerId: string) => `«${engineers.get(engineerId)?.name ?? engineerId}»`;
   return {
-    text: previous ? `Будет перенесена к ${name(move.to_engineer_id)}` : `Перенесена от ${name(move.from_engineer_id)}`,
+    text: `Перенесена от ${name(move.from_engineer_id)}`,
     title: `Перенос от ${name(move.from_engineer_id)} к ${name(move.to_engineer_id)}`,
   };
 }

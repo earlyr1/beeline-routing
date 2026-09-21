@@ -6,8 +6,6 @@ import { useAppStore } from '../store/useAppStore';
 
 export function DiffBanner() {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
-  const setShowPrevious = useAppStore((s) => s.setShowPrevious);
   const move = useAppStore((s) => s.timelineMove);
   // Пока часы идут или диспетчер тянет ползунок, план меняется на каждом событии: баннер не мигает и не двигает карту.
   const moving = useAppStore((s) => s.playing || s.dragging);
@@ -53,21 +51,10 @@ export function DiffBanner() {
         ))}
         {reordered.length > 0 && <span>{`Изменён порядок: ${reordered.join(', ')}`}</span>}
       </div>
-      <div className="segmented" role="group" aria-label="Какой план показать">
-        <button type="button" aria-pressed={showPrevious} onClick={() => setShowPrevious(true)} disabled={!state.previous_plan}>
-          {last ? `До события ${last.event.time}` : 'До события'}
-        </button>
-        <button type="button" aria-pressed={!showPrevious} onClick={() => setShowPrevious(false)}>
-          После события
-        </button>
-      </div>
       <button
         type="button"
         className="btn btn-ghost btn-small"
-        onClick={() => {
-          setShowPrevious(false);
-          setDismissed((previous) => new Set(previous).add(state.version));
-        }}
+        onClick={() => setDismissed((previous) => new Set(previous).add(state.version))}
       >
         Скрыть
       </button>

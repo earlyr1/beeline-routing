@@ -55,7 +55,6 @@ export function ProposalsTab() {
   const llmEnabled = useAppStore((s) => s.config?.llm_enabled ?? false);
   const datasetId = useAppStore((s) => s.datasetId);
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   // Пока план переходит на время часов, применённое предложение пришло бы в план, который сейчас заменят.
   const committing = useAppStore((s) => s.committing);
   const { proposals, clarification, sending, working, error, load, send, approve, reject, approveAll, rejectAll } =
@@ -79,7 +78,7 @@ export function ProposalsTab() {
   if (!state) return null;
 
   const pending = proposals.filter((item) => item.status === 'pending');
-  const locked = sending || working || showPrevious || committing;
+  const locked = sending || working || committing;
 
   return (
     <div className="proposals">
@@ -113,7 +112,6 @@ export function ProposalsTab() {
           {error}
         </p>
       )}
-      {showPrevious && <p className="muted">Переключитесь на план «После события», чтобы применять предложения.</p>}
       <div className="tab-toolbar proposals__bulk">
         <strong>Рекомендуемые изменения</strong>
         <button type="button" className="btn btn-small btn-primary" disabled={locked || pending.length === 0} onClick={() => void approveAll()}>

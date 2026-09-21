@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { formatKm, formatSigned } from '../lib/format';
-import { displayedPlan } from '../lib/planView';
 import { WORKLOAD_LEVELS, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
 
@@ -38,7 +37,6 @@ function Metric({ label, value, delta, warn, title }: MetricProps) {
 
 export function MetricsStrip() {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const busy = useAppStore((s) => s.busy);
   const clock = useAppStore((s) => s.clock);
   // Пересчёт с нуля ставит часы на начало дня: пока часы идут или план переходит на их время, он недоступен.
@@ -51,7 +49,7 @@ export function MetricsStrip() {
   const [draft, setDraft] = useState<DayMode | null>(null);
   if (!state) return null;
 
-  const current = displayedPlan(state, showPrevious).metrics;
+  const current = state.plan.metrics;
   const base = state.baseline.metrics;
   // План на экране посчитан с нагрузкой и обедом сессии, а не с выбором в сторе.
   const session: DayMode = { level: clampWorkloadLevel(state.workload_level), lunch: lunchEnabledOf(state.lunch_enabled) };
@@ -74,22 +72,14 @@ export function MetricsStrip() {
     <div className="metrics-strip">
       <div className="metrics-strip__title">
         <strong>{state.office.title}</strong>
-        <span className="muted">
-          Сейчас {clock}
-          {showPrevious ? ' · показан план до события' : ''}
-        </span>
+        <span className="muted">Сейчас {clock}</span>
       </div>
-      {/* В плане до события базовый вариант уже пересчитан после него: разница с ним ничего не значит. */}
       <Metric
         label="Инженеров"
         value={`${current.engineers_used} из ${state.engineers.length}`}
-        delta={showPrevious ? undefined : formatSigned(current.engineers_used - base.engineers_used)}
+        delta={formatSigned(current.engineers_used - base.engineers_used)}
       />
-      <Metric
-        label="Пробег"
-        value={formatKm(current.total_km)}
-        delta={showPrevious ? undefined : `${formatSigned(current.total_km - base.total_km, 1)} км`}
-      />
+      <Metric label="Пробег" value={formatKm(current.total_km)} delta={`${formatSigned(current.total_km - base.total_km, 1)} км`} />
       <Metric label="Назначено" value={String(current.assigned)} />
       <Metric label="Не назначено" value={String(current.unassigned)} warn={current.unassigned > 0} />
       <div className="metric metric--controls">

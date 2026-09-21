@@ -67,13 +67,11 @@ export function timeScale(state: PlanningState, plan: Plan): TimeScale {
 }
 
 /**
- * Шкала дня для часов, таймлайна и страницы бригады: шкала обоих планов, до и после события,
- * расширенная до целых часов вокруг событий шкалы дня. Переключатель «До события» её не сдвигает.
+ * Шкала дня для часов, таймлайна и страницы бригады: шкала текущего плана,
+ * расширенная до целых часов вокруг событий шкалы дня.
  */
-export function dayScale(state: PlanningState, plan: Plan): TimeScale {
-  const routes = [plan, state.plan, state.previous_plan].flatMap((item) => item?.routes ?? []);
-  const scale = timeScale(state, { ...plan, routes });
-  let { from, to } = scale;
+export function dayScale(state: PlanningState): TimeScale {
+  let { from, to } = timeScale(state, state.plan);
   for (const item of state.timeline ?? []) {
     if (!isValidTime(item.event.time)) continue;
     const minute = toMinutes(item.event.time);

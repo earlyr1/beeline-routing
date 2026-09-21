@@ -444,8 +444,29 @@ export interface ReverseGeocode {
   precision: GeocodePrecision;
 }
 
+/**
+ * Тип работ срочной заявки и значения, которыми он заполняет диалог, по нормативам организаторов.
+ * Цифры считает сервер из того же конфига, по которому собраны заявки дня; клиент их не повторяет.
+ */
+export interface WorkType {
+  title: string;
+  /** Тип заявки BK и тип HD, по которым посчитаны нормативы; с ними же уходит заявка диспетчера. */
+  source_type_bk: string;
+  source_type_hd: string;
+  skill: Skill;
+  /** Уровень распределения типа BK: авария → подключение → ремонт и дозаказ. Тот же уровень ставит заявке сервер. */
+  tier: RequestTier;
+  duration_min: number;
+  transport_required: Transport | null;
+  needs_equipment: boolean;
+  /** Авария начинается в момент, когда она реально поступила: окно заявки задаёт сервер. */
+  asap: boolean;
+}
+
 export interface ClientConfig {
   yandex_maps_api_key: string | null;
   llm_enabled: boolean;
   osrm_available: boolean;
+  /** Типы работ диалога срочной заявки, первый выбран по умолчанию. У старого сервера поля нет: диалог спрашивает навык. */
+  work_types?: WorkType[];
 }

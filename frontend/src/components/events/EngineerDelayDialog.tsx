@@ -7,17 +7,17 @@ import { useAppStore } from '../../store/useAppStore';
 /** Задержка по умолчанию, минут: типичная пробка или затянувшаяся работа на объекте. */
 const DEFAULT_DELAY_MIN = 30;
 
-/** Диалог «Задержка инженера»: один на экран, открывается со страницы бригады и из меню часов дня. */
+/** Диалог «Задержка инженера»: один на экран, открывается со страницы бригады. */
 export function EngineerDelayDialog() {
   const state = useAppStore((s) => s.state);
   const open = useAppStore((s) => s.delayDialogOpen);
   const delayEngineerId = useAppStore((s) => s.delayEngineerId);
-  if (!state || !open) return null;
-  // Ключ по инженеру: кнопка на странице другой бригады или меню часов заполняет форму заново.
-  return <DelayForm key={delayEngineerId ?? ''} state={state} chosenEngineerId={delayEngineerId} />;
+  if (!state || !open || delayEngineerId === null) return null;
+  // Ключ по инженеру: кнопка на странице другой бригады заполняет форму заново.
+  return <DelayForm key={delayEngineerId} state={state} chosenEngineerId={delayEngineerId} />;
 }
 
-function DelayForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string | null }) {
+function DelayForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string }) {
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const closeDelay = useAppStore((s) => s.closeDelay);
@@ -25,11 +25,11 @@ function DelayForm({ state, chosenEngineerId }: { state: PlanningState; chosenEn
   // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
   const [initialTime] = useState<HHMM>(() => useAppStore.getState().clock);
   const [time, setTime] = useState<HHMM>(initialTime);
-  // Диалог открыт с часов или бригада уже недоступна (план сменился, пока диалог открыт): предлагаем того,
-  // у кого больше всего визитов после этого времени, иначе задержка ничего не изменит.
+  // Бригада уже недоступна (план сменился, пока диалог открыт): предлагаем того, у кого больше всего визитов
+  // после этого времени, иначе задержка ничего не изменит.
   const busiest = (at: HHMM) => busiestEngineerId(engineers, state.plan, at) ?? '';
   const chosenAvailable = engineers.some((engineer) => engineer.id === chosenEngineerId);
-  const [engineerId, setEngineerId] = useState(() => (chosenAvailable && chosenEngineerId ? chosenEngineerId : busiest(initialTime)));
+  const [engineerId, setEngineerId] = useState(() => (chosenAvailable ? chosenEngineerId : busiest(initialTime)));
   // Инженера со страницы бригады диспетчер уже выбрал сам, поэтому смена времени его не меняет.
   const [engineerTouched, setEngineerTouched] = useState(chosenAvailable);
   const [minutes, setMinutes] = useState(String(DEFAULT_DELAY_MIN));

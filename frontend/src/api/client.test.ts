@@ -100,11 +100,11 @@ describe('api client', () => {
     expect(fetchMock.mock.calls[3]).toEqual(['/api/datasets/d1/plan', { method: 'POST' }]);
   });
 
-  it('passes the plan kind to the geometry endpoint', async () => {
+  it('asks the geometry endpoint for the route of the current plan', async () => {
     const fetchMock = vi.fn().mockResolvedValue(reply(200, { legs: [] }));
     vi.stubGlobal('fetch', fetchMock);
-    await getRouteGeometry('d1', 'E01', 'previous');
-    expect(fetchMock.mock.calls[0][0]).toBe('/api/datasets/d1/routes/E01/geometry?plan=previous');
+    await getRouteGeometry('d1', 'E01');
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/datasets/d1/routes/E01/geometry');
   });
 
   it('asks the reverse geocoder for the address of a map point', async () => {

@@ -1,16 +1,16 @@
 import type { ServiceRequest } from '../../api/types';
 import { REQUEST_CLOCK_LABELS, requestClockStatus } from '../../lib/clock';
 import { engineerColor } from '../../lib/colors';
-import { capitalize, requestLabel, requestWindowPhrase, shortAddress } from '../../lib/format';
+import { capitalize, REASON_LABELS, requestLabel, requestWindowPhrase, shortAddress, SKILL_LABELS } from '../../lib/format';
 import {
   assignmentIndex,
   byId,
   diffBadge,
   diffMarks,
-  displayedPlan,
   engineerIdsOf,
   routeRequestIds,
   sortRequestsForList,
+  unassignedIndex,
 } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
 import { EngineerLink } from '../EngineerLink';
@@ -20,33 +20,44 @@ import { RequestActions } from '../RequestActions';
 
 export function RequestsTab() {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const selectRequest = useAppStore((s) => s.selectRequest);
   const selectEngineer = useAppStore((s) => s.selectEngineer);
+  const unassignedOnly = useAppStore((s) => s.unassignedOnly);
+  const setUnassignedOnly = useAppStore((s) => s.setUnassignedOnly);
   const clock = useAppStore((s) => s.clock);
   if (!state) return null;
 
-  const plan = displayedPlan(state, showPrevious);
+  const { plan } = state;
   const assignments = assignmentIndex(plan);
+  const unassigned = unassignedIndex(plan);
   const engineers = byId(state.engineers);
   const requests = byId(state.requests);
   const ids = engineerIdsOf(state);
-  // Отметки изменений видны и в плане до события: там бейдж говорит, что произойдёт с заявкой.
   const marks = diffMarks(state.last_diff);
-  const rows = selectedEngineerId
-    ? routeRequestIds(plan, selectedEngineerId)
+  // Фильтр действует и при открытой странице бригады: её маршрут уже на странице, а под ней видно,
+  // какую заявку без бригады можно ей отдать. Маршрут бригады список показывает, пока фильтр снят.
+  const brigadeRoute = selectedEngineerId && !unassignedOnly ? selectedEngineerId : null;
+  const rows = brigadeRoute
+    ? routeRequestIds(plan, brigadeRoute)
         .map((id) => requests.get(id))
         .filter((request): request is ServiceRequest => request !== undefined)
-    : sortRequestsForList(state.requests, plan);
+    : sortRequestsForList(state.requests, plan).filter((request) => !unassignedOnly || unassigned.has(request.id));
 
   return (
     <div className="requests-tab">
       <div className="tab-toolbar">
         <label className="field field--inline">
           <span>Инженер</span>
-          <select value={selectedEngineerId ?? ''} onChange={(event) => selectEngineer(event.target.value || null)}>
+          {/* Список инженеров выбирает, чей маршрут показать, поэтому снимает фильтр; при фильтре в нём «Все инженеры». */}
+          <select
+            value={brigadeRoute ?? ''}
+            onChange={(event) => {
+              setUnassignedOnly(false);
+              selectEngineer(event.target.value || null);
+            }}
+          >
             <option value="">Все инженеры</option>
             {state.engineers.map((engineer) => (
               <option key={engineer.id} value={engineer.id}>
@@ -56,14 +67,25 @@ export function RequestsTab() {
             ))}
           </select>
         </label>
+        <button
+          type="button"
+          className="btn btn-small requests-tab__unassigned"
+          aria-pressed={unassignedOnly}
+          onClick={() => setUnassignedOnly(!unassignedOnly)}
+        >
+          Без исполнителя
+          {unassigned.size > 0 && <span className="requests-tab__count">{unassigned.size}</span>}
+        </button>
         <span className="muted">Заявок: {rows.length}</span>
       </div>
+      {unassignedOnly && rows.length === 0 && <p className="empty">Все заявки распределены.</p>}
       <ul className="request-list">
         {rows.map((request) => {
           const info = assignments.get(request.id);
           const engineer = info ? engineers.get(info.engineerId) : undefined;
+          const reason = unassigned.get(request.id);
           const mark = marks.get(request.id);
-          const badge = mark ? diffBadge(mark, request.id, state.last_diff, engineers, showPrevious) : null;
+          const badge = mark ? diffBadge(mark, request.id, state.last_diff, engineers) : null;
           const cancelled = request.status === 'cancelled';
           const pinned = Boolean(info?.visit.pinned);
           // Что с заявкой к времени на часах: у отменённой заявки работ нет.
@@ -87,10 +109,14 @@ export function RequestsTab() {
                 <div className="request-row__meta">
                   <span>{capitalize(requestWindowPhrase(request))}</span>
                   <span>{info ? `Начало ${info.visit.start}` : cancelled ? 'Отменена' : 'Не назначена'}</span>
-                  <span>{engineer ? <EngineerLink engineerId={engineer.id} name={engineer.name} /> : '—'}</span>
+                  {/* У заявки без бригады на месте бригады вид работ: по нему видно, кто мог бы её взять. */}
+                  <span>
+                    {engineer ? <EngineerLink engineerId={engineer.id} name={engineer.name} /> : reason ? SKILL_LABELS[request.skill] : '—'}
+                  </span>
                 </div>
                 <div className="badges">
                   {clockStatus && <span className={`badge badge--clock-${clockStatus}`}>{REQUEST_CLOCK_LABELS[clockStatus]}</span>}
+                  {reason && <span className="badge badge--warn">{REASON_LABELS[reason.reason_code]}</span>}
                   {request.priority === 'urgent' && <span className="badge badge--urgent">Срочная</span>}
                   <TierBadge tier={request.tier} />
                   {request.asap && <span className="badge badge--asap">Как можно скорее</span>}
@@ -103,6 +129,7 @@ export function RequestsTab() {
                     </span>
                   )}
                 </div>
+                {reason && <p className="request-row__reason">{reason.reason_text}</p>}
               </div>
               <div className="request-row__actions">
                 <RequestActions request={request} />

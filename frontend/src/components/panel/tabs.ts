@@ -1,6 +1,5 @@
 import type { ComponentType } from 'react';
-import { callContext, callList } from '../../lib/communications';
-import { displayedPlan } from '../../lib/planView';
+import { callList } from '../../lib/communications';
 import type { AppState } from '../../store/useAppStore';
 import { BrigadesTab } from './BrigadesTab';
 import { CommunicationsTab } from './CommunicationsTab';
@@ -8,7 +7,6 @@ import { ComparisonTab } from './ComparisonTab';
 import { ProposalsTab } from './ProposalsTab';
 import { RequestsTab } from './RequestsTab';
 import { TimelineTab } from './TimelineTab';
-import { UnassignedTab } from './UnassignedTab';
 
 export interface PanelTab {
   id: string;
@@ -16,18 +14,21 @@ export interface PanelTab {
   component: ComponentType;
   /** Число в бейдже вкладки; null скрывает бейдж */
   badge?: (app: AppState) => number | null;
+  /** Подсказка к бейджу: что он считает */
+  badgeTitle?: string;
 }
 
 export const PANEL_TABS: PanelTab[] = [
-  { id: 'requests', title: 'Заявки', component: RequestsTab },
+  {
+    id: 'requests',
+    title: 'Заявки',
+    component: RequestsTab,
+    // Заявки без бригады видны, не открывая вкладку; внутри то же число стоит на фильтре «Без исполнителя».
+    badge: (app) => (app.state ? app.state.plan.unassigned.length || null : null),
+    badgeTitle: 'Заявки без исполнителя',
+  },
   { id: 'brigades', title: 'Бригады', component: BrigadesTab },
   { id: 'timeline', title: 'Таймлайн', component: TimelineTab },
-  {
-    id: 'unassigned',
-    title: 'Неназначенные',
-    component: UnassignedTab,
-    badge: (app) => (app.state ? displayedPlan(app.state, app.showPrevious).unassigned.length || null : null),
-  },
   { id: 'comparison', title: 'Сравнение', component: ComparisonTab },
   { id: 'proposals', title: 'Рекомендуемые изменения', component: ProposalsTab },
   {
@@ -35,7 +36,6 @@ export const PANEL_TABS: PanelTab[] = [
     title: 'Коммуникации',
     component: CommunicationsTab,
     // В бейдже — сколько клиентов ждут звонка: согласованные строки в него не входят.
-    badge: (app) =>
-      app.state ? callList(app.state, app.agreed, callContext(app.state, app.showPrevious, app.clock)).pending.length || null : null,
+    badge: (app) => (app.state ? callList(app.state, app.agreed, app.clock).pending.length || null : null),
   },
 ];

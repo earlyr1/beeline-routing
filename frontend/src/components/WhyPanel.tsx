@@ -1,6 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { formatSigned, requestLabelOf } from '../lib/format';
-import { byId, displayedPlan, routeSummary } from '../lib/planView';
+import { byId, routeSummary } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 import { EngineerLink } from './EngineerLink';
 import { useExplanation } from './useExplanation';
@@ -50,7 +50,6 @@ function Shell({ eyebrow, title, children }: { eyebrow: string; title: string; c
 function RequestWhy({ requestId }: { requestId: string }) {
   const datasetId = useAppStore((s) => s.datasetId);
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const { explanation, error, loading } = useExplanation(datasetId, requestId, state?.version ?? 0);
   if (!state) return null;
   const engineers = byId(state.engineers);
@@ -58,7 +57,6 @@ function RequestWhy({ requestId }: { requestId: string }) {
 
   return (
     <Shell eyebrow="Почему так" title={`Заявка ${requestLabelOf(requestId, byId(state.requests))}`}>
-      {showPrevious && <p className="note">Объяснение относится к текущему плану, после события.</p>}
       {loading && <p className="muted">Загружаем объяснение…</p>}
       {error && <p className="error-text">{error}</p>}
       {explanation && !loading && (
@@ -123,13 +121,11 @@ function RequestWhy({ requestId }: { requestId: string }) {
 /** Разбор маршрута бригады: доля пробега, запас до конца окон и смены, закреплённые визиты. */
 function RouteWhy({ engineerId }: { engineerId: string }) {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   if (!state) return null;
-  const summary = routeSummary(state, displayedPlan(state, showPrevious), engineerId);
+  const summary = routeSummary(state, state.plan, engineerId);
   if (!summary) return null;
   return (
     <Shell eyebrow="Почему такой маршрут" title={summary.engineer.name}>
-      {showPrevious && state.previous_plan && <p className="note">Маршрут по плану до события.</p>}
       <ul className="factors why-panel__reasons" aria-label="Почему такой маршрут">
         {summary.sentences.map((sentence) => (
           <li key={sentence}>{sentence}</li>
@@ -157,7 +153,7 @@ export function WhyPanel() {
   useEffect(() => {
     if (!whyOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      // Esc закрывает только верхний слой: меню часов и карты гасят его сами, диалог и поле ввода важнее панели.
+      // Esc закрывает только верхний слой: список событий на часах и меню карты гасят его сами, диалог и поле ввода важнее панели.
       if (event.key !== 'Escape' || event.defaultPrevented || isEditable(event.target)) return;
       const { mapMenu, toolbarDialog, editingRequestId, delayDialogOpen, engineerDialog, choice, choiceLoading } = useAppStore.getState();
       if (mapMenu || toolbarDialog || editingRequestId || delayDialogOpen || engineerDialog || choice || choiceLoading) return;

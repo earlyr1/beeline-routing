@@ -117,14 +117,9 @@ describe('DiffBanner', () => {
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
 
-  it('switches between the plan before and after the event labelled with the time of the last applied event', () => {
+  it('has no switch to the plan before the event: the clock goes back to it', () => {
     render(<DiffBanner />);
-    fireEvent.click(screen.getByRole('button', { name: 'До события 13:00' }));
-    expect(useAppStore.getState().showPrevious).toBe(true);
-    expect(screen.getByRole('button', { name: 'До события 13:00' })).toHaveAttribute('aria-pressed', 'true');
-    fireEvent.click(screen.getByRole('button', { name: 'Скрыть' }));
-    expect(useAppStore.getState().showPrevious).toBe(false);
-    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Скрыть']);
   });
 
   it('is hidden when there is no diff', () => {

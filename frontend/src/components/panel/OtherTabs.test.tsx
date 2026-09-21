@@ -1,15 +1,14 @@
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ENGINEER_PALETTE } from '../../lib/colors';
 import { percent } from '../../lib/timeline';
 import { useAppStore } from '../../store/useAppStore';
-import { makeAsapState, makeDataUrgentState, makePlanningState } from '../../test/fixtures';
+import { makeDataUrgentState, makePlanningState } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { BrigadesTab } from './BrigadesTab';
 import { ComparisonTab } from './ComparisonTab';
 import { PANEL_TABS } from './tabs';
 import { TimelineTab } from './TimelineTab';
-import { UnassignedTab } from './UnassignedTab';
 
 const brigadeRow = (name: string) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
 
@@ -18,22 +17,19 @@ beforeEach(() => {
 });
 
 describe('panel tabs', () => {
-  it('registers the base tabs, the brigades right after the requests and the proposals tab with an unassigned badge', () => {
-    expect(PANEL_TABS.map((tab) => tab.id)).toEqual([
-      'requests',
-      'brigades',
-      'timeline',
-      'unassigned',
-      'comparison',
-      'proposals',
-      'communications',
-    ]);
+  it('registers the base tabs, the brigades right after the requests and the unassigned count on the requests tab', () => {
+    expect(PANEL_TABS.map((tab) => tab.id)).toEqual(['requests', 'brigades', 'timeline', 'comparison', 'proposals', 'communications']);
     expect(PANEL_TABS[1].title).toBe('Бригады');
-    const unassigned = PANEL_TABS.find((tab) => tab.id === 'unassigned');
-    expect(unassigned?.badge?.(useAppStore.getState())).toBe(1);
+    // Отдельной вкладки неназначенных нет: их число стоит на «Заявках», там же фильтр «Без исполнителя».
+    const requests = PANEL_TABS[0];
+    expect(requests.badge?.(useAppStore.getState())).toBe(1);
+    expect(requests.badgeTitle).toBe('Заявки без исполнителя');
+    const state = makePlanningState();
+    resetStore({ state: { ...state, plan: { ...state.plan, unassigned: [] } } });
+    expect(requests.badge?.(useAppStore.getState())).toBeNull();
   });
 
-  it('BrigadesTab lists every engineer with transport, shift, visits and mileage of the shown plan', () => {
+  it('BrigadesTab lists every engineer with transport, shift, visits and mileage of the current plan', () => {
     render(<BrigadesTab />);
     expect(screen.getAllByRole('listitem')).toHaveLength(3);
     const artashkin = brigadeRow('Бригада Арташкин');
@@ -45,9 +41,6 @@ describe('panel tabs', () => {
     const komar = brigadeRow('Бригада Комарь');
     expect(within(komar).getByText('Общественный транспорт и пешком · смена 10:00–22:00 · визитов: 0 · 0,0 км')).toBeInTheDocument();
     expect(within(komar).getByText('Недоступен')).toHaveAttribute('title', 'Недоступен с 13:00');
-
-    act(() => useAppStore.setState({ showPrevious: true }));
-    expect(within(brigadeRow('Бригада Арташкин')).getByText('Автомобиль · смена 10:00–22:00 · визитов: 3 · 20,4 км')).toBeInTheDocument();
   });
 
   it('BrigadesTab opens the brigade page of a clicked engineer and closes an open request card', () => {
@@ -57,37 +50,6 @@ describe('panel tabs', () => {
     expect(useAppStore.getState()).toMatchObject({ selectedRequestId: null, selectedEngineerId: 'E02' });
     expect(brigadeRow('Бригада Белузин')).toHaveClass('brigade-row--selected');
     expect(brigadeRow('Бригада Арташкин')).not.toHaveClass('brigade-row--selected');
-  });
-
-  it('UnassignedTab shows the reason and selects the request', () => {
-    render(<UnassignedTab />);
-    expect(screen.getByText('Не помещается в окно или смену')).toBeInTheDocument();
-    expect(screen.getByText(/даже без других заявок Бригада Белузин/)).toBeInTheDocument();
-    fireEvent.click(screen.getByText('18754'));
-    expect(useAppStore.getState().selectedRequestId).toBe('18754');
-  });
-
-  it('UnassignedTab shows the window of a request and «как можно скорее» instead of it', () => {
-    const state = makeAsapState();
-    const asap = { request_id: 'URG-002', reason_code: 'no_free_engineer_in_window' as const, reason_text: 'Сегодня никто не успевает.' };
-    resetStore({ state: { ...state, plan: { ...state.plan, unassigned: [...state.plan.unassigned, asap] } } });
-    render(<UnassignedTab />);
-    expect(screen.getByText('ул.1-я Новокузьминская, д. 16 к 1 · окно 18:00–20:00 · Работы на подключение и дозаказы')).toBeInTheDocument();
-    expect(screen.getByText('ул.Перовская, д. 42 к 1 · как можно скорее с 13:00 · Аварийные работы')).toBeInTheDocument();
-  });
-
-  it('UnassignedTab names an urgent request of the day with the URG- prefix and opens it by its raw number', () => {
-    resetStore({ datasetId: 'd_test', state: makeDataUrgentState(['18754']) });
-    render(<UnassignedTab />);
-    fireEvent.click(screen.getByText('URG-18754'));
-    expect(useAppStore.getState().selectedRequestId).toBe('18754');
-  });
-
-  it('UnassignedTab shows an empty message when everything is assigned', () => {
-    const state = makePlanningState();
-    resetStore({ state: { ...state, plan: { ...state.plan, unassigned: [] } } });
-    render(<UnassignedTab />);
-    expect(screen.getByText('Все заявки распределены.')).toBeInTheDocument();
   });
 
   it('ComparisonTab shows three plans and the delta to baseline', () => {

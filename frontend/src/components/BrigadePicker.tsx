@@ -12,7 +12,6 @@ import { BrigadeListbox } from './BrigadeListbox';
 export function BrigadePicker({ request }: { request: ServiceRequest }) {
   const state = useAppStore((s) => s.state);
   const busy = useAppStore((s) => s.busy);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const clock = useAppStore((s) => s.clock);
   const applyEvent = useAppStore((s) => s.applyEvent);
   // Окно выбора варианта открывается и без расчёта, например на событии при проигрывании часов.
@@ -22,7 +21,7 @@ export function BrigadePicker({ request }: { request: ServiceRequest }) {
 
   // Начатую работу проверяем по текущему плану, как у кнопок заявки: события меняют именно его.
   const visit = assignmentIndex(state.plan).get(request.id)?.visit;
-  const lock = reassignState(request, visit, { busy, showPrevious, clock });
+  const lock = reassignState(request, visit, { busy, clock });
   // Список лежит выше окна выбора варианта, а новое событие сбросило бы выбор: пока окно открыто, бригаду не выбирают.
   const locked = lock.disabled || choosing;
   const options = brigadeOptions(request, state.engineers, state.plan);

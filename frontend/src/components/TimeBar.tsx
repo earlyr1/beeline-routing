@@ -1,28 +1,18 @@
 import { useEffect, useState } from 'react';
 import { describeEvent, eventRequestId } from '../lib/events';
 import { fromMinutes } from '../lib/format';
-import { byId, displayedPlan } from '../lib/planView';
+import { byId } from '../lib/planView';
 import { pinLeft, sliderRange, sliderValue, timelineItemTitle, timelinePins, timelineStatusText } from '../lib/timeBar';
 import { dayScale, hourTicks } from '../lib/timeline';
 import { variantTitle } from '../lib/variants';
 import { useAppStore } from '../store/useAppStore';
 
-/** Пункты меню «Добавить событие»: открывают те же диалоги, что страница бригады, со временем на часах. */
-const ADD_EVENT_ITEMS: { label: string; open(): void }[] = [
-  { label: 'Срочная заявка', open: () => useAppStore.getState().openToolbarDialog('urgent') },
-  // Инженера с часов не выбирали: диалоги сами предлагают самого загруженного после времени события.
-  { label: 'Инженер заболел', open: () => useAppStore.getState().openEngineerDialog('unavailable', null) },
-  { label: 'Поломка транспорта', open: () => useAppStore.getState().openEngineerDialog('transport', null) },
-  { label: 'Задержка инженера', open: () => useAppStore.getState().startDelay(null) },
-];
-
 /**
- * Часы дня под верхней панелью: запуск и пауза, время, ползунок по шкале дня с отметками событий шкалы
- * и меню «Добавить событие». Пока диспетчер тянет ползунок, план не пересчитывается: только когда отпустит.
+ * Часы дня под верхней панелью: запуск и пауза, время, ползунок по шкале дня с отметками событий шкалы.
+ * Пока диспетчер тянет ползунок, план не пересчитывается: только когда отпустит.
  */
 export function TimeBar() {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const clock = useAppStore((s) => s.clock);
   const playing = useAppStore((s) => s.playing);
   const committing = useAppStore((s) => s.committing);
@@ -40,41 +30,36 @@ export function TimeBar() {
   const choosing = useAppStore((s) => s.choice !== null || s.choiceLoading);
   /** Минута отметки, чьи события открыты; null — список закрыт. */
   const [openMinute, setOpenMinute] = useState<number | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
 
   // Часы идут, только пока шкала на экране.
   useEffect(() => () => useAppStore.getState().stopPlayback(), []);
 
-  // Список событий отметки и меню лежат выше окна выбора: открылось окно — они закрываются.
+  // Список событий отметки лежит выше окна выбора: открылось окно — он закрывается.
   useEffect(() => {
     if (!choosing) return;
     setOpenMinute(null);
-    setMenuOpen(false);
   }, [choosing]);
 
   useEffect(() => {
-    if (openMinute === null && !menuOpen) return;
+    if (openMinute === null) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      // Esc закрывает только это меню: панель «Почему» под ним остаётся открытой.
+      // Esc закрывает только этот список: панель «Почему» под ним остаётся открытой.
       event.preventDefault();
       setOpenMinute(null);
-      setMenuOpen(false);
     };
     // Перехват раньше обычных слушателей документа, чтобы они увидели, что Esc уже занят.
     document.addEventListener('keydown', closeOnEscape, true);
     return () => document.removeEventListener('keydown', closeOnEscape, true);
-  }, [openMinute, menuOpen]);
+  }, [openMinute]);
 
   if (!state) return null;
 
-  const range = sliderRange(dayScale(state, displayedPlan(state, showPrevious)));
+  const range = sliderRange(dayScale(state));
   const pins = timelinePins(state.timeline ?? [], range);
   const openPin = pins.find((pin) => pin.minute === openMinute) ?? null;
   const engineers = byId(state.engineers);
   const requests = byId(state.requests);
-  // События меняют текущий план: в плане до события и во время расчёта их не добавляют, как и с карты.
-  const menuLocked = busy || showPrevious;
   // Удаление и смена варианта пересчитывают план: не во время расчёта, фиксации часов, проигрывания и открытого окна выбора.
   const deleteLocked = busy || committing || playing || choosing;
   const status = committing ? 'Пересчитываем план…' : state.timeline_ready === false ? 'Готовим события…' : null;
@@ -116,10 +101,7 @@ export function TimeBar() {
               style={{ left: `${pin.left}%` }}
               title={pin.items.map((item) => timelineItemTitle(item, engineers, requests)).join('\n')}
               aria-expanded={pin.minute === openMinute}
-              onClick={() => {
-                setMenuOpen(false);
-                setOpenMinute((current) => (current === pin.minute ? null : pin.minute));
-              }}
+              onClick={() => setOpenMinute((current) => (current === pin.minute ? null : pin.minute))}
             >
               {pin.label}
               {pin.items.length > 1 && <span className="time-bar__pin-count">{pin.items.length}</span>}
@@ -227,38 +209,6 @@ export function TimeBar() {
             {status}
           </span>
         )}
-        <div className="time-bar__menu">
-          <button
-            type="button"
-            className="btn btn-small btn-primary"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen && !menuLocked}
-            disabled={menuLocked}
-            onClick={() => {
-              setOpenMinute(null);
-              setMenuOpen((open) => !open);
-            }}
-          >
-            Добавить событие
-          </button>
-          {menuOpen && !menuLocked && (
-            <div className="time-bar__menu-list" role="menu" aria-label="Добавить событие">
-              {ADD_EVENT_ITEMS.map((item) => (
-                <button
-                  key={item.label}
-                  type="button"
-                  role="menuitem"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    item.open();
-                  }}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
       </div>
     </section>
   );

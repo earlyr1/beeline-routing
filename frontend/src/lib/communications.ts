@@ -1,6 +1,6 @@
 import type { HHMM, Plan, PlanningState, ServiceRequest } from '../api/types';
 import { requestLabel, shortAddress, toMinutes } from './format';
-import { assignmentIndex, displayedPlan, displayedVersion } from './planView';
+import { assignmentIndex } from './planView';
 
 /**
  * Что клиенту в последний раз сказали про заявку: время визита и бригада.
@@ -15,16 +15,6 @@ export interface Promised {
 
 /** Согласованные времена по номеру заявки: их помнит стор и localStorage набора данных. */
 export type AgreedTimes = Record<string, Promised>;
-
-/** План на экране, его номер и время на часах: по ним собирается список звонков. */
-export interface CallContext {
-  /** План, который сейчас видит диспетчер: «До события» показывает предыдущий. */
-  plan: Plan;
-  /** Номер этого плана: с планом постарше согласованное время не сравнивают. */
-  version: number;
-  /** Время на часах дня: визиты, которые уже закончились, из списка уходят. */
-  clock: HHMM;
-}
 
 /** Красный — клиент остаётся без визита или визит вне его окна; жёлтый — сдвиг на час и больше; серый — остальное. */
 export type CallSeverity = 'red' | 'yellow' | 'grey';
@@ -122,18 +112,13 @@ function byUrgency(a: CallRow, b: CallRow): number {
   );
 }
 
-/** План, его номер и часы для списка звонков: как и остальной экран, вкладка слушает «До события». */
-export function callContext(state: PlanningState, showPrevious: boolean, clock: HHMM): CallContext {
-  return { plan: displayedPlan(state, showPrevious), version: displayedVersion(state, showPrevious), clock };
-}
-
 /** События шкалы, до которых часы ещё не дошли: после них список звонков будет другим. */
 export function eventsAhead(state: PlanningState): boolean {
   return (state.timeline ?? []).some((item) => item.status === 'pending' || item.status === 'awaiting');
 }
 
 /**
- * Кому звонить: разница между планом на экране и тем, что клиент знает.
+ * Кому звонить: разница между текущим планом и тем, что клиент знает.
  *
  * Клиенту ещё ничего не говорили — сравниваем с утренним планом; диспетчер отметил «Согласовано» — с тем временем,
  * о котором договорились. Это не разница последнего события: часы дня ходят вперёд и назад, и список по событию
@@ -141,12 +126,12 @@ export function eventsAhead(state: PlanningState): boolean {
  * обратно на 14:00: клиент ждёт в 16:20.
  *
  * Отменённые заявки в список не попадают: клиент либо сам отказался, либо ему уже сказали. Не попадают и визиты,
- * которые уже закончились: работа сделана, звонить не о чем. Договорённость, записанную на плане новее того, что
- * на экране (часы отмотали назад или открыт план до события), пропускаем целиком: сравнение с прежним планом
- * перевернуло бы строку и позвало отзывать время, которое никуда не делось.
+ * которые к времени на часах (clock) уже закончились: работа сделана, звонить не о чем. Договорённость, записанную
+ * на плане новее текущего (часы отмотали назад), пропускаем целиком: сравнение с прежним планом перевернуло бы
+ * строку и позвало отзывать время, которое никуда не делось.
  */
-export function callList(state: PlanningState, agreed: AgreedTimes, { plan, version, clock }: CallContext): CallList {
-  const assigned = assignmentIndex(plan);
+export function callList(state: PlanningState, agreed: AgreedTimes, clock: HHMM): CallList {
+  const assigned = assignmentIndex(state.plan);
   const morning = new Map((state.morning ?? []).map((item) => [item.request_id, item]));
   const now = toMinutes(clock);
   const pending: CallRow[] = [];
@@ -157,8 +142,8 @@ export function callList(state: PlanningState, agreed: AgreedTimes, { plan, vers
     // Визит закончился до времени на часах: работа сделана, звонить поздно и незачем.
     if (visit && toMinutes(visit.visit.end) <= now) continue;
     const promise = agreed[request.id];
-    // Договорились на плане новее того, что на экране: сравнивать их нельзя, строка вышла бы перевёрнутой.
-    if (promise && (promise.version ?? 0) > version) continue;
+    // Договорились на плане новее текущего: сравнивать их нельзя, строка вышла бы перевёрнутой.
+    if (promise && (promise.version ?? 0) > state.version) continue;
     const planned: Promised = { start: visit?.visit.start ?? null, engineer_id: visit?.engineerId ?? null };
     const morningVisit = morning.get(request.id);
     const known: Promised =

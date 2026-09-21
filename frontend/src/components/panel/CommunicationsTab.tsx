@@ -1,9 +1,9 @@
 import { useState, type MouseEvent } from 'react';
 import type { PlanEvent } from '../../api/types';
-import { callAgreedText, callChangeText, callContext, callList, eventsAhead, type CallKind, type CallRow } from '../../lib/communications';
+import { callAgreedText, callChangeText, callList, eventsAhead, type CallKind, type CallRow } from '../../lib/communications';
 import { requestActionState } from '../../lib/events';
 import { brigadeName } from '../../lib/format';
-import { assignmentIndex, byId, displayedPlan } from '../../lib/planView';
+import { assignmentIndex, byId } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
 
 /** Метка строки; у переноса времени метки нет: про него всё сказано строкой «было → стало». */
@@ -21,13 +21,12 @@ const REFUSE_HINTS = {
 
 /**
  * Кому звонить после событий дня (ответ организаторов, вопрос 2: новое время клиенту сообщает служба поддержки).
- * Строка сравнивает план на экране с тем, что клиент знает: утренним временем или тем, которое с ним уже согласовали.
+ * Строка сравнивает текущий план с тем, что клиент знает: утренним временем или тем, которое с ним уже согласовали.
  */
 export function CommunicationsTab() {
   const state = useAppStore((s) => s.state);
   const agreed = useAppStore((s) => s.agreed);
   const busy = useAppStore((s) => s.busy);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const clock = useAppStore((s) => s.clock);
   const markAgreed = useAppStore((s) => s.markAgreed);
   const applyEvent = useAppStore((s) => s.applyEvent);
@@ -36,13 +35,10 @@ export function CommunicationsTab() {
   const [refusing, setRefusing] = useState<string | null>(null);
   if (!state) return null;
 
-  const plan = displayedPlan(state, showPrevious);
-  const { pending, agreed: settled } = callList(state, agreed, callContext(state, showPrevious, clock));
+  const { pending, agreed: settled } = callList(state, agreed, clock);
   const requests = byId(state.requests);
   const engineers = byId(state.engineers);
-  const assigned = assignmentIndex(plan);
-  // «До события» показывает план, которого сейчас нет: записать по нему согласованное время нельзя.
-  const agreeTitle = showPrevious ? 'Открыт план до события: согласовать время нельзя' : undefined;
+  const assigned = assignmentIndex(state.plan);
   const brigade = (engineerId: string | null) =>
     engineerId ? brigadeName(engineers.get(engineerId)?.name ?? engineerId) : 'без бригады';
   // Кнопки стоят внутри строки: клик по ним не открывает заявку.
@@ -72,7 +68,7 @@ export function CommunicationsTab() {
             const request = requests.get(row.requestId);
             if (!request) return null;
             const badge = KIND_BADGES[row.kind];
-            const actions = requestActionState(request, assigned.get(row.requestId)?.visit, { busy, showPrevious, clock });
+            const actions = requestActionState(request, assigned.get(row.requestId)?.visit, { busy, clock });
             const moved = row.kind === 'moved' && row.previousEngineerId !== row.engineerId;
             return (
               <li key={row.requestId} className={`call call--${row.severity}`} onClick={() => selectRequest(row.requestId)}>
@@ -89,8 +85,7 @@ export function CommunicationsTab() {
                   <button
                     type="button"
                     className="btn btn-small"
-                    disabled={busy || showPrevious}
-                    title={agreeTitle}
+                    disabled={busy}
                     onClick={handle(() => markAgreed(row.requestId))}
                   >
                     ✓ Согласовано

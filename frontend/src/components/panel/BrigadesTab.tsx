@@ -1,23 +1,21 @@
 import { engineerColor } from '../../lib/colors';
 import { formatKm, formatWindow, TRANSPORT_LABELS } from '../../lib/format';
-import { displayedPlan, engineerIdsOf } from '../../lib/planView';
+import { engineerIdsOf } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
 
-/** Вкладка «Бригады»: все инженеры с транспортом, сменой и нагрузкой в показанном плане. Клик открывает страницу бригады. */
+/** Вкладка «Бригады»: все инженеры с транспортом, сменой и нагрузкой в текущем плане. Клик открывает страницу бригады. */
 export function BrigadesTab() {
   const state = useAppStore((s) => s.state);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const openBrigade = useAppStore((s) => s.openBrigade);
   if (!state) return null;
 
-  const plan = displayedPlan(state, showPrevious);
   const ids = engineerIdsOf(state);
 
   return (
     <ul className="brigade-list">
       {state.engineers.map((engineer) => {
-        const route = plan.routes.find((item) => item.engineer_id === engineer.id);
+        const route = state.plan.routes.find((item) => item.engineer_id === engineer.id);
         const visits = route?.visits.length ?? 0;
         const km = route?.total_km ?? 0;
         const selected = engineer.id === selectedEngineerId;

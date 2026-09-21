@@ -16,7 +16,6 @@ export function ExplanationCard() {
   const selectedRequestId = useAppStore((s) => s.selectedRequestId);
   const selectedEngineerId = useAppStore((s) => s.selectedEngineerId);
   const selectRequest = useAppStore((s) => s.selectRequest);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   const clock = useAppStore((s) => s.clock);
   const version = state?.version ?? 0;
   const { explanation, error, loading } = useExplanation(datasetId, selectedRequestId, version);
@@ -80,7 +79,6 @@ export function ExplanationCard() {
       {/* Бригада заявки в текущем плане; выбор другой ставит событие «Переназначение заявки» на время часов.
           Ключ по заявке: открытый список не переезжает в карточку другой заявки. */}
       {request && <BrigadePicker key={request.id} request={request} />}
-      {showPrevious && <p className="note">Объяснение относится к текущему плану, после события.</p>}
       {loading && <p className="muted">Загружаем объяснение…</p>}
       {error && <p className="error-text">{error}</p>}
       {explanation && !loading && (

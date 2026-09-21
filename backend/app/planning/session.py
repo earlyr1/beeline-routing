@@ -86,6 +86,9 @@ class PlanningContext:
     # Лимит OR-Tools на весь день с обедом.
     time_limit_lunch_s: int = DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
     geocode: Callable[[str, str], GeoResult] | None = None
+    # Уровень распределения по типу заявки BK (tier_by_bk в config/synth_config.yaml), тот же, что у заявок бандла:
+    # срочная заявка диспетчера получает уровень своего типа работ. Тип, которого здесь нет, — авария.
+    tier_by_bk: Mapping[str, RequestTier] = field(default_factory=dict)
 
     def day_time_limit_s(self, lunch_enabled: bool) -> int:
         """Лимит на план всего дня с нуля: с обедом поиск дольше, без обеда как у перепланирования."""
@@ -617,12 +620,14 @@ def _changed_inputs(
         engineer.unavailable_from = now
         return requests, engineers, event
 
-    # Срочная заявка диспетчера — авария дня: она попадает в верхний уровень распределения так же, как авария
-    # из данных, какой бы уровень ни прислал клиент.
+    # Срочная заявка диспетчера ждёт наравне с аварией: «Срочная» ставит её в верхнюю очередь распределения
+    # (dispatch_order) при любом типе работ. Уровень — род работ, и его, какой бы ни прислал клиент, сервер берёт
+    # по типу заявки BK, как у заявки дня того же типа: срочное подключение остаётся подключением. Заявка без типа
+    # работ из таблицы нормативов (старый диалог, чат) — авария.
     new = event.request.model_copy(
         update={
             "priority": Priority.URGENT,
-            "tier": RequestTier.EMERGENCY,
+            "tier": ctx.tier_by_bk.get(event.request.source_type_bk, RequestTier.EMERGENCY),
             "status": RequestStatus.ACTIVE,
             "fixed_engineer_id": None,
         }

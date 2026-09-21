@@ -15,16 +15,16 @@ import { useAppStore } from '../../store/useAppStore';
 
 const TRANSPORTS = Object.keys(TRANSPORT_LABELS) as Transport[];
 
-/** Диалог «Смена транспорта»: один на экран, открывается со страницы бригады и из меню часов дня («Поломка транспорта»). */
+/** Диалог «Смена транспорта»: один на экран, открывается со страницы бригады. */
 export function TransportChangeDialog() {
   const state = useAppStore((s) => s.state);
   const dialog = useAppStore((s) => s.engineerDialog);
   if (!state || dialog?.kind !== 'transport') return null;
-  // Ключ по инженеру: кнопка на странице другой бригады или меню часов заполняет форму заново.
-  return <TransportForm key={dialog.engineerId ?? ''} state={state} chosenEngineerId={dialog.engineerId} />;
+  // Ключ по инженеру: кнопка на странице другой бригады заполняет форму заново.
+  return <TransportForm key={dialog.engineerId} state={state} chosenEngineerId={dialog.engineerId} />;
 }
 
-function TransportForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string | null }) {
+function TransportForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string }) {
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const closeEngineerDialog = useAppStore((s) => s.closeEngineerDialog);
@@ -32,10 +32,10 @@ function TransportForm({ state, chosenEngineerId }: { state: PlanningState; chos
   // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
   const [initialTime] = useState<HHMM>(() => useAppStore.getState().clock);
   const [time, setTime] = useState<HHMM>(initialTime);
-  // Диалог открыт с часов или бригада стала недоступной: предлагаем того, у кого больше всего визитов после этого времени.
+  // Бригада стала недоступной: предлагаем того, у кого больше всего визитов после этого времени.
   const busiest = (at: string) => busiestEngineerId(engineers, state.plan, at) ?? '';
   const chosenAvailable = engineers.some((engineer) => engineer.id === chosenEngineerId);
-  const [engineerId, setEngineerId] = useState(() => (chosenAvailable && chosenEngineerId ? chosenEngineerId : busiest(initialTime)));
+  const [engineerId, setEngineerId] = useState(() => (chosenAvailable ? chosenEngineerId : busiest(initialTime)));
   // Инженера со страницы бригады диспетчер уже выбрал сам, поэтому смена времени его не меняет.
   const [engineerTouched, setEngineerTouched] = useState(chosenAvailable);
   // Пока диспетчер сам не выбрал транспорт, предлагаем вариант по умолчанию для текущего инженера.

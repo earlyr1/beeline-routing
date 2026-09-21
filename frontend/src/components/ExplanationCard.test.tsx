@@ -104,7 +104,6 @@ describe('ExplanationCard', () => {
 
   it.each([
     ['started work', { selectedRequestId: '74198' }],
-    ['the plan before the event', { showPrevious: true }],
     ['an event being applied', { busy: true }],
   ])('disables the edit and the cancel for %s', async (_, patch) => {
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());

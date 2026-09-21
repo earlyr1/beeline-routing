@@ -42,13 +42,13 @@ export type PickOwner = 'urgent' | 'edit';
 /** Диалог панели событий: на панели осталась только срочная заявка. */
 export type ToolbarDialog = 'urgent';
 
-/** Диалог инженера, который открывает страница бригады или меню «Добавить событие». */
+/** Диалог инженера, который открывает страница бригады. */
 export type EngineerDialogKind = 'transport' | 'unavailable';
 
 export interface EngineerDialog {
   kind: EngineerDialogKind;
-  /** Инженер со страницы бригады; null — диалог открыт с часов, и форма предлагает самого загруженного. */
-  engineerId: string | null;
+  /** Инженер со страницы бригады. */
+  engineerId: string;
 }
 
 /** Поиск адреса по точке срочной заявки: idle — не искали, loading — ждём ответ, done — ответ пришёл. */
@@ -66,7 +66,8 @@ export interface AppData {
   /** Панель «Почему» слева от карты: подробное объяснение открытой заявки или бригады. */
   whyOpen: boolean;
   activeTab: string;
-  showPrevious: boolean;
+  /** Фильтр «Без исполнителя» во вкладке «Заявки»; он действует и под открытой страницей бригады. */
+  unassignedOnly: boolean;
   /** Время на часах шкалы дня. Во время перетаскивания и проигрывания оно впереди плана, пока его не зафиксируют. */
   clock: HHMM;
   /** Диспетчер тянет ползунок часов: план пересчитывается, только когда он его отпустит. */
@@ -96,7 +97,7 @@ export interface AppData {
   /** Заявка, открытая в диалоге «Изменить заявку»; null, когда диалог закрыт. */
   editingRequestId: string | null;
   delayDialogOpen: boolean;
-  /** Инженер со страницы бригады для диалога «Задержка инженера»; null — диалог закрыт или открыт с часов. */
+  /** Инженер со страницы бригады для диалога «Задержка инженера»; null — диалог закрыт. */
   delayEngineerId: string | null;
   /** Диалог смены транспорта или недоступности; null, когда закрыт. */
   engineerDialog: EngineerDialog | null;
@@ -164,7 +165,7 @@ export interface AppActions {
   toggleWhy(): void;
   closeWhy(): void;
   setTab(tabId: string): void;
-  setShowPrevious(value: boolean): void;
+  setUnassignedOnly(value: boolean): void;
   /** Отметить, что с клиентом согласовали время визита из текущего плана. */
   markAgreed(requestId: string): void;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
@@ -179,11 +180,11 @@ export interface AppActions {
   /** Открыть диалог изменения заявки; точка, выбранная для прежнего изменения, сбрасывается. */
   startEdit(requestId: string): void;
   closeEdit(): void;
-  /** Открыть диалог задержки для инженера со страницы бригады или, с null, для самого загруженного. */
-  startDelay(engineerId: string | null): void;
+  /** Открыть диалог задержки для инженера со страницы бригады. */
+  startDelay(engineerId: string): void;
   closeDelay(): void;
-  /** Открыть смену транспорта или недоступность для инженера со страницы бригады или, с null, для самого загруженного. */
-  openEngineerDialog(kind: EngineerDialogKind, engineerId: string | null): void;
+  /** Открыть смену транспорта или недоступность для инженера со страницы бригады. */
+  openEngineerDialog(kind: EngineerDialogKind, engineerId: string): void;
   closeEngineerDialog(): void;
   openToolbarDialog(dialog: ToolbarDialog): void;
   closeToolbarDialog(): void;
@@ -207,7 +208,7 @@ export const initialAppData: AppData = {
   selectedEngineerId: null,
   whyOpen: false,
   activeTab: 'requests',
-  showPrevious: false,
+  unassignedOnly: false,
   clock: DAY_START,
   dragging: false,
   playing: false,
@@ -401,7 +402,6 @@ export const useAppStore = create<AppState>()((set, get) => {
     set({
       state: next,
       datasetId: next.dataset_id,
-      showPrevious: false,
       clock: syncClock && isValidTime(next.cursor ?? '') ? next.cursor : clock,
       timelineMove: same ? timelineMove(same, next) : NO_TIMELINE_MOVE,
       selectedRequestId: exists(selectedRequestId) ? selectedRequestId : null,
@@ -514,7 +514,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       const fresh = await getPlanningState(datasetId);
       const shown = get().state;
       if (!isCurrent(current) || !fresh || !shown) return;
-      // Берём только статусы шкалы и готовность: план, выбор и «До события» на экране не сбрасываются.
+      // Берём только статусы шкалы и готовность: план и выбор на экране не сбрасываются.
       if (fresh.dataset_id === shown.dataset_id && fresh.version === shown.version && fresh.cursor === shown.cursor) {
         const rejected = newlyRejected(shown.timeline ?? [], fresh.timeline ?? []);
         set({
@@ -557,7 +557,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       stopTicking();
       return;
     }
-    const end = playEnd(dayScale(state, state.plan));
+    const end = playEnd(dayScale(state));
     const next = toMinutes(clock) + 1;
     if (next > end) {
       finishPlayback();
@@ -639,7 +639,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         set({
           selectedRequestId: null,
           whyOpen: get().whyOpen && get().selectedEngineerId !== null,
-          clock: fromMinutes(dayScale(state, state.plan).from),
+          clock: fromMinutes(dayScale(state).from),
         });
         await get().commitClock();
       } catch (error) {
@@ -689,7 +689,7 @@ export const useAppStore = create<AppState>()((set, get) => {
         get().setPlanningState(state);
         // День начинается заново: обзвона ещё не было, отметки «Согласовано» снимаются вместе с событиями.
         saveAgreed(datasetId, {});
-        set({ agreed: {}, clock: fromMinutes(dayScale(state, state.plan).from) });
+        set({ agreed: {}, clock: fromMinutes(dayScale(state).from) });
         await get().commitClock();
         return true;
       } catch (error) {
@@ -870,12 +870,12 @@ export const useAppStore = create<AppState>()((set, get) => {
         set({ dismissedChoice: null, choice: state.pending_choice, resumeAfterChoice: { time: state.cursor, play: true } });
         return;
       }
-      const scale = dayScale(state, state.plan);
+      const scale = dayScale(state);
       const end = playEnd(scale);
       // Часы раньше начала шкалы стоят на ползунке в её начале: проигрывание идёт с того места, где ползунок.
       const start = Math.max(isValidTime(clock) ? toMinutes(clock) : scale.from, scale.from);
       if (start >= end) return;
-      set({ playing: true, showPrevious: false, clock: fromMinutes(start) });
+      set({ playing: true, clock: fromMinutes(start) });
       // Часы, которые сервер ещё не видел, сначала фиксируются: иначе события между планом и часами не применятся.
       resumeAfter(get().commitClock(), generation);
     },
@@ -893,8 +893,7 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     startDrag() {
       stopTicking();
-      // Перетаскивание показывает план после событий: ответ фиксации всё равно переключил бы «До события» посреди жеста.
-      set({ dragging: true, playing: false, showPrevious: false });
+      set({ dragging: true, playing: false });
     },
 
     endDrag() {
@@ -928,8 +927,8 @@ export const useAppStore = create<AppState>()((set, get) => {
       set({ activeTab: tabId });
     },
 
-    setShowPrevious(value) {
-      set({ showPrevious: value && Boolean(get().state?.previous_plan) });
+    setUnassignedOnly(value) {
+      set({ unassignedOnly: value });
     },
 
     markAgreed(requestId) {

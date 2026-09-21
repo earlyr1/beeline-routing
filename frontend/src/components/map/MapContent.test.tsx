@@ -175,12 +175,10 @@ describe('MapContent', () => {
     await waitFor(() => expect(useAppStore.getState().urgentSuggestedAddress).toBe('Москва, Ташкентская улица, 16к2'));
   });
 
-  it('does not offer adding a request in the plan before the event or while replanning', async () => {
+  it('does not offer adding a request while replanning', async () => {
     render(<MapContent components={fake} />);
     fireEvent.click(screen.getByRole('button', { name: 'map-click' }));
-    act(() => useAppStore.setState({ showPrevious: true }));
-    expect(within(menu()).getByRole('button', { name: 'Добавить заявку здесь' })).toBeDisabled();
-    act(() => useAppStore.setState({ showPrevious: false, busy: true }));
+    act(() => useAppStore.setState({ busy: true }));
     expect(within(menu()).getByRole('button', { name: 'Добавить заявку здесь' })).toBeDisabled();
     await waitFor(() => expect(api.getRouteGeometry).toHaveBeenCalled());
   });

@@ -1,0 +1,154 @@
+{
+  "work_types": [
+    {
+      "title": "Авария",
+      "source_type_bk": "Глобальная проблема",
+      "source_type_hd": "Авария",
+      "skill": "emergency",
+      "tier": "emergency",
+      "duration_min": 80,
+      "transport_required": "car",
+      "needs_equipment": false,
+      "asap": true
+    },
+    {
+      "title": "Подключение",
+      "source_type_bk": "Подключение",
+      "source_type_hd": "Заявка на подключение",
+      "skill": "connection",
+      "tier": "connection",
+      "duration_min": 70,
+      "transport_required": null,
+      "needs_equipment": true,
+      "asap": false
+    },
+    {
+      "title": "Ремонт у клиента",
+      "source_type_bk": "Локальная заявка",
+      "source_type_hd": "",
+      "skill": "local",
+      "tier": "routine",
+      "duration_min": 30,
+      "transport_required": null,
+      "needs_equipment": false,
+      "asap": false
+    },
+    {
+      "title": "Дозаказ оборудования",
+      "source_type_bk": "Дозаказ",
+      "source_type_hd": "Дозаказ оборудования",
+      "skill": "connection",
+      "tier": "routine",
+      "duration_min": 20,
+      "transport_required": "car",
+      "needs_equipment": true,
+      "asap": false
+    }
+  ],
+  "events": [
+    {
+      "type": "urgent",
+      "time": "13:00",
+      "request": {
+        "id": "URG-GOLDEN1",
+        "address": "Город Москва, ул.Таганская, д. 1",
+        "lat": 55.755,
+        "lon": 37.61,
+        "geocode_precision": "house",
+        "district": "",
+        "duration_min": 80,
+        "window_start": "13:00",
+        "window_end": "22:00",
+        "asap": true,
+        "priority": "urgent",
+        "tier": "emergency",
+        "skill": "emergency",
+        "transport_required": "car",
+        "status": "active",
+        "source_type_bk": "Глобальная проблема",
+        "source_type_hd": "Авария",
+        "needs_equipment": false
+      },
+      "request_id": null,
+      "engineer_id": null
+    },
+    {
+      "type": "urgent",
+      "time": "13:00",
+      "request": {
+        "id": "URG-GOLDEN2",
+        "address": "Город Москва, ул.Таганская, д. 1",
+        "lat": 55.755,
+        "lon": 37.61,
+        "geocode_precision": "house",
+        "district": "",
+        "duration_min": 70,
+        "window_start": "14:00",
+        "window_end": "16:00",
+        "asap": false,
+        "priority": "urgent",
+        "tier": "connection",
+        "skill": "connection",
+        "transport_required": null,
+        "status": "active",
+        "source_type_bk": "Подключение",
+        "source_type_hd": "Заявка на подключение",
+        "needs_equipment": true
+      },
+      "request_id": null,
+      "engineer_id": null
+    },
+    {
+      "type": "urgent",
+      "time": "13:00",
+      "request": {
+        "id": "URG-GOLDEN3",
+        "address": "Город Москва, ул.Таганская, д. 1",
+        "lat": 55.755,
+        "lon": 37.61,
+        "geocode_precision": "house",
+        "district": "",
+        "duration_min": 30,
+        "window_start": "14:00",
+        "window_end": "16:00",
+        "asap": false,
+        "priority": "urgent",
+        "tier": "routine",
+        "skill": "local",
+        "transport_required": null,
+        "status": "active",
+        "source_type_bk": "Локальная заявка",
+        "source_type_hd": "",
+        "needs_equipment": false
+      },
+      "request_id": null,
+      "engineer_id": null
+    },
+    {
+      "type": "urgent",
+      "time": "13:00",
+      "request": {
+        "id": "URG-GOLDEN4",
+        "address": "Город Москва, ул.Таганская, д. 1",
+        "lat": 55.755,
+        "lon": 37.61,
+        "geocode_precision": "house",
+        "district": "",
+        "duration_min": 20,
+        "window_start": "14:00",
+        "window_end": "16:00",
+        "asap": false,
+        "priority": "urgent",
+        "tier": "routine",
+        "skill": "connection",
+        "transport_required": "car",
+        "status": "active",
+        "source_type_bk": "Дозаказ",
+        "source_type_hd": "Дозаказ оборудования",
+        "needs_equipment": true
+      },
+      "request_id": null,
+      "engineer_id": null
+    }
+  ]
+}

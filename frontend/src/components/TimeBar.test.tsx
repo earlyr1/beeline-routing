@@ -108,7 +108,7 @@ describe('TimeBar', () => {
     expect(otherRequests()).toEqual([]);
   });
 
-  it('pauses the playback and switches to the plan after the event when the dispatcher grabs the slider', async () => {
+  it('pauses the playback when the dispatcher grabs the slider', async () => {
     vi.useFakeTimers();
     resetStore({ datasetId: 'd_test', state: at('13:00') });
     render(<TimeBar />);
@@ -116,9 +116,8 @@ describe('TimeBar', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 3);
     });
-    act(() => useAppStore.setState({ showPrevious: true }));
     fireEvent.pointerDown(slider(), { pointerId: 1 });
-    expect(useAppStore.getState()).toMatchObject({ playing: false, dragging: true, showPrevious: false, clock: '13:03' });
+    expect(useAppStore.getState()).toMatchObject({ playing: false, dragging: true, clock: '13:03' });
     expect(api.moveCursor).not.toHaveBeenCalled();
   });
 
@@ -273,7 +272,7 @@ describe('TimeBar', () => {
     expect(screen.getByRole('slider', { name: 'Текущее время' })).toBeDisabled();
   });
 
-  it('closes the events of a pin and the «Добавить событие» menu when the choice opens above them', () => {
+  it('closes the events of a pin when the choice opens above them and while it waits for the variants', () => {
     resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }) });
     render(<TimeBar />);
     fireEvent.click(screen.getByTitle(/^Задержка: Бригада Арташкин/));
@@ -282,42 +281,21 @@ describe('TimeBar', () => {
     expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
 
     act(() => useAppStore.setState({ choice: null }));
-    fireEvent.click(screen.getByRole('button', { name: 'Добавить событие' }));
-    expect(screen.getByRole('menu', { name: 'Добавить событие' })).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle(/^Задержка: Бригада Арташкин/));
+    expect(screen.getByRole('group', { name: 'События 15:00' })).toBeInTheDocument();
     act(() => useAppStore.setState({ choiceLoading: true }));
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
   });
 
-  it('opens the event dialogs from «Добавить событие»: engineer dialogs pick the busiest engineer themselves', () => {
+  it('closes the events of a pin on Esc and keeps that Esc from the panels below', () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }) });
     render(<TimeBar />);
-    const choose = (name: string) => {
-      fireEvent.click(screen.getByRole('button', { name: 'Добавить событие' }));
-      expect(screen.getAllByRole('menuitem').map((item) => item.textContent)).toEqual([
-        'Срочная заявка',
-        'Инженер заболел',
-        'Поломка транспорта',
-        'Задержка инженера',
-      ]);
-      fireEvent.click(screen.getByRole('menuitem', { name }));
-      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
-    };
-    choose('Срочная заявка');
-    expect(useAppStore.getState().toolbarDialog).toBe('urgent');
-    choose('Инженер заболел');
-    expect(useAppStore.getState().engineerDialog).toEqual({ kind: 'unavailable', engineerId: null });
-    choose('Поломка транспорта');
-    expect(useAppStore.getState().engineerDialog).toEqual({ kind: 'transport', engineerId: null });
-    choose('Задержка инженера');
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: null, engineerDialog: null });
-  });
-
-  it.each([
-    ['replanning', { busy: true }],
-    ['the plan before the event is shown', { showPrevious: true }],
-  ])('disables «Добавить событие» while %s', (_, patch) => {
-    resetStore({ datasetId: 'd_test', state: at('13:00'), ...patch });
-    render(<TimeBar />);
-    expect(screen.getByRole('button', { name: 'Добавить событие' })).toBeDisabled();
+    fireEvent.click(screen.getByTitle(/^Задержка: Бригада Арташкин/));
+    // false — Esc отменён: панель «Почему» под списком его не получит.
+    expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(false);
+    expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
+    // Список закрыт: следующий Esc часы не забирают.
+    expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
   });
 
   it('says when the plan is being moved to the clock and while the server prepares the events', () => {

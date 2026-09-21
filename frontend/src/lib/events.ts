@@ -1,4 +1,4 @@
-import type { DelayForecast, Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, Transport, Visit } from '../api/types';
+import type { DelayForecast, Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, Transport, Visit, WorkType } from '../api/types';
 import {
   addMinutes,
   formatWindow,
@@ -23,6 +23,8 @@ export interface PickedPoint {
 }
 
 export interface UrgentForm {
+  /** Тип работ, по нормативам которого заполнена форма; null — сервер типов не прислал, навык выбирают вручную. */
+  workType: WorkType | null;
   address: string;
   point: PickedPoint | null;
   windowStart: HHMM;
@@ -35,6 +37,43 @@ export interface UrgentForm {
   asap: boolean;
   /** Инженер везёт с собой единицу оборудования: роутер, приставку или колонку. */
   needsEquipment: boolean;
+}
+
+/** Поля срочной заявки, которые заполняет тип работ. */
+export type WorkTypeFields = Pick<UrgentForm, 'workType' | 'skill' | 'durationMin' | 'transport' | 'needsEquipment' | 'asap'>;
+
+/** Тип работ заполняет навык, длительность, транспорт, оборудование и «как можно скорее» нормативами сервера. */
+export function workTypeFields(workType: WorkType): WorkTypeFields {
+  return {
+    workType,
+    skill: workType.skill,
+    durationMin: workType.duration_min,
+    transport: workType.transport_required ?? '',
+    needsEquipment: workType.needs_equipment,
+    asap: workType.asap,
+  };
+}
+
+/** Без типов работ от сервера (старый сервер или сервер недоступен) форма прежняя: аварийные работы на час на автомобиле. */
+export const MANUAL_URGENT_FIELDS: WorkTypeFields = {
+  workType: null,
+  skill: 'emergency',
+  durationMin: 60,
+  transport: 'car',
+  needsEquipment: false,
+  asap: false,
+};
+
+/** Что заполнил тип работ, одной строкой, например «Авария · 80 мин · автомобиль · как можно скорее». */
+export function workTypeSummary(form: UrgentForm): string {
+  const parts = [
+    form.workType?.title ?? SKILL_LABELS[form.skill],
+    `${form.durationMin} мин`,
+    form.transport === '' ? 'любой транспорт' : TRANSPORT_LABELS[form.transport].toLowerCase(),
+  ];
+  if (form.needsEquipment) parts.push('с оборудованием');
+  parts.push(form.asap ? 'как можно скорее' : `окно ${formatWindow(form.windowStart, form.windowEnd)}`);
+  return parts.join(' · ');
 }
 
 /** Форма изменения заявки. Время события хранится отдельно: оно не часть заявки. */
@@ -167,7 +206,6 @@ export function isWorkStarted(request: ServiceRequest, visit: Visit | undefined,
 
 export interface RequestActionContext {
   busy: boolean;
-  showPrevious: boolean;
   /** Время на часах шкалы дня: в это время ставятся отмена и возврат. */
   clock: HHMM;
 }
@@ -175,7 +213,7 @@ export interface RequestActionContext {
 /** Кнопки «Изменить» и «Отменить» или «Вернуть» у заявки: одно правило для списка заявок и карточки заявки. */
 export interface RequestActionState {
   cancelled: boolean;
-  /** Кнопки недоступны: идёт перепланирование, показан план до события или работа уже началась. */
+  /** Кнопки недоступны: идёт перепланирование или работа уже началась. */
   disabled: boolean;
   editTitle: string | undefined;
   cancelTitle: string | undefined;
@@ -188,14 +226,14 @@ export interface RequestActionState {
 export function requestActionState(
   request: ServiceRequest,
   visit: Visit | undefined,
-  { busy, showPrevious, clock }: RequestActionContext,
+  { busy, clock }: RequestActionContext,
 ): RequestActionState {
   const cancelled = request.status === 'cancelled';
   const started = isWorkStarted(request, visit, clock);
   const time = clock;
   return {
     cancelled,
-    disabled: busy || showPrevious || started,
+    disabled: busy || started,
     editTitle: started ? 'Работа уже началась, изменить нельзя' : undefined,
     cancelTitle: started ? 'Работа уже началась, отменить нельзя' : undefined,
     cancelLabel: cancelled ? 'Вернуть' : 'Отменить',
@@ -299,13 +337,15 @@ export function buildUrgentEvent(form: UrgentForm, requestId: string, engineers:
     ...visitWindow,
     asap: form.asap,
     priority: 'urgent',
-    // Срочная заявка диспетчера — авария дня: сервер ставит верхний уровень сам, здесь то же значение.
-    tier: 'emergency',
+    // Уровень — род работ, его ставит тип работ (сервер ставит тот же сам); без типов от сервера заявка — авария.
+    // В очереди распределения срочная заявка любого типа и так наравне с аварией: это делает priority «urgent».
+    tier: form.workType?.tier ?? 'emergency',
     skill: form.skill,
     transport_required: form.transport === '' ? null : form.transport,
     status: 'active',
-    source_type_bk: 'Срочная заявка диспетчера',
-    source_type_hd: '',
+    // Тип работ уходит с заявкой так же, как у заявок дня; без типов от сервера — прежняя отметка.
+    source_type_bk: form.workType?.source_type_bk ?? 'Срочная заявка диспетчера',
+    source_type_hd: form.workType?.source_type_hd ?? '',
     needs_equipment: form.needsEquipment,
   };
   return { type: 'urgent', time: form.time, request, request_id: null, engineer_id: null };

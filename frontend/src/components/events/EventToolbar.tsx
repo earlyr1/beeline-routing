@@ -4,15 +4,14 @@ import { UrgentRequestDialog } from './UrgentRequestDialog';
 
 /**
  * Панель событий: сброс событий и срочная заявка. Время события берётся с часов дня, события инженера открываются
- * со страницы бригады и из меню «Добавить событие» на часах.
+ * со страницы бригады.
  */
 export function EventToolbar() {
   const state = useAppStore((s) => s.state);
   const busy = useAppStore((s) => s.busy);
-  const showPrevious = useAppStore((s) => s.showPrevious);
   // Сброс, как и удаление события, меняет план: не во время расчёта, фиксации часов и проигрывания.
   const clockBusy = useAppStore((s) => s.playing || s.committing);
-  // Открытый диалог хранит стор: главный экран сдвигает по нему плавающие диалоги, а меню карты и часы открывают его сами.
+  // Открытый диалог хранит стор: главный экран сдвигает по нему плавающие диалоги, а меню карты открывает его само.
   const urgentOpen = useAppStore((s) => s.toolbarDialog === 'urgent');
   const openDialog = useAppStore((s) => s.openToolbarDialog);
   const closeDialog = useAppStore((s) => s.closeToolbarDialog);
@@ -50,7 +49,7 @@ export function EventToolbar() {
       >
         Сброс событий
       </button>
-      <button type="button" className="btn btn-danger" disabled={busy || showPrevious} onClick={() => openDialog('urgent')}>
+      <button type="button" className="btn btn-danger" disabled={busy} onClick={() => openDialog('urgent')}>
         Срочная заявка
       </button>
       {confirming && !resetLocked && (

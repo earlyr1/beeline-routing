@@ -11,7 +11,7 @@ import type { PlanningState, ServiceRequest, Transport } from '../../api/types';
 import { BEFORE_SHIFTS_HINT, cancelEvent, unavailableEvent } from '../../lib/events';
 import { toMinutes } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
-import { makeAsapRequest, makeAsapState, makePlanningState, makeTimeline } from '../../test/fixtures';
+import { makeAsapRequest, makeAsapState, makePlanningState, makeTimeline, WORK_TYPES } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { EngineerDelayDialog } from './EngineerDelayDialog';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
@@ -281,6 +281,210 @@ describe('UrgentRequestDialog as soon as possible', () => {
       window_start: '13:00',
       window_end: '22:00',
     });
+  });
+});
+
+describe('UrgentRequestDialog work types', () => {
+  const config = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: true };
+  const submit = () => screen.getByRole('button', { name: 'Добавить и перепланировать' });
+  /** Подписи полей диалога по порядку: что диспетчер видит и может заполнить. */
+  const fieldLabels = () =>
+    Array.from(screen.getByRole('dialog', { name: 'Срочная заявка' }).querySelectorAll('.field > span, .field-check > span')).map(
+      (label) => label.textContent,
+    );
+  const checkedOf = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).checked;
+  const chooseType = (title: string) => {
+    const option = within(screen.getByLabelText('Тип работ')).getByRole('option', { name: title }) as HTMLOptionElement;
+    fireEvent.change(screen.getByLabelText('Тип работ'), { target: { value: option.value } });
+  };
+
+  beforeEach(() => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', config: { ...config, work_types: WORK_TYPES } });
+  });
+
+  it('opens on «Авария» collapsed to the place and the time and sends it as soon as possible with the norms', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    const onClose = vi.fn();
+    useAppStore.setState({ applyEvent });
+    render(<UrgentRequestDialog onClose={onClose} />);
+
+    expect(optionsOf('Тип работ')).toEqual(['Авария', 'Подключение', 'Ремонт у клиента', 'Дозаказ оборудования']);
+    expect(within(screen.getByLabelText('Тип работ')).getByRole('option', { name: 'Авария' })).toHaveProperty('selected', true);
+    // Тип работ уже выбран: заполнить остаётся место и время события.
+    expect(fieldLabels()).toEqual(['Тип работ', 'Адрес', 'Время события']);
+    expect(screen.getByText('Авария · 80 мин · автомобиль · как можно скорее')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Навык')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
+    fireEvent.click(submit());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    const event = applyEvent.mock.calls[0][0];
+    expect(event).toMatchObject({ type: 'urgent', time: '13:00' });
+    expect(event.request).toMatchObject({
+      address: 'Город Москва, ул.Ташкентская, д. 16к2',
+      skill: 'emergency',
+      duration_min: 80,
+      transport_required: 'car',
+      needs_equipment: false,
+      asap: true,
+      window_start: '13:00',
+      window_end: '22:00',
+      priority: 'urgent',
+      tier: 'emergency',
+      source_type_bk: 'Глобальная проблема',
+      source_type_hd: 'Авария',
+    });
+  });
+
+  it('fills the fields from the norms of every work type and collapses again on «Авария»', () => {
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    const filled = () => ({
+      duration: valueOf('Длительность, мин'),
+      transport: valueOf('Транспорт'),
+      equipment: checkedOf('Нужно оборудование'),
+      asap: checkedOf('Как можно скорее'),
+    });
+
+    chooseType('Подключение');
+    // Подключение ждёт своё окно: форма открыта целиком, окно по умолчанию с времени события.
+    expect(fieldLabels()).toEqual([
+      'Тип работ',
+      'Адрес',
+      'Как можно скорее',
+      'Окно с',
+      'Окно до',
+      'Длительность, мин',
+      'Транспорт',
+      'Нужно оборудование',
+      'Время события',
+    ]);
+    expect(filled()).toEqual({ duration: '70', transport: '', equipment: true, asap: false });
+    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:00', '15:00']);
+
+    chooseType('Ремонт у клиента');
+    expect(filled()).toEqual({ duration: '30', transport: '', equipment: false, asap: false });
+
+    chooseType('Дозаказ оборудования');
+    expect(filled()).toEqual({ duration: '20', transport: 'car', equipment: true, asap: false });
+
+    // Поправленные руками значения новый тип работ заменяет своими нормативами.
+    fireEvent.change(screen.getByLabelText('Длительность, мин'), { target: { value: '45' } });
+    chooseType('Подключение');
+    expect(filled()).toEqual({ duration: '70', transport: '', equipment: true, asap: false });
+
+    chooseType('Авария');
+    expect(fieldLabels()).toEqual(['Тип работ', 'Адрес', 'Время события']);
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
+    expect(filled()).toEqual({ duration: '80', transport: 'car', equipment: false, asap: true });
+  });
+
+  it('lets the dispatcher override the norms of «Авария» after expanding them', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    const onClose = vi.fn();
+    useAppStore.setState({ applyEvent });
+    render(<UrgentRequestDialog onClose={onClose} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
+    expect(screen.queryByText('Авария · 80 мин · автомобиль · как можно скорее')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Тип работ')).toHaveValue('Глобальная проблема');
+    fireEvent.change(screen.getByLabelText('Длительность, мин'), { target: { value: '120' } });
+    fireEvent.change(screen.getByLabelText('Транспорт'), { target: { value: '' } });
+    fireEvent.click(screen.getByLabelText('Нужно оборудование'));
+    fireEvent.click(screen.getByLabelText('Как можно скорее'));
+    fireEvent.change(screen.getByLabelText('Окно с'), { target: { value: '15:00' } });
+    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '17:00' } });
+    fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
+    fireEvent.click(submit());
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({
+      skill: 'emergency',
+      duration_min: 120,
+      transport_required: null,
+      needs_equipment: true,
+      asap: false,
+      window_start: '15:00',
+      window_end: '17:00',
+      source_type_bk: 'Глобальная проблема',
+    });
+  });
+
+  it('collapses «Авария» again when the dispatcher expands it, picks another type and comes back', () => {
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
+    expect(fieldLabels()).toContain('Длительность, мин');
+
+    chooseType('Подключение');
+    chooseType('Авария');
+    expect(fieldLabels()).toEqual(['Тип работ', 'Адрес', 'Время события']);
+    expect(screen.getByText('Авария · 80 мин · автомобиль · как можно скорее')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Изменить' })).toBeInTheDocument();
+  });
+
+  it('moves the focus from «Изменить» to the first field it reveals', () => {
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    const change = screen.getByRole('button', { name: 'Изменить' });
+    change.focus();
+    fireEvent.click(change);
+    expect(screen.getByLabelText('Как можно скорее')).toHaveFocus();
+
+    // Тип работ без «как можно скорее» открывает форму сам, и фокус со списка типов он не уводит.
+    const types = screen.getByLabelText('Тип работ');
+    types.focus();
+    chooseType('Подключение');
+    expect(types).toHaveFocus();
+  });
+
+  it('explains next to the norm that the 20 minutes of road from the organisers are counted by the map', () => {
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    const hint = expect.stringContaining('у аварии 20 + 80 = 100 минут');
+    expect(screen.getByText('Авария · 80 мин · автомобиль · как можно скорее')).toHaveAttribute('title', hint);
+    fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
+    expect(screen.getByLabelText('Длительность, мин').closest('label')).toHaveAttribute('title', hint);
+  });
+
+  it('adds «Авария» at a map point as in the demo: the collapsed form keeps the point and the address found for it', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    const onClose = vi.fn();
+    // Так стор оставляет «Добавить заявку здесь» из меню карты, когда адрес точки найден.
+    useAppStore.setState({
+      applyEvent,
+      pickFor: 'urgent',
+      pickedPoint: { lat: 55.71234, lon: 37.80123 },
+      urgentAddressLookup: 'done',
+      urgentSuggestedAddress: 'Москва, Перовская улица, 42к1',
+    });
+    render(<UrgentRequestDialog onClose={onClose} />);
+    expect(fieldLabels()).toEqual(['Тип работ', 'Адрес', 'Время события']);
+    expect(screen.getByText('Точка: 55.71234, 37.80123')).toBeInTheDocument();
+    expect(valueOf('Адрес')).toBe('Москва, Перовская улица, 42к1');
+    expect(screen.getByText('Авария · 80 мин · автомобиль · как можно скорее')).toBeInTheDocument();
+
+    fireEvent.click(submit());
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({
+      address: 'Москва, Перовская улица, 42к1',
+      lat: 55.71234,
+      lon: 37.80123,
+      skill: 'emergency',
+      duration_min: 80,
+      transport_required: 'car',
+      asap: true,
+      window_start: '13:00',
+      window_end: '22:00',
+      source_type_bk: 'Глобальная проблема',
+    });
+  });
+
+  it('keeps the old form with the skill when the server sends no work types', () => {
+    useAppStore.setState({ config });
+    render(<UrgentRequestDialog onClose={() => undefined} />);
+    expect(screen.queryByLabelText('Тип работ')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
+    expect([valueOf('Навык'), valueOf('Длительность, мин'), valueOf('Транспорт')]).toEqual(['emergency', '60', 'car']);
+    // Час без типа работ — не норматив, и подсказки о нормативе у длительности нет.
+    expect(screen.getByLabelText('Длительность, мин').closest('label')).not.toHaveAttribute('title');
+    expect(screen.getByLabelText('Как можно скорее')).not.toHaveFocus();
   });
 });
 
@@ -560,29 +764,6 @@ describe('event dialogs on the clock of the day', () => {
     vi.mocked(api.postEvent).mockReset();
   });
 
-  it('preselects the busiest engineer at the clock when an engineer dialog opens without an engineer', () => {
-    const state = withBusyBeluzin(makePlanningState());
-    resetStore({ datasetId: 'd_test', state, clock: '13:00', delayDialogOpen: true, delayEngineerId: null });
-    const delay = render(<EngineerDelayDialog />);
-    expect([valueOf('Инженер'), valueOf('Задержка с')]).toEqual(['E02', '13:00']);
-    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '16:00' } });
-    expect(valueOf('Инженер')).toBe('E01');
-    delay.unmount();
-
-    resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'unavailable', engineerId: null } });
-    const unavailable = render(<EngineerUnavailableDialog />);
-    expect([valueOf('Инженер'), valueOf('Недоступен с')]).toEqual(['E02', '13:00']);
-    fireEvent.change(screen.getByLabelText('Недоступен с'), { target: { value: '16:00' } });
-    expect(valueOf('Инженер')).toBe('E01');
-    unavailable.unmount();
-
-    resetStore({ datasetId: 'd_test', state, clock: '13:00', engineerDialog: { kind: 'transport', engineerId: null } });
-    render(<TransportChangeDialog />);
-    expect([valueOf('Инженер'), valueOf('Сменить с')]).toEqual(['E02', '13:00']);
-    fireEvent.change(screen.getByLabelText('Сменить с'), { target: { value: '16:00' } });
-    expect(valueOf('Инженер')).toBe('E01');
-  });
-
   it('renders the delay dialog only while it is open', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', delayDialogOpen: false, delayEngineerId: 'E01' });
     expect(render(<EngineerDelayDialog />).container).toBeEmptyDOMElement();
@@ -592,9 +773,9 @@ describe('event dialogs on the clock of the day', () => {
     const early = { datasetId: 'd_test', state: makePlanningState(), clock: '08:30' };
     const dialogs = [
       { patch: {}, element: <UrgentRequestDialog onClose={() => undefined} />, time: 'Время события' },
-      { patch: { delayDialogOpen: true }, element: <EngineerDelayDialog />, time: 'Задержка с' },
-      { patch: { engineerDialog: { kind: 'unavailable' as const, engineerId: null } }, element: <EngineerUnavailableDialog />, time: 'Недоступен с' },
-      { patch: { engineerDialog: { kind: 'transport' as const, engineerId: null } }, element: <TransportChangeDialog />, time: 'Сменить с' },
+      { patch: { delayDialogOpen: true, delayEngineerId: 'E01' }, element: <EngineerDelayDialog />, time: 'Задержка с' },
+      { patch: { engineerDialog: { kind: 'unavailable' as const, engineerId: 'E01' } }, element: <EngineerUnavailableDialog />, time: 'Недоступен с' },
+      { patch: { engineerDialog: { kind: 'transport' as const, engineerId: 'E01' } }, element: <TransportChangeDialog />, time: 'Сменить с' },
       { patch: { editingRequestId: '46393' }, element: <RequestEditDialog />, time: 'Время события' },
     ];
     for (const { patch, element, time } of dialogs) {
@@ -1036,11 +1217,7 @@ describe('EventToolbar', () => {
     expect(screen.getByRole('button', { name: 'Сброс событий' })).toBeDisabled();
   });
 
-  it('disables the urgent request while showing the plan before the event or replanning', () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', showPrevious: true });
-    const view = render(<EventToolbar />);
-    expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeDisabled();
-    view.unmount();
+  it('disables the urgent request while replanning', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', busy: true });
     render(<EventToolbar />);
     expect(screen.getByRole('button', { name: 'Срочная заявка' })).toBeDisabled();

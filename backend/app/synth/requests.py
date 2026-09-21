@@ -12,13 +12,18 @@ from app.ingest.geocode import GeoResult
 from app.synth.config import SynthConfig
 
 
+def norm_duration(cfg: SynthConfig, type_bk: str) -> int:
+    """Официальный норматив времени работ на адресе для типа заявки BK; неизвестный тип — default_duration_min."""
+    return cfg.duration_by_bk.get(type_bk, cfg.default_duration_min)
+
+
 def synth_duration(cfg: SynthConfig, request_id: str, type_bk: str) -> int:
     """Плановое время работ на адресе по официальному нормативу типа заявки BK (config/synth_config.yaml).
 
     Норматив — точное число, поэтому при duration_jitter = 0 возвращаем значение таблицы как есть,
     без округления: округлять нечего, а округление внесло бы расхождение с нормативом.
     """
-    base = cfg.duration_by_bk.get(type_bk, cfg.default_duration_min)
+    base = norm_duration(cfg, type_bk)
     if not cfg.duration_jitter:
         return base
     rng = random.Random(f"{cfg.seed}:duration:{request_id}")

@@ -163,18 +163,6 @@ describe('WhyPanel', () => {
     expect(within(panel()).queryByText('Проверки')).not.toBeInTheDocument();
   });
 
-  it('marks which plan the explanation is about while the plan before the event is shown', async () => {
-    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
-    useAppStore.setState({ selectedRequestId: '50104', whyOpen: true, showPrevious: true });
-    const { unmount } = render(<WhyPanel />);
-    expect(await within(panel()).findByText('Объяснение относится к текущему плану, после события.')).toBeInTheDocument();
-    unmount();
-
-    useAppStore.setState({ selectedRequestId: null, selectedEngineerId: 'E01', whyOpen: true, showPrevious: true });
-    render(<WhyPanel />);
-    expect(within(panel()).getByText('Маршрут по плану до события.')).toBeInTheDocument();
-  });
-
   it('leaves Esc to the map menu and to text fields while they are open', () => {
     useAppStore.setState({ selectedEngineerId: 'E01', whyOpen: true, mapMenu: { lat: 55.71, lon: 37.8 } });
     render(
