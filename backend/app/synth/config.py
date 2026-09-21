@@ -63,6 +63,9 @@ class SynthConfig(BaseModel):
     force_car_for_skills: list[Skill]
     transport_from_history: bool = False
     engineer_start: Literal["office", "history_medoid"] = "office"
+    # Районы Подмосковья, где бригада может жить (значения колонки «Район»). При engineer_start: office бригада,
+    # у которой больше половины истории в этих районах, начинает день дома, а не в офисе региона.
+    home_districts: list[str] = []
     shifts: list[ShiftTemplate]
     urgent_event: UrgentEventConfig
 

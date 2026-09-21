@@ -17,6 +17,7 @@ from app.synth.engineers import (
     crew_histories,
     historical_car_crews,
     history_medoid,
+    home_start,
     largest_remainder,
 )
 from app.synth.events import build_demo_events
@@ -51,6 +52,7 @@ def row(
     status="",
     address="Город Москва, ул.Тестовая, д. 1",
     connection="",
+    district="Таганский",
 ):
     return RawRequestRow(
         row_index=index,
@@ -59,7 +61,7 @@ def row(
         type_hd=type_hd,
         window_start=ws,
         window_end=we,
-        district="Таганский",
+        district=district,
         address=address,
         status_bk=status,
         crew=crew,
@@ -380,6 +382,108 @@ def test_engineer_start_from_history_medoid(cfg):
     office_cfg = cfg.model_copy(update={"engineer_start": "office"})
     office_engineers, _ = build_engineers(office_cfg, "east", control, office, {0: (54.83, 38.15)})
     assert (office_engineers[0].start_lat, office_engineers[0].start_lon) == (55.7, 37.7)
+
+
+def test_shipped_config_starts_brigades_by_the_organisers_answers(cfg):
+    """Ответы организаторов: оборудование выдают в офисе (вопрос 4), дом — только в удалённом городе (вопрос 13)."""
+    assert cfg.engineer_start == "office"
+    assert set(cfg.home_districts) == {"Кашира", "Ступино", "Домодедово"}
+
+
+# Три заявки в Кашире на одной линии (средняя — медоид), одна в Ступино и две московские.
+KASHIRA = {0: (54.83, 38.15), 1: (54.835, 38.155), 2: (54.84, 38.16)}
+STUPINO = {5: (54.89, 38.08)}
+MOSCOW = {3: (55.74, 37.65), 4: (55.745, 37.655)}
+OFFICE = Office(region="south_east", title="Юго-восток", address="x", lat=55.61, lon=37.72)
+
+
+def _start(cfg, rows, points):
+    control = RawFile(rows=rows, office_address=None, is_control=True)
+    engineers, _ = build_engineers(cfg, "south_east", control, OFFICE, points)
+    return engineers[0].start_lat, engineers[0].start_lon
+
+
+def test_brigade_mostly_in_a_suburban_district_starts_at_home(cfg):
+    """Больше половины истории в Подмосковье: старт — медоид заявок в этих районах, московские не в счёт.
+
+    Московские заявки тянут медоид всей истории к Ступино, ближе к Москве; дом остаётся в Кашире.
+    """
+    rows = [
+        row(0, "0", crew="Бригада А", district="Кашира"),
+        row(1, "1", crew="Бригада А", district="Кашира"),
+        row(5, "5", crew="Бригада А", district="Ступино"),
+        row(3, "3", crew="Бригада А"),
+        row(4, "4", crew="Бригада А"),
+    ]
+    points = {**KASHIRA, **STUPINO, **MOSCOW}
+    assert _start(cfg, rows, points) == KASHIRA[1]
+    assert history_medoid(rows, points) == STUPINO[5]
+
+
+def test_brigade_with_half_its_history_in_the_suburbs_starts_at_the_office(cfg):
+    rows = [row(k, str(k), crew="Бригада А", district="Кашира") for k in (0, 1)]
+    rows += [row(k, str(k), crew="Бригада А") for k in MOSCOW]
+    assert _start(cfg, rows, {**KASHIRA, **MOSCOW}) == (OFFICE.lat, OFFICE.lon)
+
+
+def test_moscow_brigade_starts_at_the_office_even_with_known_addresses(cfg):
+    rows = [row(k, str(k), crew="Бригада А") for k in MOSCOW]
+    assert _start(cfg, rows, MOSCOW) == (OFFICE.lat, OFFICE.lon)
+
+
+def test_suburban_brigade_without_found_suburban_addresses_starts_at_the_office(cfg):
+    """Большинство в Кашире, но ни один её адрес там не найден геокодером: дома не из чего взять, старт в офисе."""
+    rows = [row(k, str(k), crew="Бригада А", district="Кашира") for k in (6, 7, 8)]
+    rows.append(row(3, "3", crew="Бригада А"))
+    assert _start(cfg, rows, MOSCOW) == (OFFICE.lat, OFFICE.lon)
+
+
+def test_suburban_majority_counts_every_row_of_the_history_found_or_not(cfg):
+    """Две заявки из пяти в Кашире — не большинство, хотя из найденных геокодером адресов других нет."""
+    rows = [row(k, str(k), crew="Бригада А", district="Кашира") for k in (0, 1)]
+    rows += [row(k, str(k), crew="Бригада А") for k in (6, 7, 8)]
+    assert _start(cfg, rows, KASHIRA) == (OFFICE.lat, OFFICE.lon)
+
+
+def test_brigade_serving_two_suburban_towns_starts_among_them(cfg):
+    """Как Козырь: Кашира и Ступино вместе дают большинство, оба района — дом."""
+    rows = [
+        row(0, "0", crew="Бригада А", district="Кашира"),
+        row(1, "1", crew="Бригада А", district="Ступино"),
+        row(2, "2", crew="Бригада А", district="Кашира"),
+    ]
+    assert _start(cfg, rows, KASHIRA) == KASHIRA[1]
+
+
+# Бригады, чья стартовая точка в бандлах репозитория не совпадает с офисом региона (ответ организаторов, вопрос 13).
+SHIPPED_HOME_BRIGADES = {
+    "east": set(),
+    "south_east": {"Бригада Каушнян", "Бригада Козырь", "Бригада Паршин", "Бригада Саламатин"},
+    "south_center": set(),
+    "north_west": set(),
+}
+
+
+@pytest.mark.parametrize("region", sorted(SHIPPED_HOME_BRIGADES))
+def test_shipped_bundle_starts_only_suburban_brigades_at_home(cfg, region):
+    """Бандл, собранный со стартом из медоида истории, здесь падает: там московские бригады начинают у своих
+    заявок, а по правилу — в офисе. Дом бригады из Подмосковья — медоид её заявок в home_districts.
+    """
+    bundle = load_bundle(REPO_ROOT / "data" / "bundles" / region / "bundle.json")
+    office = (bundle.office.lat, bundle.office.lon)
+    at_home = {e.name for e in bundle.engineers if (e.start_lat, e.start_lon) != office}
+    assert at_home == SHIPPED_HOME_BRIGADES[region]
+
+    # Точки заявок берутся из бандла так же, как prepare_region передаёт их в build_engineers при сборке.
+    control = parse_beeline_csv((REPO_ROOT / cfg.regions[region].control).read_bytes())
+    histories = crew_histories(control)
+    points = {
+        k: (r.lat, r.lon) for k, r in enumerate(bundle.requests) if r.lat is not None and r.lon is not None
+    }
+    for engineer in bundle.engineers:
+        if engineer.name in at_home:
+            home = home_start(cfg.home_districts, histories[engineer.name], points)
+            assert (engineer.start_lat, engineer.start_lon) == home
 
 
 def test_demo_events_follow_the_optimized_plan(cfg):

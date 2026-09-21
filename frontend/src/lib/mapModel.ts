@@ -91,7 +91,7 @@ export function focusedEngineerId(plan: Plan, selectedRequestId: string | null, 
   return holder ?? selectedEngineerId;
 }
 
-/** Всё, что рисуется на карте, в порядке отрисовки: линии маршрутов, офис, старты инженеров, заявки. */
+/** Всё, что рисуется на карте, в порядке отрисовки: линии маршрутов, офис, старты инженеров не из офиса, заявки. */
 export function buildMapModel({ state, plan, legs, selectedRequestId, selectedEngineerId }: MapModelInput): MapModel {
   const ids = engineerIdsOf(state);
   const assignments = assignmentIndex(plan);
@@ -127,10 +127,14 @@ export function buildMapModel({ state, plan, legs, selectedRequestId, selectedEn
     label: 'Офис',
   };
 
-  const starts = state.engineers.map((engineer): MapMarker => {
+  // Бригада, которая начинает день в офисе, своего маркера старта не получает: её старт — маркер офиса. Иначе на
+  // Востоке двенадцать одинаковых значков дома легли бы поверх офиса. Значок остаётся у бригад Подмосковья,
+  // которые начинают день дома (ответы организаторов, вопросы 4 и 13).
+  const starts = state.engineers.flatMap((engineer): MapMarker[] => {
+    if (engineer.start_lat === state.office.lat && engineer.start_lon === state.office.lon) return [];
     const color = engineerColor(engineer.id, ids);
     const dimmed = !engineer.available || (focus !== null && focus !== engineer.id);
-    return {
+    const marker: MapMarker = {
       key: `start-${engineer.id}`,
       target: { kind: 'engineer', engineerId: engineer.id },
       coordinates: [engineer.start_lon, engineer.start_lat],
@@ -140,6 +144,7 @@ export function buildMapModel({ state, plan, legs, selectedRequestId, selectedEn
       title: `Старт: ${engineer.name}`,
       label: '⌂',
     };
+    return [marker];
   });
 
   const requests = state.requests.flatMap((request): MapMarker[] => {

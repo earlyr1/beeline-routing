@@ -59,13 +59,20 @@ def test_dispatchers_never_loaded_a_brigade_beyond_the_daily_stock(east):
     assert max(_per_brigade(east, east.control_plan).values()) <= DEFAULT_EQUIPMENT_STOCK
 
 
-def test_the_daily_stock_binds_on_the_east_bundle(east):
-    limited = _plan(east, DEFAULT_EQUIPMENT_STOCK)
+def test_a_stock_one_below_the_daily_one_changes_the_east_plan(east):
+    """Запас на единицу меньше дневного (пять, максимум диспетчеров за этот день) уже меняет план Востока.
+
+    Сколько единиц оптимум без предела кладёт в одну бригаду, зависит от поиска: здесь, по формуле и за 3 секунды,
+    шесть, с поиском от 4 секунд — семь, и тогда план меняет уже дневной запас. Больше пяти выходит при любом
+    проверенном лимите, от 1 до 30 секунд, поэтому тест держится за запас пять.
+    """
+    tight = DEFAULT_EQUIPMENT_STOCK - 1
+    limited = _plan(east, tight)
     unlimited = _plan(east, 999)
 
-    # Без предела оптимум складывает оборудование в одну бригаду плотнее, чем она может увезти.
-    assert max(_per_brigade(east, unlimited).values()) > DEFAULT_EQUIPMENT_STOCK
-    assert max(_per_brigade(east, limited).values()) <= DEFAULT_EQUIPMENT_STOCK
+    # Без предела оптимум складывает оборудование в одну бригаду плотнее, чем она увезла бы при запасе пять.
+    assert max(_per_brigade(east, unlimited).values()) > tight
+    assert max(_per_brigade(east, limited).values()) <= tight
     assert limited.metrics.violations == 0
     assert limited.metrics.unassigned == unlimited.metrics.unassigned == 0
     assert [(r.engineer_id, [v.request_id for v in r.visits]) for r in limited.routes] != [

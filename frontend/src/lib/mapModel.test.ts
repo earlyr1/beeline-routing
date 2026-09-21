@@ -103,6 +103,16 @@ describe('buildMapModel', () => {
     expect(markerOf(model, 'start-E03').className).toBe('marker marker--start marker--dimmed');
   });
 
+  it('draws no start marker for a brigade that starts at the office: the office marker stands for it', () => {
+    const state = makePlanningState();
+    const [first, ...rest] = state.engineers;
+    const atOffice = { ...state, engineers: [{ ...first, start_lat: state.office.lat, start_lon: state.office.lon }, ...rest] };
+    const keys = buildMapModel(input({ state: atOffice })).markers.map((marker) => marker.key);
+    expect(keys).toContain('office');
+    expect(keys).not.toContain('start-E01');
+    expect(keys).toEqual(expect.arrayContaining(['start-E02', 'start-E03']));
+  });
+
   it('labels requests by order, cancellation and missing assignment', () => {
     const model = buildMapModel(input());
     expect(markerOf(model, 'URG-001')).toMatchObject({

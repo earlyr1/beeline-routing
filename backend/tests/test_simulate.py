@@ -85,7 +85,7 @@ def test_car_has_no_leg_limit():
 
 
 def test_route_runs_out_of_equipment_when_the_morning_stock_is_spent():
-    """Оборудование бригада получает в офисе утром на весь день: третью единицу взять негде."""
+    """Оборудование бригада получает утром сразу на весь день: третью единицу взять негде."""
     problem = problem_of(
         [req(f"R{k}", 1, k / 10, "10:00", "16:00", duration=30, equipment=True) for k in range(3)],
         [eng("E1", equipment_stock=2)],

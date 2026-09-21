@@ -86,7 +86,8 @@ function request(
 }
 
 function engineers(): Engineer[] {
-  // Старт каждого инженера: медоид адресов его бригады, а не офис региона.
+  // Старты инженеров в фикстуре условные и разнесены, чтобы маркеры на карте не слипались; в настоящем бандле
+  // Востока все бригады начинают день в офисе региона (ответы организаторов, вопросы 4 и 13).
   return [
     { id: 'E01', name: 'Бригада Арташкин', start_lat: 55.7005, start_lon: 37.781, shift_start: '10:00', shift_end: '22:00', skills: ['local', 'connection'], transport: 'car', available: true, unavailable_from: null, equipment_stock: 6 },
     { id: 'E02', name: 'Бригада Белузин', start_lat: 55.745, start_lon: 37.802, shift_start: '10:00', shift_end: '22:00', skills: ['local', 'connection', 'emergency'], transport: 'car', available: true, unavailable_from: null, equipment_stock: 6 },

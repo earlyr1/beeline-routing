@@ -109,6 +109,20 @@ def history_medoid(
     return min(points, key=lambda p: sum(haversine_km(*p, *q) for q in points))
 
 
+def home_start(
+    home_districts: list[str], rows: list[RawRequestRow], row_points: dict[int, tuple[float, float]]
+) -> tuple[float, float] | None:
+    """Дом бригады из Подмосковья: медоид её заявок в home_districts, если там больше половины её истории.
+
+    Ответ организаторов (вопрос 13): бригаде удалённого города можно поставить стартовую точку в этом городе
+    и считать её домом исполнителя. Бригада, которая в основном работала в Москве, дома не получает.
+    """
+    home_rows = [row for row in rows if row.district in home_districts]
+    if len(home_rows) * 2 <= len(rows):
+        return None
+    return history_medoid(home_rows, row_points)
+
+
 def build_engineers(
     cfg: SynthConfig,
     region: str,
@@ -133,9 +147,12 @@ def build_engineers(
     engineers = []
     for name in names:
         shift = choose_shift(cfg, histories[name])
+        # Офис региона: там бригада утром получает оборудование на весь день (ответ организаторов, вопрос 4).
         start = (office.lat, office.lon)
         if cfg.engineer_start == "history_medoid" and row_points:
             start = history_medoid(histories[name], row_points) or start
+        elif cfg.engineer_start == "office" and row_points:
+            start = home_start(cfg.home_districts, histories[name], row_points) or start
         engineers.append(
             Engineer(
                 id=ids[name],
