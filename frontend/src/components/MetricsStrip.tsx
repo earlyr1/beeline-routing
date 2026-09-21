@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { formatKm, formatSigned } from '../lib/format';
+import type { PrecomputedPlan } from '../api/types';
+import { formatComputedAt, formatKm, formatSearchTime, formatSigned } from '../lib/format';
 import { WORKLOAD_LEVELS, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
 
@@ -11,6 +12,24 @@ const DAY_MODE_TITLE =
 interface DayMode {
   level: number;
   lunch: boolean;
+}
+
+/**
+ * Пометка у метрик, что утренний план посчитан заранее: без неё мгновенный план после «30 секунд поиска» выглядит
+ * фокусом. Пометка называет именно утренний план: после событий метрики рядом — уже пересчёт на месте, а не ночной
+ * поиск. Подсказка говорит, откуда он и что события дня пересчитываются на месте.
+ */
+function PrecomputedNote({ info }: { info: PrecomputedPlan }) {
+  const search = formatSearchTime(info.search_minutes);
+  const title =
+    `Утренний план посчитан заранее ночным расчётом: поиск ${search}, закончен ` +
+    `${formatComputedAt(info.computed_at)}. Сервис взял его вместо поиска при загрузке дня. ` +
+    'События дня пересчитываются от него на месте, за секунды.';
+  return (
+    <span className="metrics-strip__origin" title={title}>
+      {`Утренний план: ночной поиск ${search}`}
+    </span>
+  );
 }
 
 interface MetricProps {
@@ -73,6 +92,7 @@ export function MetricsStrip() {
       <div className="metrics-strip__title">
         <strong>{state.office.title}</strong>
         <span className="muted">Сейчас {clock}</span>
+        {state.precomputed && <PrecomputedNote info={state.precomputed} />}
       </div>
       <Metric
         label="Инженеров"

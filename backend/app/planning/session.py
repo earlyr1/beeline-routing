@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from typing import Any
 
 from app.domain.enums import (
@@ -25,7 +26,8 @@ from app.geo.transit import TransitLookup, TransitMatrix
 from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, delayed_until, forecast_delay, keep_delays, missed_hold
 from app.planning.diff import compute_diff
-from app.planning.models import AppliedEvent, EventVariant, PlanDiff
+from app.planning.models import AppliedEvent, EventVariant, PlanDiff, PrecomputedPlan
+from app.planning.night import NightChoice, choose_night_plan, plan_routes
 from app.planning.variants import (
     STABLE_REASSIGNMENT,
     assigned_engineer,
@@ -39,8 +41,8 @@ from app.planning.variants import (
 from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, travel_buffer, workload_weights
 from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
-from app.solvers.ortools_solver import OrToolsSolver
-from app.solvers.portfolio import SolverPool
+from app.solvers.ortools_solver import ObjectiveWeights, OrToolsSolver
+from app.solvers.portfolio import SolverPool, plan_cost
 from app.solvers.problem import EngineerState, Problem, make_problem
 from app.solvers.reasons import too_far_km
 from app.solvers.simulate import simulate_route
@@ -89,6 +91,9 @@ class PlanningContext:
     # Уровень распределения по типу заявки BK (tier_by_bk в config/synth_config.yaml), тот же, что у заявок бандла:
     # срочная заявка диспетчера получает уровень своего типа работ. Тип, которого здесь нет, — авария.
     tier_by_bk: Mapping[str, RequestTier] = field(default_factory=dict)
+    # Каталог ночных планов (app/planning/night.py): <каталог>/<регион>/night_plan.json, в сервисе это data/bundles.
+    # None — ночные планы не ищутся, утренний план всегда ищется при загрузке.
+    night_plan_dir: Path | None = None
 
     def day_time_limit_s(self, lunch_enabled: bool) -> int:
         """Лимит на план всего дня с нуля: с обедом поиск дольше, без обеда как у перепланирования."""
@@ -115,6 +120,9 @@ class PlanningSession:
     workload_level: int = DEFAULT_WORKLOAD_LEVEL
     # Обед по плану, выбранный для дня: действует во всех решениях сессии, включая FCFS и перепланирование.
     lunch_enabled: bool = True
+    # Утренний план взят из ночного расчёта; None — найден при загрузке дня. События дня его не меняют: это
+    # происхождение утреннего плана, от которого пересчитываются события.
+    precomputed: PrecomputedPlan | None = None
 
     def request(self, request_id: str) -> Request | None:
         return next((r for r in self.requests if r.id == request_id), None)
@@ -123,7 +131,7 @@ class PlanningSession:
         return next((e for e in self.engineers if e.id == engineer_id), None)
 
 
-def _day_problem(
+def day_problem(
     requests: list[Request],
     engineers: list[Engineer],
     ctx: PlanningContext,
@@ -147,6 +155,35 @@ def _day_problem(
     )
 
 
+def search_plan(
+    problem: Problem,
+    weights: ObjectiveWeights,
+    time_limit_s: int,
+    pool: SolverPool | None = None,
+    *,
+    share: int = 1,
+    seed: Plan | None = None,
+) -> Plan:
+    """Поиск OR-Tools: с пулом процессов сразу несколькими стратегиями, без пула — одной в текущем процессе.
+
+    share — сколько поисков делят пул одновременно. seed — допустимый план этой же задачи (ночной план, который
+    не подошёл утренним): первая стратегия стартует от его маршрутов, остальные строят первое решение сами, и
+    результат не хуже seed по цели при весах weights. Этой же функцией ищет ночной план scripts/night_plan.py.
+    """
+    start = plan_routes(seed) if seed is not None else None
+    if pool is not None:
+        plan = pool.solve(problem, weights, time_limit_s, pool.strategies(share), start=start)
+    else:
+        # Подсказку OR-Tools берёт из previous_order: копия задачи только для поиска, в сессию она не попадает.
+        hinted = replace(problem, previous_order=start) if start else problem
+        plan = OrToolsSolver(time_limit_s=time_limit_s, weights=weights).solve(hinted)
+    if seed is None:
+        return plan
+    # Страховка на случай, если поиск от подсказки ушёл в сторону или подсказку не принял: min берёт первый из
+    # равных, то есть найденный план.
+    return min((plan, seed), key=lambda item: plan_cost(problem, item, weights))
+
+
 def _solve(
     problem: Problem,
     workload_level: int,
@@ -154,6 +191,7 @@ def _solve(
     variant: EventVariant = "optimal",
     pool: SolverPool | None = None,
     share: int = 1,
+    seed: Plan | None = None,
 ) -> tuple[Plan, Plan]:
     """Оптимизированный план с весами уровня нагрузки и базовый FCFS. Стоимость инженера FCFS не использует.
 
@@ -161,15 +199,13 @@ def _solve(
     Остальные стратегии, в том числе «отдать заявку бригаде», ищут с обычными весами уровня нагрузки: заявку
     к бригаде привязывает закрепление в самой заявке, а не веса.
     С пулом процессов поиск идёт сразу несколькими стратегиями и берётся лучший план; share — сколько поисков
-    делят пул одновременно (варианты события считаются вместе).
+    делят пул одновременно (варианты события считаются вместе). seed — план, от которого стартует поиск
+    (search_plan).
     """
     weights = workload_weights(workload_level)
     if variant == "stable":
         weights = replace(weights, reassignment=STABLE_REASSIGNMENT)
-    if pool is not None:
-        plan = pool.solve(problem, weights, time_limit_s, pool.strategies(share))
-    else:
-        plan = OrToolsSolver(time_limit_s=time_limit_s, weights=weights).solve(problem)
+    plan = search_plan(problem, weights, time_limit_s, pool, share=share, seed=seed)
     return plan, FcfsSolver().solve(problem)
 
 
@@ -210,12 +246,29 @@ def start_session(
     workload_level: int = DEFAULT_WORKLOAD_LEVEL,
     lunch_enabled: bool = True,
 ) -> PlanningSession:
-    """План всего дня с нуля: предподсчёт загрузки и пересборка дня. Лимит OR-Tools зависит от обеда."""
-    problem = _day_problem(requests, engineers, ctx, workload_level, lunch_enabled)
+    """План всего дня с нуля: предподсчёт загрузки и пересборка дня. Лимит OR-Tools зависит от обеда.
+
+    Сначала ищется ночной план региона (app/planning/night.py): если отпечаток задачи совпал и маршруты проходят
+    проверку, он и есть утренний план, и поиска нет. Иначе план ищется, как всегда; если маршруты ночного плана
+    на этой задаче допустимы, поиск стартует от них. FCFS считается в любом случае.
+    """
+    problem = day_problem(requests, engineers, ctx, workload_level, lunch_enabled)
     warn_stale_transit(region, problem, ctx.transit)
-    plan, baseline = _solve(
-        problem, workload_level, ctx.day_time_limit_s(lunch_enabled), pool=ctx.solver_pool
-    )
+    try:
+        night = choose_night_plan(ctx.night_plan_dir, region, problem, workload_weights(workload_level))
+    except Exception:  # noqa: BLE001 - ночной план только ускоряет утро и не должен мешать загрузке дня
+        logger.exception("Ночной план региона %r не проверен из-за ошибки: план ищется при загрузке", region)
+        night = NightChoice()
+    if night.plan is not None:
+        plan, baseline = night.plan, FcfsSolver().solve(problem)
+    else:
+        plan, baseline = _solve(
+            problem,
+            workload_level,
+            ctx.day_time_limit_s(lunch_enabled),
+            pool=ctx.solver_pool,
+            seed=night.seed,
+        )
     return PlanningSession(
         dataset_id=dataset_id,
         region=region,
@@ -228,6 +281,7 @@ def start_session(
         baseline=baseline,
         workload_level=workload_level,
         lunch_enabled=lunch_enabled,
+        precomputed=night.precomputed,
     )
 
 
@@ -759,7 +813,7 @@ def apply_event(
         # останется. У остальных закрепление держит заявку у бригады и в следующих событиях.
         _pin_request(requests, choice_request_id(stored_event), chosen)
         requests = _release_pins(requests, engineers)
-    base = _day_problem(requests, engineers, ctx, session.workload_level, session.lunch_enabled)
+    base = day_problem(requests, engineers, ctx, session.workload_level, session.lunch_enabled)
     problem = _pinned_problem(base, session, stored_event)
     reassigned = stored_event.type == EventType.REQUEST_REASSIGNED
     if reassigned:

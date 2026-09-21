@@ -275,6 +275,17 @@ export interface PlanDiff {
   delay_forecast?: DelayForecast | null;
 }
 
+/**
+ * Утренний план взят из ночного расчёта (backend/scripts/night_plan.py), а не найден при загрузке дня.
+ * События дня пересчитываются от него на месте, как от любого утреннего плана.
+ */
+export interface PrecomputedPlan {
+  /** Сколько шёл ночной поиск, минуты. */
+  search_minutes: number;
+  /** Когда ночной расчёт закончился: ISO 8601 с часовым поясом машины, где он шёл. */
+  computed_at: string;
+}
+
 /** Визит утреннего плана: время и бригада, которые клиент услышал бы до событий дня. */
 export interface MorningVisit {
   request_id: string;
@@ -317,6 +328,8 @@ export interface PlanningState {
   timeline_ready: boolean;
   /** «Ломающее» событие, на котором стоит время, и его варианты; null — выбирать нечего. */
   pending_choice?: EventChoice | null;
+  /** Утренний план посчитан заранее ночным расчётом; null — найден при загрузке дня. */
+  precomputed?: PrecomputedPlan | null;
 }
 
 /**

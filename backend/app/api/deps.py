@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.api.ingest_service import BundleStore, IngestDeps
 from app.api.registry import DatasetRegistry
@@ -68,6 +69,34 @@ def build_llm(settings: Settings) -> LlmClient | None:
     )
 
 
+def planning_context(
+    settings: Settings,
+    osrm: OsrmClient | None,
+    cache: KVCache | None,
+    **extra: Any,
+) -> PlanningContext:
+    """Контекст планирования сервиса: модель дороги, пробки, OSRM, матрицы 2ГИС, лимиты поиска и ночные планы.
+
+    Им же строит день scripts/night_plan.py: задача дня собирается одинаково, и отпечаток ночного плана совпадает
+    с тем, что посчитает сервис на тех же бандлах, OSRM и файлах 2ГИС. extra — остальные поля PlanningContext
+    или замена полей выше.
+    """
+    values: dict[str, Any] = dict(
+        model=TravelModel(),
+        traffic=TrafficProfile.load(BACKEND_DIR / "config" / "traffic_profile.yaml"),
+        osrm=osrm,
+        cache=cache,
+        # Матрицы 2ГИС по регионам читаются один раз при старте. Каталога нет или файл не читается — сервис
+        # работает как без него, а минуты по парам точек дня из матриц берёт make_problem.
+        transit=load_transit_matrices(settings.transit_dir),
+        time_limit_s=settings.solver_time_limit_s,
+        time_limit_lunch_s=settings.solver_time_limit_lunch_s,
+        # Ночные планы лежат рядом с бандлами и попадают в образ вместе с ними.
+        night_plan_dir=settings.bundles_dir,
+    )
+    return PlanningContext(**{**values, **extra})
+
+
 def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) -> AppDeps:
     """Геокодер из geocoder_override ищет и по точке, если у него есть метод reverse."""
     kv = KVCache(settings.cache_path)
@@ -96,17 +125,11 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         threading.Thread(target=solver_pool.warm_up, name="solver-pool-warm-up", daemon=True).start()
 
     synth_config = SynthConfig.load(BACKEND_DIR / "config" / "synth_config.yaml")
-    planning = PlanningContext(
-        model=TravelModel(),
-        traffic=TrafficProfile.load(BACKEND_DIR / "config" / "traffic_profile.yaml"),
-        osrm=osrm,
-        cache=kv,
-        # Матрицы 2ГИС по регионам читаются один раз при старте. Каталога нет или файл не читается — сервис
-        # работает как без него, а минуты по парам точек дня из матриц берёт make_problem.
-        transit=load_transit_matrices(settings.transit_dir),
+    planning = planning_context(
+        settings,
+        osrm,
+        kv,
         solver_pool=solver_pool,
-        time_limit_s=settings.solver_time_limit_s,
-        time_limit_lunch_s=settings.solver_time_limit_lunch_s,
         geocode=geocode,
         # Уровень срочной заявки диспетчера по её типу работ — из того же конфига, что у заявок бандлов.
         tier_by_bk=synth_config.tier_by_bk,

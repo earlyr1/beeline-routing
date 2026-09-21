@@ -3,8 +3,10 @@ import {
   addMinutes,
   brigadeName,
   capitalize,
+  formatComputedAt,
   formatDuration,
   formatKm,
+  formatSearchTime,
   formatSigned,
   fromMinutes,
   isValidTime,
@@ -55,6 +57,20 @@ describe('format', () => {
     expect(formatDuration(45)).toBe('45 мин');
     expect(formatDuration(60)).toBe('1 ч');
     expect(formatDuration(365)).toBe('6 ч 5 мин');
+  });
+
+  it('shows how long the plan was searched for, in seconds when shorter than a minute', () => {
+    expect(formatSearchTime(120)).toBe('2 ч');
+    expect(formatSearchTime(90)).toBe('1 ч 30 мин');
+    expect(formatSearchTime(1)).toBe('1 мин');
+    expect(formatSearchTime(0.5)).toBe('30 с');
+    expect(formatSearchTime(1 / 600)).toBe('1 с');
+  });
+
+  it('shows when the nightly batch finished as it was written, without the time zone of the browser', () => {
+    expect(formatComputedAt('2026-09-21T03:10:05+03:00')).toBe('21.09 в 03:10');
+    expect(formatComputedAt('2026-09-21T23:59:00Z')).toBe('21.09 в 23:59');
+    expect(formatComputedAt('вчера ночью')).toBe('вчера ночью');
   });
 
   it('names a brigade without repeating the word «Бригада»', () => {

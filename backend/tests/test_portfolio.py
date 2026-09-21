@@ -169,7 +169,7 @@ def test_solve_uses_the_pool_with_the_share_of_the_event(monkeypatch):
             calls.append(share)
             return PORTFOLIO[: 4 // share]
 
-        def solve(self, problem, weights, limit, strategies):
+        def solve(self, problem, weights, limit, strategies, start=None):
             calls.append((limit, len(strategies), weights.reassignment))
             from app.solvers.fcfs import FcfsSolver
 

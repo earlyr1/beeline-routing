@@ -429,6 +429,17 @@ h4 {
   flex-direction: column;
 }
 
+/* Утренний план из ночного расчёта: короткая серая пометка под часами, как «Сейчас …», подробности в подсказке.
+   max-width переносит её на вторую строку, а не расширяет колонку заголовка. */
+.metrics-strip__origin {
+  font-size: 11px;
+  color: var(--muted);
+  max-width: 180px;
+  cursor: help;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
 .metrics-strip__actions {
   display: flex;
   gap: 6px;

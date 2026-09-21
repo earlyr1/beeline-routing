@@ -95,6 +95,16 @@ class AppliedEvent(BaseModel):
     version: int
 
 
+class PrecomputedPlan(BaseModel):
+    """Утренний план взят из ночного расчёта (app/planning/night.py), а не найден при загрузке дня.
+
+    События дня пересчитываются от него на месте, как от любого утреннего плана.
+    """
+
+    search_minutes: float  # сколько шёл ночной поиск
+    computed_at: str  # когда ночной расчёт закончился, ISO 8601 с часовым поясом машины, где он шёл
+
+
 BaseVariant = Literal["optimal", "stable", "keep"]
 # Стратегия «ломающего» события: одна из трёх базовых или «assign:<инженер>» — отдать заявку выбранной
 # бригаде (только у срочной заявки, см. app/planning/variants.py). Строка проверяется на границе API.

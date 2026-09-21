@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
 from app.domain.enums import Transport
 from app.domain.models import Engineer, Event, Office, Plan, Request
 from app.domain.timeutil import HHMM
-from app.planning.models import AppliedEvent, EventChoice, EventVariant, PlanDiff
+from app.planning.models import AppliedEvent, EventChoice, EventVariant, PlanDiff, PrecomputedPlan
 from app.planning.session import PlanningSession
 from app.planning.timeline import CURSOR_RANGE_TEXT, LAST_MINUTE, TimelineStatus
 from app.planning.workload import WORKLOAD_LEVEL_TEXT, is_workload_level
@@ -139,6 +139,9 @@ class PlanningState(BaseModel):
     timeline_ready: bool = True
     # «Ломающее» событие, на котором остановилось текущее время, и его варианты; null — выбирать нечего.
     pending_choice: EventChoice | None = None
+    # Откуда утренний план дня: посчитан заранее ночным расчётом (сколько шёл поиск и когда закончился) или null —
+    # найден при загрузке дня. События дня пересчитываются от утреннего плана на месте в обоих случаях.
+    precomputed: PrecomputedPlan | None = None
 
 
 class RouteLeg(BaseModel):
@@ -214,4 +217,5 @@ def to_planning_state(
         timeline=timeline or [],
         timeline_ready=timeline_ready,
         pending_choice=pending_choice,
+        precomputed=session.precomputed,
     )

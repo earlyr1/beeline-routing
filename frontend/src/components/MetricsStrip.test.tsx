@@ -159,6 +159,26 @@ describe('MetricsStrip', () => {
     expect(screen.getByText('Сейчас 09:00')).toBeInTheDocument();
   });
 
+  it('says that the morning plan was computed in advance by the nightly batch', () => {
+    useAppStore
+      .getState()
+      .setPlanningState(makePlanningState({ precomputed: { search_minutes: 120, computed_at: '2026-09-21T03:10:05+03:00' } }));
+    render(<MetricsStrip />);
+
+    const note = screen.getByText('Утренний план: ночной поиск 2 ч');
+    expect(note).toHaveAttribute(
+      'title',
+      'Утренний план посчитан заранее ночным расчётом: поиск 2 ч, закончен 21.09 в 03:10. ' +
+        'Сервис взял его вместо поиска при загрузке дня. События дня пересчитываются от него на месте, за секунды.',
+    );
+  });
+
+  it('says nothing about the origin of a plan found when the day was loaded', () => {
+    useAppStore.getState().setPlanningState(makePlanningState({ precomputed: null }));
+    render(<MetricsStrip />);
+    expect(screen.queryByText(/ночной поиск/)).not.toBeInTheDocument();
+  });
+
   it('shows the time on the clock of the day as the current time', () => {
     useAppStore.setState({ clock: '14:25' });
     render(<MetricsStrip />);

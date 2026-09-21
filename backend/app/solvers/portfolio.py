@@ -14,8 +14,9 @@ from __future__ import annotations
 import logging
 import multiprocessing
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor
+from dataclasses import replace
 
 from ortools.constraint_solver import routing_enums_pb2
 
@@ -127,13 +128,20 @@ class SolverPool:
         weights: ObjectiveWeights,
         time_limit_s: int,
         strategies: Sequence[SearchStrategy],
+        start: Mapping[str, list[str]] | None = None,
     ) -> Plan:
-        """Лучший план из поисков со стратегиями strategies, запущенных одновременно."""
+        """Лучший план из поисков со стратегиями strategies, запущенных одновременно.
+
+        start — маршруты, от которых стартует первая стратегия (ночной план дня); остальные строят первое решение
+        сами: поиски из одной точки с той же метаэвристикой повторили бы друг друга. Без start поиски стартуют
+        как обычно — от previous_order задачи, если он есть (перепланирование), иначе с нуля.
+        """
         pool = self._pool()
         futures: list[Future[dict[str, list[str]]]] = []
         try:
-            for strategy in strategies:
-                futures.append(pool.submit(_sequences, problem, weights, time_limit_s, strategy))
+            for index, strategy in enumerate(strategies):
+                task = replace(problem, previous_order=dict(start)) if start and index == 0 else problem
+                futures.append(pool.submit(_sequences, task, weights, time_limit_s, strategy))
         except RuntimeError as error:  # пул сломан или закрыт
             logger.warning("Пул поиска недоступен, план считается в текущем процессе: %s", error)
             self._reset(pool)

@@ -149,6 +149,20 @@ export function formatDuration(minutes: number): string {
   return rest === 0 ? `${hours} ч` : `${hours} ч ${rest} мин`;
 }
 
+/** Сколько шёл поиск плана: «2 ч», «1 ч 30 мин», а короче минуты — в секундах. */
+export function formatSearchTime(minutes: number): string {
+  return minutes < 1 ? `${Math.max(1, Math.round(minutes * 60))} с` : formatDuration(minutes);
+}
+
+/**
+ * Дата и время из ISO 8601 так, как они записаны: «21.09 в 03:10». Часовой пояс браузера не участвует —
+ * ночной расчёт идёт на машине диспетчера, и её время он и видит. Непонятная строка показывается как есть.
+ */
+export function formatComputedAt(iso: string): string {
+  const match = /^\d{4}-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso);
+  return match ? `${match[2]}.${match[1]} в ${match[3]}:${match[4]}` : iso;
+}
+
 export function formatKm(km: number): string {
   return `${km.toFixed(1).replace('.', ',')} км`;
 }
