@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from app.api.deps import AppDeps
 from app.api.registry import DatasetRecord
-from app.api.routes import Deps, _record, _session
+from app.api.routes import Deps, _record, _session, window_grid_problem
 from app.api.schemas import PlanningState
 from app.api.timeline import ensure_precompute, insert_and_replay, planning_state, settle
 from app.domain.models import Event
@@ -15,6 +15,7 @@ from app.llm.client import LlmError
 from app.llm.interpret import NOTHING_FOUND, interpret
 from app.llm.prompt import build_messages
 from app.llm.schemas import STATUS_DONE_RU, ChatRequest, ChatResponse, Proposal
+from app.planning.timeline import known_requests
 from app.planning.variants import is_choosable
 
 router = APIRouter(prefix="/api/datasets/{dataset_id}")
@@ -52,12 +53,21 @@ def _approve(deps: AppDeps, record: DatasetRecord, proposal: Proposal) -> Propos
     """Применяет одно предложение через таймлайн: событие встаёт на шкалу, текущее время переходит к нему.
 
     «Ломающее» событие сразу получает стратегию optimal. Вызывать под record.timeline_lock.
+
+    Окно проверяется сеткой ровно так же, как у события из диалога: подтверждение диспетчера — такой же выбор
+    окна, и путь «чат → одобрить» не должен быть дырой в правиле «клиенту называют слот».
     """
     ctx = deps.ingest.planning
     with record.lock:
         _session(record)
         cursor = record.cursor
         event = _refreshed(proposal.event, cursor)
+        known = known_requests(record.base, record.timeline.entries)
+        off_grid = window_grid_problem(deps, event, known)
+        if off_grid is not None:
+            failed = proposal.model_copy(update={"status": "failed", "event": event, "error": off_grid})
+            deps.proposals.save(record.dataset_id, failed)
+            return failed
         entry = record.timeline.create(
             event, checked=True, variant="optimal" if is_choosable(event) else None
         )
@@ -102,7 +112,11 @@ def chat(dataset_id: str, body: ChatRequest, deps: Deps) -> ChatResponse:
             entry.event.request.id for entry in record.timeline.entries if entry.event.request is not None
         }
     try:
-        result = deps.llm.complete(build_messages(body.text, session, now=cursor))
+        # Сетка окон визита уходит модели в правилах: окно, которое она назовёт, всё равно ляжет на слот,
+        # но с сеткой в правилах она называет слот сама.
+        result = deps.llm.complete(
+            build_messages(body.text, session, now=cursor, grid=deps.ingest.planning.window_grid)
+        )
     except LlmError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     taken = (

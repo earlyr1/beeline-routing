@@ -19,6 +19,7 @@ from app.domain.enums import (
 )
 from app.domain.models import Engineer, Event, Lunch, Office, Plan, Request, Visit
 from app.domain.timeutil import fmt_hhmm
+from app.domain.windows import TimeSlot
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.geo.osrm import OsrmClient
@@ -91,6 +92,9 @@ class PlanningContext:
     # Уровень распределения по типу заявки BK (tier_by_bk в config/synth_config.yaml), тот же, что у заявок бандла:
     # срочная заявка диспетчера получает уровень своего типа работ. Тип, которого здесь нет, — авария.
     tier_by_bk: Mapping[str, RequestTier] = field(default_factory=dict)
+    # Сетка окон визита (SynthConfig.window_grid): по ней помощник кладёт на слот окно, которое он назвал, — окно
+    # клиенту называют слотом. Пустая сетка — её никто не задал (планировщик в тестах, скрипты), и окно идёт как есть.
+    window_grid: Sequence[TimeSlot] = ()
     # Каталог ночных планов (app/planning/night.py): <каталог>/<регион>/night_plan.json, в сервисе это data/bundles.
     # None — ночные планы не ищутся, утренний план всегда ищется при загрузке.
     night_plan_dir: Path | None = None

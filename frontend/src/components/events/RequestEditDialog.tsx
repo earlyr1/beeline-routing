@@ -13,6 +13,7 @@ import { PRIORITY_LABELS, requestLabel, SKILL_LABELS, TRANSPORT_LABELS } from '.
 import { useAppStore } from '../../store/useAppStore';
 import { AsapToggle } from './AsapToggle';
 import { EquipmentToggle } from './EquipmentToggle';
+import { WindowSlotPicker } from './WindowSlotPicker';
 
 const SKILLS = Object.keys(SKILL_LABELS) as Skill[];
 const PRIORITIES = Object.keys(PRIORITY_LABELS) as Priority[];
@@ -36,6 +37,8 @@ function EditRequestForm({ original, engineers }: { original: ServiceRequest; en
   const pickedPoint = useAppStore((s) => s.pickedPoint);
   const startPick = useAppStore((s) => s.startPick);
   const closeEdit = useAppStore((s) => s.closeEdit);
+  // Сетка окон визита от сервера: новое окно диспетчер выбирает слотом. Пустая — окно вводят временем, как раньше.
+  const grid = useAppStore((s) => s.config?.window_grid) ?? [];
   const [form, setForm] = useState<RequestEditForm>(() => requestEditForm(original));
   // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
   const [time, setTime] = useState(() => useAppStore.getState().clock);
@@ -56,7 +59,7 @@ function EditRequestForm({ original, engineers }: { original: ServiceRequest; en
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    const found = validateRequestEdit(original, candidate, time);
+    const found = validateRequestEdit(original, candidate, time, grid);
     setErrors(found);
     if (found.length > 0) return;
     if (await applyEvent(requestUpdateEvent(original, candidate, time))) closeEdit();
@@ -82,19 +85,31 @@ function EditRequestForm({ original, engineers }: { original: ServiceRequest; en
         </div>
         <AsapToggle checked={form.asap} onChange={(checked) => update('asap', checked)} />
         <div className="field-row">
-          {/* Поля окна скрыты, пока стоит «Как можно скорее»; введённые значения остаются в форме. */}
-          {!form.asap && (
-            <>
-              <label className="field">
-                <span>Окно с</span>
-                <input type="time" value={form.windowStart} onChange={(event) => update('windowStart', event.target.value)} />
-              </label>
-              <label className="field">
-                <span>Окно до</span>
-                <input type="time" value={form.windowEnd} onChange={(event) => update('windowEnd', event.target.value)} />
-              </label>
-            </>
-          )}
+          {/* Окно скрыто, пока стоит «Как можно скорее»; выбранное остаётся в форме. */}
+          {/* С сеткой от сервера новое окно выбирают слотом: клиенту называют слот, а не произвольный интервал. */}
+          {!form.asap &&
+            (grid.length > 0 ? (
+              <WindowSlotPicker
+                grid={grid}
+                start={form.windowStart}
+                end={form.windowEnd}
+                time={time}
+                // У заявки «как можно скорее» окно задал сервер, и клиенту его не называли: снял галочку — выбери слот.
+                unnamed={original.asap}
+                onChange={(slot) => setForm((prev) => ({ ...prev, windowStart: slot.start, windowEnd: slot.end }))}
+              />
+            ) : (
+              <>
+                <label className="field">
+                  <span>Окно с</span>
+                  <input type="time" value={form.windowStart} onChange={(event) => update('windowStart', event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>Окно до</span>
+                  <input type="time" value={form.windowEnd} onChange={(event) => update('windowEnd', event.target.value)} />
+                </label>
+              </>
+            ))}
           <label className="field">
             <span>Длительность, мин</span>
             <input

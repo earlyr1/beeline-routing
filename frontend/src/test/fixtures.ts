@@ -1,4 +1,5 @@
 import type {
+  ClientConfig,
   DatasetStatus,
   DelayForecast,
   Engineer,
@@ -14,6 +15,7 @@ import type {
   ServiceRequest,
   Skill,
   TimelineItem,
+  TimeSlot,
   VariantOption,
   Visit,
   WorkType,
@@ -557,6 +559,31 @@ export function makeRouteGeometry(): RouteGeometry {
  */
 export const WORK_TYPES = urgentWorkTypes.work_types as WorkType[];
 export const WORK_TYPE_EVENTS = urgentWorkTypes.events as PlanEvent[];
+
+/**
+ * Сетка окон визита, как её отдаёт GET /api/config: рабочий день 10:00–22:00 по два часа. Ровно эти шесть окон
+ * стоят у заявок трёх реальных регионов выгрузки; backend строит их из смены и длины окна конфига.
+ */
+export const WINDOW_GRID: TimeSlot[] = [
+  { start: '10:00', end: '12:00' },
+  { start: '12:00', end: '14:00' },
+  { start: '14:00', end: '16:00' },
+  { start: '16:00', end: '18:00' },
+  { start: '18:00', end: '20:00' },
+  { start: '20:00', end: '22:00' },
+];
+
+/** Ответ GET /api/config с сеткой окон и типами работ: с ним диалоги выбирают окно слотом. */
+export function makeConfig(overrides: Partial<ClientConfig> = {}): ClientConfig {
+  return {
+    yandex_maps_api_key: null,
+    llm_enabled: false,
+    osrm_available: true,
+    work_types: WORK_TYPES,
+    window_grid: WINDOW_GRID,
+    ...overrides,
+  };
+}
 
 /** Тип работ эталона по его типу заявки BK. */
 export function workTypeOf(sourceTypeBk: string): WorkType {

@@ -939,11 +939,11 @@ export const useAppStore = create<AppState>()((set, get) => {
     },
 
     markAgreed(requestId) {
-      const { state, datasetId, agreed } = get();
+      const { state, datasetId, agreed, config } = get();
       if (!state || !datasetId) return;
       // Запоминаем окно, которое клиент теперь знает (в окно заявки план не попал — то, которое назвали вместо него):
-      // когда обещание снова разойдётся с планом, отметка сама перестанет совпадать.
-      const next = { ...agreed, [requestId]: agreedWindow(state, requestId) };
+      // когда обещание снова разойдётся с планом, отметка сама перестанет совпадать. Названное окно — слот сетки.
+      const next = { ...agreed, [requestId]: agreedWindow(state, requestId, config?.window_grid ?? []) };
       saveAgreed(datasetId, next);
       set({ agreed: next });
     },

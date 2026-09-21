@@ -8,6 +8,7 @@ import {
   makePlanningState,
   makeReassignEvent,
   makeRequestUpdateEvent,
+  WINDOW_GRID,
   WORK_TYPE_EVENTS,
   WORK_TYPES,
   workTypeOf,
@@ -223,6 +224,47 @@ describe('events', () => {
     expect(defaultUrgentWindow('00:00', engineers)).toEqual({ windowStart: '10:00', windowEnd: '12:00' });
     expect(defaultUrgentWindow('13:15', engineers)).toEqual({ windowStart: '13:15', windowEnd: '15:15' });
     expect(defaultUrgentWindow('00:00', [])).toEqual({ windowStart: '00:00', windowEnd: '02:00' });
+  });
+
+  it('offers by default a slot the brigade still gets to, never one that is about to end', () => {
+    const { engineers } = makePlanningState();
+    // В 13:15 до конца слота 12:00–14:00 остаётся 45 минут, а работы идут час: в него уже не успеть.
+    expect(defaultUrgentWindow('13:15', engineers, WINDOW_GRID, 60)).toEqual({ windowStart: '14:00', windowEnd: '16:00' });
+    expect(defaultUrgentWindow('13:15', engineers, WINDOW_GRID, 20)).toEqual({ windowStart: '12:00', windowEnd: '14:00' });
+    // До начала смен окно всё равно начинается со смены: первый слот сетки.
+    expect(defaultUrgentWindow('00:00', engineers, WINDOW_GRID, 80)).toEqual({ windowStart: '10:00', windowEnd: '12:00' });
+    // Вечером успевать некуда: остаётся последний слот, а не первый.
+    expect(defaultUrgentWindow('21:40', engineers, WINDOW_GRID, 60)).toEqual({ windowStart: '20:00', windowEnd: '22:00' });
+  });
+
+  it('checks the window of the form against the grid and against the time of the event', () => {
+    const urgent = { ...form, windowStart: '12:00', windowEnd: '14:00', time: '11:00' };
+    expect(validateUrgentForm(urgent, WINDOW_GRID)).toEqual([]);
+    expect(validateUrgentForm({ ...urgent, windowStart: '11:30', windowEnd: '13:30' }, WINDOW_GRID)).toEqual([
+      'Выберите окно визита из сетки: 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00',
+    ]);
+    // Слот, который к времени события уже прошёл, сервер отклоняет: диспетчер узнаёт это до запроса.
+    expect(validateUrgentForm({ ...urgent, time: '14:00' }, WINDOW_GRID)).toEqual([
+      'Окно 12:00–14:00 уже закончилось: выберите слот, который ещё не прошёл',
+    ]);
+    // Без сетки (старый сервер, офлайн) окно по-прежнему вводится временем, и прошедшее отклоняет сервер.
+    expect(validateUrgentForm({ ...urgent, time: '14:00' })).toEqual([]);
+  });
+
+  it('treats a window left by «как можно скорее» as a new one and asks for a slot', () => {
+    const stored = makeAsapRequest();
+    const asapForm = requestEditForm(stored);
+    // Окно 13:00–22:00 задал сервер, и клиенту его не называли: снятой галочки мало, нужен слот.
+    expect(validateRequestEdit(stored, { ...asapForm, asap: false }, '13:30', WINDOW_GRID)).toEqual([
+      'Выберите окно визита из сетки: 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00',
+    ]);
+    expect(
+      validateRequestEdit(stored, { ...asapForm, asap: false, windowStart: '14:00', windowEnd: '16:00' }, '13:30', WINDOW_GRID),
+    ).toEqual([]);
+    // Своё окно заявки данных сеткой не проверяется, пока диспетчер его не трогает.
+    const emergency = { ...stored, asap: false, window_start: '00:01', window_end: '23:59' } as ServiceRequest;
+    const kept = requestEditForm(emergency);
+    expect(validateRequestEdit(emergency, { ...kept, durationMin: 90 }, '13:30', WINDOW_GRID)).toEqual([]);
   });
 
   it('counts visits left after a time and picks the busiest available engineer', () => {

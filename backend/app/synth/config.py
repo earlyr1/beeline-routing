@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from app.domain.enums import RequestTier, Skill, Transport
 from app.domain.timeutil import HHMM
+from app.domain.windows import TimeSlot, build_slots
 
 # Доли жеребьёвки транспорта инженеров (app/synth/engineers.py) по прежним четырём типам и в прежнем порядке.
 # «foot» — бывший тип «Пешеход»: теперь он часть общественного транспорта, но в жеребьёвке остаётся отдельной долей,
@@ -41,6 +42,8 @@ class ShiftTemplate(BaseModel):
 
 class UrgentEventConfig(BaseModel):
     duration_min: int
+    # Длина окна визита: и слот сетки окон (SynthConfig.window_grid), и окно демо-события бандла. Одно число
+    # на весь сервис, чтобы длина окна нигде не разошлась сама с собой.
     window_min: int
 
 
@@ -68,6 +71,22 @@ class SynthConfig(BaseModel):
     home_districts: list[str] = []
     shifts: list[ShiftTemplate]
     urgent_event: UrgentEventConfig
+
+    @property
+    def window_grid(self) -> list[TimeSlot]:
+        """Сетка окон визита (app/domain/windows.py): рабочий день смен по слоту длиной окна.
+
+        Одно определение сетки на весь сервис: день берётся из shifts, а длина слота — из urgent_event.window_min,
+        поэтому сетка не может разойтись ни со сменой, ни с длиной окна. Отсюда её отдаёт GET /api/config, по ней
+        сервер проверяет окно диспетчера и по ней помощник кладёт на слот окно, которое назвал.
+        """
+        if not self.shifts:
+            return []
+        return build_slots(
+            min(shift.start for shift in self.shifts),
+            max(shift.end for shift in self.shifts),
+            self.urgent_event.window_min,
+        )
 
     @classmethod
     def load(cls, path: Path) -> SynthConfig:

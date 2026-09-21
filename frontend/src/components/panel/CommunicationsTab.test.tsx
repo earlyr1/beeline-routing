@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlanningState } from '../../api/types';
 import { cancelEvent } from '../../lib/events';
 import { useAppStore } from '../../store/useAppStore';
-import { makePlanningState, makeTimeline } from '../../test/fixtures';
+import { makeConfig, makePlanningState, makeTimeline } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { CommunicationsTab } from './CommunicationsTab';
 
@@ -36,7 +36,7 @@ function callingDay(): PlanningState {
 }
 
 beforeEach(() => {
-  resetStore({ datasetId: 'd_test', state: callingDay(), clock: '13:00' });
+  resetStore({ datasetId: 'd_test', state: callingDay(), clock: '13:00', config: makeConfig() });
 });
 
 describe('CommunicationsTab', () => {
@@ -55,7 +55,7 @@ describe('CommunicationsTab', () => {
     expect(late).toHaveClass('call--red');
     expect(within(late).getByText('Вне окна')).toBeInTheDocument();
     expect(
-      within(late).getByText('не попадаем в окно 12:00–14:00 — назовите окно 15:00–17:00 · Бригада Арташкин'),
+      within(late).getByText('не попадаем в окно 12:00–14:00 — назовите окно 14:00–16:00 · Бригада Арташкин'),
     ).toBeInTheDocument();
 
     // Окно подвинул сам диспетчер: клиенту нужно назвать новое.
@@ -67,7 +67,7 @@ describe('CommunicationsTab', () => {
 
   it('says nothing about a visit that moved inside the window of the client or went to another brigade', () => {
     // 50104 уехала от Белузина к Арташкину, 46393 переехала с 15:00 на 15:10 — оба внутри окон клиентов.
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', config: makeConfig() });
     render(<CommunicationsTab />);
     expect(rows()).toHaveLength(1);
     expect(rowOf('18754')).toBeInTheDocument();
@@ -132,14 +132,14 @@ describe('CommunicationsTab', () => {
 
   it('lets go of the visits of the day that are already over', () => {
     // К девяти вечера работы плана закончились: звонить остаётся только тому, к кому сегодня не приедут.
-    resetStore({ datasetId: 'd_test', state: callingDay(), clock: '21:00' });
+    resetStore({ datasetId: 'd_test', state: callingDay(), clock: '21:00', config: makeConfig() });
     render(<CommunicationsTab />);
     expect(rows()).toHaveLength(1);
     expect(within(rowOf('18754')).getByText('сегодня не приедем, обещали окно 18:00–20:00')).toBeInTheDocument();
   });
 
   it('warns that the clock has not reached the events on the time bar yet', () => {
-    resetStore({ datasetId: 'd_test', clock: '13:00', state: { ...callingDay(), timeline: makeTimeline() } });
+    resetStore({ datasetId: 'd_test', clock: '13:00', state: { ...callingDay(), timeline: makeTimeline() }, config: makeConfig() });
     render(<CommunicationsTab />);
     expect(screen.getByText(/События впереди часов|события впереди часов/)).toBeInTheDocument();
   });
@@ -158,6 +158,7 @@ describe('CommunicationsTab', () => {
     resetStore({
       datasetId: 'd_test',
       state: { ...state, requests: state.requests.filter((request) => request.id !== '18754') },
+      config: makeConfig(),
     });
     render(<CommunicationsTab />);
     expect(screen.getByText('Звонить некому: обещанные клиентам окна выполняются.')).toBeInTheDocument();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HHMM, PlanningState } from '../api/types';
-import { makeAsapRequest, makeAsapState, makePlanningState, makeTimelineItem } from '../test/fixtures';
+import { makeAsapRequest, makeAsapState, makePlanningState, makeTimelineItem, WINDOW_GRID } from '../test/fixtures';
 import {
   agreedWindow,
   callAgreedText,
@@ -99,9 +99,9 @@ const withMorningVisit =
     morning: state.morning.map((item) => (item.request_id === requestId ? { ...item, start } : item)),
   });
 
-/** Список звонков по текущему плану; на часах фикстуры 13:00. */
+/** Список звонков по текущему плану; на часах фикстуры 13:00, сетка окон — та, что отдаёт сервер. */
 const calls = (planning: PlanningState, agreed: AgreedWindows = {}, clock: HHMM = '13:00') =>
-  callList(planning, agreed, clock);
+  callList(planning, agreed, clock, WINDOW_GRID);
 
 const ids = (rows: { requestId: string }[]) => rows.map((row) => row.requestId);
 const row = <T extends { requestId: string }>(rows: T[], requestId: string): T =>
@@ -128,13 +128,13 @@ describe('callList', () => {
       severity: 'red',
       known: { start: '12:00', end: '14:00' },
       missed: { start: '12:00', end: '14:00' },
-      // Новое окно той же длины от получасовой отметки перед визитом: минуту плана клиенту не называют.
-      promise: { start: '15:00', end: '17:00' },
+      // Новое окно — слот сетки, в который попал визит: минуту плана клиенту не называют.
+      promise: { start: '14:00', end: '16:00' },
       start: '15:10',
       engineerId: 'E01',
     });
     expect(callChangeText(row(calls(late).pending, '86160'))).toBe(
-      'не попадаем в окно 12:00–14:00 — назовите окно 15:00–17:00',
+      'не попадаем в окно 12:00–14:00 — назовите окно 14:00–16:00',
     );
 
     // Раньше начала окна — то же самое: клиента в это время может не быть дома, и окно ему называют другое.
@@ -179,13 +179,13 @@ describe('callList', () => {
     const missed = day(withWindow('86160', '16:00', '18:00'), withVisit('86160', '18:30', '19:30'));
     expect(row(calls(missed).pending, '86160')).toMatchObject({ kind: 'outside', severity: 'red' });
     expect(callChangeText(row(calls(missed).pending, '86160'))).toBe(
-      'не попадаем в окно 16:00–18:00 — назовите окно 18:30–20:30',
+      'не попадаем в окно 16:00–18:00 — назовите окно 18:00–20:00',
     );
 
     // Окно сузили, и визит выпал уже из него: клиенту про это узкое окно говорить нечего.
     const narrowed = day(withWindow('86160', '12:00', '13:00'), withVisit('86160', '13:30', '14:30'));
     expect(callChangeText(row(calls(narrowed).pending, '86160'))).toBe(
-      'не попадаем в окно 12:00–13:00 — назовите окно 13:30–14:30',
+      'не попадаем в окно 12:00–13:00 — назовите окно 12:00–14:00',
     );
   });
 
@@ -205,21 +205,21 @@ describe('callList', () => {
   });
 
   it('settles a broken window by the window named on the phone and calls again when the visit leaves it', () => {
-    // Окно заявки 12:00–14:00 план не выполняет: диспетчер назвал клиенту 15:00–17:00 и отметил «Согласовано».
+    // Окно заявки 12:00–14:00 план не выполняет: диспетчер назвал клиенту слот 14:00–16:00 и отметил «Согласовано».
     const late = day(withVisit('86160', '15:10', '16:10'));
-    const told: AgreedWindows = { '86160': agreedWindow(late, '86160') };
-    expect(told['86160']).toMatchObject({ window: { start: '15:00', end: '17:00' } });
+    const told: AgreedWindows = { '86160': agreedWindow(late, '86160', WINDOW_GRID) };
+    expect(told['86160']).toMatchObject({ window: { start: '14:00', end: '16:00' } });
 
     const settled = calls(late, told);
     expect(ids(settled.pending)).toEqual(['18754']);
-    expect(settled.agreed.map(callAgreedText)).toEqual(['договорились на окно 15:00–17:00']);
+    expect(settled.agreed.map(callAgreedText)).toEqual(['договорились на окно 14:00–16:00']);
 
     // Внутри названного окна визит ходит молча: клиенту обещали окно, а не минуту.
-    expect(ids(calls(day(withVisit('86160', '16:40', '17:40')), told).pending)).toEqual(['18754']);
+    expect(ids(calls(day(withVisit('86160', '15:40', '16:40')), told).pending)).toEqual(['18754']);
 
-    // А из него уехал — звоним снова и называем следующее окно.
+    // А из него уехал — звоним снова и называем следующий слот.
     const back = calls(day(withVisit('86160', '17:30', '18:30')), told);
-    expect(callChangeText(row(back.pending, '86160'))).toBe('не попадаем в окно 15:00–17:00 — назовите окно 17:30–19:30');
+    expect(callChangeText(row(back.pending, '86160'))).toBe('не попадаем в окно 14:00–16:00 — назовите окно 16:00–18:00');
   });
 
   it('remembers an agreed «сегодня не приедем» and calls again when the visit comes back', () => {
@@ -245,6 +245,61 @@ describe('callList', () => {
 
     // Часы вернулись к тому же плану: отметка снова сравнивается, и звонить не о чем.
     expect(ids(calls(day(), { '18754': { window: null, version: 4 } }).agreed)).toEqual(['18754']);
+  });
+
+  it('names a slot of the grid, never an interval of its own', () => {
+    // Куда бы ни уехал визит, названное окно — слот сетки: диспетчер предлагает клиенту слот.
+    for (const [start, end, slot] of [
+      // Визит раньше рабочего дня и визит за его концом своего слота не имеют: называют ближайший.
+      ['09:30', '10:30', '10:00–12:00'],
+      ['15:10', '16:10', '14:00–16:00'],
+      ['17:45', '18:45', '16:00–18:00'],
+      ['21:50', '22:50', '20:00–22:00'],
+      ['22:30', '23:30', '20:00–22:00'],
+    ] as const) {
+      const promise = row(calls(day(withVisit('86160', start, end)), {}, '00:00').pending, '86160').promise!;
+      expect(`${promise.start}–${promise.end}`).toBe(slot);
+      expect(WINDOW_GRID).toContainEqual({ start: promise.start, end: promise.end });
+    }
+
+    // Без сетки от сервера (старый сервер, офлайн) окно прежнее: получасовая отметка перед визитом.
+    const late = day(withVisit('86160', '15:10', '16:10'));
+    expect(callList(late, {}, '13:00').pending.find((call) => call.requestId === '86160')?.promise).toEqual({
+      start: '15:00',
+      end: '17:00',
+      asap: false,
+    });
+  });
+
+  it('offers a slot even when the request carries a window that is not one', () => {
+    // У аварии выгрузки окно 00:01–23:59 — пометка данных, а не обещание клиенту: называют слот вокруг визита.
+    const emergency = day(withWindow('86160', '00:01', '23:59'), withVisit('86160', '15:10', '16:10'));
+    const told: AgreedWindows = { '86160': { window: null, version: 4 } };
+    const returned = row(calls(emergency, told).pending, '86160');
+    expect(returned.promise).toEqual({ start: '14:00', end: '16:00', asap: false });
+    expect(callChangeText(returned)).toBe('сказали, что сегодня не приедем → приедем в окно 14:00–16:00');
+
+    // «Согласовано» запоминает тот же слот, и строка после него уходит вниз, а не возвращается.
+    const mark: AgreedWindows = { '86160': agreedWindow(emergency, '86160', WINDOW_GRID) };
+    expect(mark['86160']).toMatchObject({ window: { start: '14:00', end: '16:00' } });
+    expect(calls(emergency, mark).agreed.map(callAgreedText)).toEqual(['договорились на окно 14:00–16:00']);
+  });
+
+  it('does not name a window that ran out while the brigade was already at the client', () => {
+    // Визит 13:50–15:00 ещё идёт, а слот вокруг его начала (12:00–14:00) к 14:20 уже кончился.
+    const late = day(withVisit('46393', '13:50', '15:00'));
+    const underway = row(calls(late, {}, '14:20').pending, '46393');
+    expect(underway).toMatchObject({ kind: 'outside', underway: true, promise: { start: '12:00', end: '14:00' } });
+    expect(callChangeText(underway)).toBe('не попадаем в окно 15:00–17:00 — бригада уже у клиента');
+
+    // Названное окно всё равно держит начало визита: после «Согласовано» строка уходит, а не возвращается навсегда.
+    const told: AgreedWindows = { '46393': agreedWindow(late, '46393', WINDOW_GRID) };
+    expect(ids(calls(late, told, '14:20').pending)).not.toContain('46393');
+
+    // Пока слот идёт, диспетчер называет его как обычно.
+    expect(callChangeText(row(calls(late, {}, '13:55').pending, '46393'))).toBe(
+      'не попадаем в окно 15:00–17:00 — назовите окно 12:00–14:00',
+    );
   });
 
   it('sorts the calls: the broken promises first, then by the time of the day', () => {
@@ -311,17 +366,17 @@ describe('callList', () => {
   });
 
   it('takes the window to remember from the current plan', () => {
-    expect(agreedWindow(day(), '50104')).toMatchObject({
+    expect(agreedWindow(day(), '50104', WINDOW_GRID)).toMatchObject({
       window: { start: '14:00', end: '16:00' },
       requestWindow: { start: '14:00', end: '16:00' },
       version: 4,
     });
     // Визит вне окна заявки: клиенту назвали новое окно, а окно самой заявки отметка помнит отдельно.
-    expect(agreedWindow(day(withVisit('86160', '15:10', '16:10')), '86160')).toMatchObject({
-      window: { start: '15:00', end: '17:00' },
+    expect(agreedWindow(day(withVisit('86160', '15:10', '16:10')), '86160', WINDOW_GRID)).toMatchObject({
+      window: { start: '14:00', end: '16:00' },
       requestWindow: { start: '12:00', end: '14:00' },
     });
     // Визита нет: отметка значит «сказали, что сегодня не приедем».
-    expect(agreedWindow(day(), '18754')).toMatchObject({ window: null, version: 4 });
+    expect(agreedWindow(day(), '18754', WINDOW_GRID)).toMatchObject({ window: null, version: 4 });
   });
 });

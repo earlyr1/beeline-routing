@@ -32,11 +32,13 @@ export function CommunicationsTab() {
   const markAgreed = useAppStore((s) => s.markAgreed);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const selectRequest = useAppStore((s) => s.selectRequest);
+  // Сетка окон визита от сервера: окно, которое диспетчер назовёт клиенту, — её слот.
+  const grid = useAppStore((s) => s.config?.window_grid) ?? [];
   // Заявка, у которой диспетчер открыл «Клиент отказался»: выбор стратегии отмены разворачивается прямо в строке.
   const [refusing, setRefusing] = useState<string | null>(null);
   if (!state) return null;
 
-  const { pending, agreed: settled } = callList(state, agreed, clock);
+  const { pending, agreed: settled } = callList(state, agreed, clock, grid);
   const requests = byId(state.requests);
   const engineers = byId(state.engineers);
   const assigned = assignmentIndex(state.plan);

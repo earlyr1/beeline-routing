@@ -11,7 +11,7 @@ import type { PlanningState, ServiceRequest, Transport } from '../../api/types';
 import { BEFORE_SHIFTS_HINT, cancelEvent, unavailableEvent } from '../../lib/events';
 import { toMinutes } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
-import { makeAsapRequest, makeAsapState, makePlanningState, makeTimeline, WORK_TYPES } from '../../test/fixtures';
+import { makeAsapRequest, makeAsapState, makeConfig, makePlanningState, makeTimeline, WINDOW_GRID, WORK_TYPES } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { EngineerDelayDialog } from './EngineerDelayDialog';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
@@ -42,8 +42,15 @@ function withBusyBeluzin(state: PlanningState): PlanningState {
   return { ...state, plan: { ...state.plan, routes } };
 }
 
+/** Диспетчер выбрал слот сетки в списке «Окно визита». */
+const chooseSlot = (label: string) => {
+  const option = within(screen.getByLabelText('Окно визита')).getByRole('option', { name: label }) as HTMLOptionElement;
+  fireEvent.change(screen.getByLabelText('Окно визита'), { target: { value: option.value } });
+};
+
 beforeEach(() => {
-  resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+  // Сетка окон визита приходит от сервера, типов работ в этом блоке нет: так выглядит диалог до их появления.
+  resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', config: makeConfig({ work_types: [] }) });
 });
 
 describe('UrgentRequestDialog', () => {
@@ -72,10 +79,11 @@ describe('UrgentRequestDialog', () => {
 
     const event = applyEvent.mock.calls[0][0];
     expect(event).toMatchObject({ type: 'urgent', time: '13:15', request_id: null });
+    // Клиенту называют слот: ближайший, в который бригада ещё успевает с часовыми работами (в 12:00–14:00 их уже не сделать).
     expect(event.request).toMatchObject({
       address: 'Город Москва, ул.Ташкентская, д. 16к2',
-      window_start: '13:15',
-      window_end: '15:15',
+      window_start: '14:00',
+      window_end: '16:00',
       duration_min: 60,
       skill: 'emergency',
       transport_required: 'car',
@@ -102,12 +110,12 @@ describe('UrgentRequestDialog', () => {
 
   it('starts the default window inside working hours right after planning the day', async () => {
     const state = makePlanningState({ now: '00:00' });
-    resetStore({ datasetId: 'd_test', state, clock: '00:00' });
+    resetStore({ datasetId: 'd_test', state, clock: '00:00', config: makeConfig({ work_types: [] }) });
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
     render(<UrgentRequestDialog onClose={() => undefined} />);
     expect(valueOf('Время события')).toBe('00:00');
-    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['10:00', '12:00']);
+    expect(valueOf('Окно визита')).toBe('10:00-12:00');
     expect(screen.getByText(BEFORE_SHIFTS_HINT)).toHaveClass('muted');
 
     fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
@@ -124,17 +132,36 @@ describe('UrgentRequestDialog', () => {
     expect(overlapping.map((engineer) => engineer.id)).toEqual(['E01', 'E02']);
   });
 
-  it('moves the default window with the event time until the dispatcher edits it', () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState({ now: '00:00' }), clock: '00:00' });
+  it('offers the slots of the grid and moves the default one with the event time until the dispatcher picks', () => {
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState({ now: '00:00' }),
+      clock: '00:00',
+      config: makeConfig({ work_types: [] }),
+    });
     render(<UrgentRequestDialog onClose={() => undefined} />);
-    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '09:00' } });
-    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['10:00', '12:00']);
-    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '13:30' } });
-    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:30', '15:30']);
+    // Свободных полей времени нет: диспетчер предлагает клиенту слот, а не произвольный интервал.
+    expect(screen.queryByLabelText('Окно с')).not.toBeInTheDocument();
+    expect(optionsOf('Окно визита')).toEqual(WINDOW_GRID.map((slot) => `${slot.start}–${slot.end}`));
 
-    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '17:00' } });
+    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '09:00' } });
+    expect(valueOf('Окно визита')).toBe('10:00-12:00');
+    // В 13:30 до конца 12:00–14:00 остаётся полчаса, а работы идут час: предлагается слот, в который успеваем.
+    fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '13:30' } });
+    expect(valueOf('Окно визита')).toBe('14:00-16:00');
+    // Прошедших слотов в списке нет, а идущий подписан: выбирать остаётся из того, что сервер примет.
+    expect(optionsOf('Окно визита')).toEqual([
+      '12:00–14:00 (идёт сейчас)',
+      '14:00–16:00',
+      '16:00–18:00',
+      '18:00–20:00',
+      '20:00–22:00',
+    ]);
+
+    // Диспетчер выбрал слот сам: время события его больше не двигает.
+    chooseSlot('16:00–18:00');
     fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '14:00' } });
-    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:30', '17:00']);
+    expect(valueOf('Окно визита')).toBe('16:00-18:00');
   });
 
   it('uses a point picked on the map and starts picking mode', () => {
@@ -223,24 +250,23 @@ describe('UrgentRequestDialog as soon as possible', () => {
     const engineers = state.engineers.map((engineer) =>
       engineer.id === 'E02' ? { ...engineer, shift_end: '23:00' } : engineer.id === 'E03' ? { ...engineer, shift_end: '23:30' } : engineer,
     );
-    resetStore({ datasetId: 'd_test', state: { ...state, engineers }, clock: '13:00', applyEvent });
+    resetStore({ datasetId: 'd_test', state: { ...state, engineers }, clock: '13:00', applyEvent, config: makeConfig({ work_types: [] }) });
     render(<UrgentRequestDialog onClose={onClose} />);
     const asap = screen.getByLabelText('Как можно скорее');
     expect(asap).not.toBeChecked();
-    expect(isBefore(asap, screen.getByLabelText('Окно с'))).toBe(true);
+    expect(isBefore(asap, screen.getByLabelText('Окно визита'))).toBe(true);
     expect(screen.queryByText(ASAP_HINT)).not.toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '12:00' } });
+    chooseSlot('16:00–18:00');
     fireEvent.click(asap);
     expect(asap).toBeChecked();
-    expect(screen.queryByLabelText('Окно с')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Окно до')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Окно визита')).not.toBeInTheDocument();
     expect(screen.getByText(ASAP_HINT)).toHaveClass('muted');
     expect(screen.getByLabelText('Длительность, мин')).toBeInTheDocument();
 
     fireEvent.click(asap);
     expect(asap).not.toBeChecked();
-    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:00', '12:00']);
+    expect(valueOf('Окно визита')).toBe('16:00-18:00');
     expect(screen.queryByText(ASAP_HINT)).not.toBeInTheDocument();
 
     fireEvent.click(asap);
@@ -285,7 +311,7 @@ describe('UrgentRequestDialog as soon as possible', () => {
 });
 
 describe('UrgentRequestDialog work types', () => {
-  const config = { yandex_maps_api_key: null, llm_enabled: false, osrm_available: true };
+  const config = makeConfig({ work_types: [] });
   const submit = () => screen.getByRole('button', { name: 'Добавить и перепланировать' });
   /** Подписи полей диалога по порядку: что диспетчер видит и может заполнить. */
   const fieldLabels = () =>
@@ -299,7 +325,7 @@ describe('UrgentRequestDialog work types', () => {
   };
 
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', config: { ...config, work_types: WORK_TYPES } });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00', config: makeConfig({ work_types: WORK_TYPES }) });
   });
 
   it('opens on «Авария» collapsed to the place and the time and sends it as soon as possible with the norms', async () => {
@@ -351,15 +377,15 @@ describe('UrgentRequestDialog work types', () => {
       'Тип работ',
       'Адрес',
       'Как можно скорее',
-      'Окно с',
-      'Окно до',
+      'Окно визита',
       'Длительность, мин',
       'Транспорт',
       'Нужно оборудование',
       'Время события',
     ]);
     expect(filled()).toEqual({ duration: '70', transport: '', equipment: true, asap: false });
-    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:00', '15:00']);
+    // В 13:00 в слот 12:00–14:00 с работами аварии уже не уложиться: по умолчанию подставлен следующий.
+    expect(valueOf('Окно визита')).toBe('14:00-16:00');
 
     chooseType('Ремонт у клиента');
     expect(filled()).toEqual({ duration: '30', transport: '', equipment: false, asap: false });
@@ -391,8 +417,7 @@ describe('UrgentRequestDialog work types', () => {
     fireEvent.change(screen.getByLabelText('Транспорт'), { target: { value: '' } });
     fireEvent.click(screen.getByLabelText('Нужно оборудование'));
     fireEvent.click(screen.getByLabelText('Как можно скорее'));
-    fireEvent.change(screen.getByLabelText('Окно с'), { target: { value: '15:00' } });
-    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '17:00' } });
+    chooseSlot('16:00–18:00');
     fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
     fireEvent.click(submit());
 
@@ -403,8 +428,8 @@ describe('UrgentRequestDialog work types', () => {
       transport_required: null,
       needs_equipment: true,
       asap: false,
-      window_start: '15:00',
-      window_end: '17:00',
+      window_start: '16:00',
+      window_end: '18:00',
       source_type_bk: 'Глобальная проблема',
     });
   });
@@ -476,9 +501,12 @@ describe('UrgentRequestDialog work types', () => {
     });
   });
 
-  it('keeps the old form with the skill when the server sends no work types', () => {
-    useAppStore.setState({ config });
+  it('keeps the old form with the skill and the time fields when the server sends neither work types nor the grid', () => {
+    useAppStore.setState({ config: { ...config, window_grid: [] } });
     render(<UrgentRequestDialog onClose={() => undefined} />);
+    // Сетку окон задаёт сервер, своей у диалога нет: без неё окно вводят временем, как раньше.
+    expect(screen.queryByLabelText('Окно визита')).not.toBeInTheDocument();
+    expect([valueOf('Окно с'), valueOf('Окно до')]).toEqual(['13:00', '15:00']);
     expect(screen.queryByLabelText('Тип работ')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Изменить' })).not.toBeInTheDocument();
     expect([valueOf('Навык'), valueOf('Длительность, мин'), valueOf('Транспорт')]).toEqual(['emergency', '60', 'car']);
@@ -942,7 +970,13 @@ describe('RequestEditDialog', () => {
   const submitButton = () => screen.getByRole('button', { name: 'Сохранить и перепланировать' });
 
   beforeEach(() => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:30', editingRequestId: '46393' });
+    resetStore({
+      datasetId: 'd_test',
+      state: makePlanningState(),
+      clock: '13:30',
+      editingRequestId: '46393',
+      config: makeConfig({ work_types: [] }),
+    });
   });
 
   it('prefills the form from the current request', () => {
@@ -950,7 +984,17 @@ describe('RequestEditDialog', () => {
     expect(screen.getByRole('dialog', { name: 'Изменить заявку' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Изменить заявку 46393' })).toBeInTheDocument();
     expect(valueOf('Адрес')).toBe('Город Москва, ул.Шарикоподшипниковская, д. 14');
-    expect([valueOf('Окно с'), valueOf('Окно до'), valueOf('Длительность, мин')]).toEqual(['15:00', '17:00', '45']);
+    // Окно заявки 15:00–17:00 не с сетки (так пришло из данных): список показывает его как есть, не подменяя молча.
+    // Слотов, закончившихся к времени события (13:30), в списке нет, а идущий подписан.
+    expect([valueOf('Окно визита'), valueOf('Длительность, мин')]).toEqual(['', '45']);
+    expect(optionsOf('Окно визита')).toEqual([
+      '15:00–17:00',
+      '12:00–14:00 (идёт сейчас)',
+      '14:00–16:00',
+      '16:00–18:00',
+      '18:00–20:00',
+      '20:00–22:00',
+    ]);
     expect([valueOf('Навык'), valueOf('Приоритет'), valueOf('Транспорт'), valueOf('Время события')]).toEqual([
       'local',
       'normal',
@@ -978,17 +1022,28 @@ describe('RequestEditDialog', () => {
     expect(applyEvent).not.toHaveBeenCalled();
   });
 
-  it('checks the window and the event time', async () => {
+  it('checks the event time and lets the window of the data through while the dispatcher keeps it', async () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
     render(<RequestEditDialog />);
-    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '14:30' } });
+    // Окно заявки не с сетки, но диспетчер его не трогал: менять длительность это не мешает (так смотрит и сервер).
+    fireEvent.change(screen.getByLabelText('Длительность, мин'), { target: { value: '60' } });
     fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '' } });
     fireEvent.click(submitButton());
-    expect(await screen.findByText('Конец окна должен быть позже начала')).toBeInTheDocument();
-    expect(screen.getByText('Укажите время в формате ЧЧ:ММ')).toBeInTheDocument();
-    expect(screen.queryByText('Ничего не изменилось')).not.toBeInTheDocument();
+    expect(await screen.findByText('Укажите время в формате ЧЧ:ММ')).toBeInTheDocument();
+    expect(screen.queryByText(/Выберите окно визита из сетки/)).not.toBeInTheDocument();
     expect(applyEvent).not.toHaveBeenCalled();
+  });
+
+  it('moves the window only to a slot of the grid', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    useAppStore.setState({ applyEvent });
+    render(<RequestEditDialog />);
+    chooseSlot('16:00–18:00');
+    expect(screen.getByText('Изменится: окно 15:00–17:00 → 16:00–18:00')).toBeInTheDocument();
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(useAppStore.getState().editingRequestId).toBeNull());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ window_start: '16:00', window_end: '18:00' });
   });
 
   it('previews the changes while editing', () => {
@@ -1019,7 +1074,7 @@ describe('RequestEditDialog', () => {
     const applyEvent = vi.fn().mockResolvedValue(true);
     useAppStore.setState({ applyEvent });
     render(<RequestEditDialog />);
-    fireEvent.change(screen.getByLabelText('Окно до'), { target: { value: '18:00' } });
+    chooseSlot('16:00–18:00');
     fireEvent.change(screen.getByLabelText('Навык'), { target: { value: 'connection' } });
     fireEvent.change(screen.getByLabelText('Транспорт'), { target: { value: '' } });
     fireEvent.change(screen.getByLabelText('Время события'), { target: { value: '14:00' } });
@@ -1030,7 +1085,7 @@ describe('RequestEditDialog', () => {
       time: '14:00',
       request_id: '46393',
       engineer_id: null,
-      request: { ...original, window_end: '18:00', skill: 'connection', transport_required: null },
+      request: { ...original, window_start: '16:00', window_end: '18:00', skill: 'connection', transport_required: null },
     });
     expect(applyEvent.mock.calls[0][0].request).toMatchObject({ lat: 55.7195, lon: 37.68 });
   });
@@ -1101,12 +1156,11 @@ describe('RequestEditDialog', () => {
     render(<RequestEditDialog />);
     const asap = screen.getByLabelText('Как можно скорее');
     expect(asap).not.toBeChecked();
-    expect(isBefore(asap, screen.getByLabelText('Окно с'))).toBe(true);
+    expect(isBefore(asap, screen.getByLabelText('Окно визита'))).toBe(true);
     expect(screen.queryByText(ASAP_HINT)).not.toBeInTheDocument();
 
     fireEvent.click(asap);
-    expect(screen.queryByLabelText('Окно с')).not.toBeInTheDocument();
-    expect(screen.queryByLabelText('Окно до')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Окно визита')).not.toBeInTheDocument();
     expect(screen.getByText(ASAP_HINT)).toHaveClass('muted');
     expect(screen.getByText('Изменится: как можно скорее')).toBeInTheDocument();
     fireEvent.click(submitButton());
@@ -1145,6 +1199,38 @@ describe('RequestEditDialog', () => {
       engineer_id: null,
       request: { ...makeAsapRequest(), asap: false, window_start: '15:00', window_end: '17:00' },
     });
+  });
+
+  it('asks for a slot of the grid when «Как можно скорее» is turned off', async () => {
+    const applyEvent = vi.fn().mockResolvedValue(true);
+    resetStore({
+      datasetId: 'd_test',
+      state: makeAsapState(),
+      clock: '13:30',
+      editingRequestId: 'URG-002',
+      applyEvent,
+      config: makeConfig({ work_types: [] }),
+    });
+    render(<RequestEditDialog />);
+    const asap = screen.getByLabelText('Как можно скорее');
+    expect(asap).toBeChecked();
+
+    fireEvent.click(asap);
+    // Окно 13:00–22:00 заявке задал сервер, и клиенту его не называли: в списке пусто, пока слот не выбран.
+    expect(valueOf('Окно визита')).toBe('');
+    expect(within(screen.getByLabelText('Окно визита')).getByRole('option', { name: 'Выберите окно' })).toBeInTheDocument();
+    fireEvent.click(submitButton());
+    expect(
+      await screen.findByText(
+        'Выберите окно визита из сетки: 10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00',
+      ),
+    ).toBeInTheDocument();
+    expect(applyEvent).not.toHaveBeenCalled();
+
+    chooseSlot('16:00–18:00');
+    fireEvent.click(submitButton());
+    await waitFor(() => expect(applyEvent).toHaveBeenCalled());
+    expect(applyEvent.mock.calls[0][0].request).toMatchObject({ asap: false, window_start: '16:00', window_end: '18:00' });
   });
 
   it('renders nothing for a request that is not in the plan', () => {

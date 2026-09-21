@@ -40,6 +40,24 @@ def call(method: str, url: str, body: bytes | None = None, headers: dict[str, st
         raise ApiError(method, url, error.code, error.read().decode("utf-8")) from error
 
 
+def on_grid(event: dict, grid: list[dict]) -> dict:
+    """Окно заявки события — на сетку окон сервера (GET /api/config).
+
+    Демо-события лежат в бандле, то есть это ДАННЫЕ: сеткой они не проверяются и окно у них своё. Но уходят они
+    в диспетчерский эндпоинт, а тот произвольный интервал не принимает, поэтому здесь окно кладётся на слот.
+    Заявка «как можно скорее» не трогается: её окно задаёт сервер.
+    """
+    request = event.get("request")
+    if not grid or not request or request.get("asap") or not request.get("window_start"):
+        return event
+    start = request["window_start"]
+    slot = next((s for s in grid if s["start"] <= start < s["end"]), None)
+    if slot is None:
+        # Окно вне рабочего дня своего слота не имеет: берём ближайший, как это делает сервер.
+        slot = grid[0] if start < grid[0]["start"] else grid[-1]
+    return {**event, "request": {**request, "window_start": slot["start"], "window_end": slot["end"]}}
+
+
 def send_events(base: str, dataset_id: str, events: list[dict], state: dict) -> dict:
     """Отправляет события по очереди. Отклонённое событие (422) печатается, проверка идёт дальше."""
     for event in events:
@@ -91,7 +109,8 @@ def metrics_line(label: str, plan: dict | None) -> None:
 def main(argv: list[str]) -> int:
     base = argv[1] if len(argv) > 1 else "http://127.0.0.1:8001/api"
     path = Path(argv[2] if len(argv) > 2 else "/app/data/bundles/east/bundle.json")
-    print("config:", call("GET", f"{base}/config"))
+    config = call("GET", f"{base}/config")
+    print("config:", config)
 
     started = time.monotonic()
     dataset_id = upload(base, path)
@@ -110,7 +129,9 @@ def main(argv: list[str]) -> int:
     metrics_line("FCFS", state["baseline"])
     metrics_line("Диспетчеры", state["control"])
 
-    events = json.loads(path.read_text(encoding="utf-8")).get("events", []) if path.suffix == ".json" else []
+    raw = json.loads(path.read_text(encoding="utf-8")).get("events", []) if path.suffix == ".json" else []
+    grid = config.get("window_grid", [])
+    events = [on_grid(event, grid) for event in raw]
     state = send_events(base, dataset_id, events, state)
     if events:
         metrics_line("OR-Tools после событий", state["plan"])
