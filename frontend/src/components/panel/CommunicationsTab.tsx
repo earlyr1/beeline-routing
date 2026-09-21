@@ -6,22 +6,23 @@ import { brigadeName } from '../../lib/format';
 import { assignmentIndex, byId } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
 
-/** Метка строки; у переноса времени метки нет: про него всё сказано строкой «было → стало». */
-const KIND_BADGES: Record<CallKind, { text: string; className: string } | null> = {
-  lost: { text: 'Сегодня не приедем', className: 'badge badge--urgent' },
-  added: { text: 'Договориться о времени', className: 'badge badge--warn' },
-  moved: null,
-};
-
 /** Чего стоит каждая из двух отмен: цену выбора диспетчер видит до клика, а не по новым строкам звонков. */
 const REFUSE_HINTS = {
   optimal: 'Остаток дня пересчитаем: визиты других клиентов могут переехать',
   keep: 'Времена остальных визитов останутся как есть, у бригады появится окно',
 };
 
+/** Повод для звонка словом: цветную полоску слева на проекторе не разглядеть, а пометку видно. */
+const CALL_BADGES: Record<CallKind, { text: string; className: string }> = {
+  lost: { text: 'Сегодня не приедем', className: 'badge badge--urgent' },
+  outside: { text: 'Вне окна', className: 'badge badge--urgent' },
+  window: { text: 'Новое окно', className: 'badge badge--warn' },
+};
+
 /**
  * Кому звонить после событий дня (ответ организаторов, вопрос 2: новое время клиенту сообщает служба поддержки).
- * Строка сравнивает текущий план с тем, что клиент знает: утренним временем или тем, которое с ним уже согласовали.
+ * Клиент знает окно, а не минуту, поэтому строка появляется, только когда обещанное окно не выполняется:
+ * сегодня не приедем, не попадаем в окно или у заявки теперь другое окно. Бригада в строке — справка.
  */
 export function CommunicationsTab() {
   const state = useAppStore((s) => s.state);
@@ -39,8 +40,7 @@ export function CommunicationsTab() {
   const requests = byId(state.requests);
   const engineers = byId(state.engineers);
   const assigned = assignmentIndex(state.plan);
-  const brigade = (engineerId: string | null) =>
-    engineerId ? brigadeName(engineers.get(engineerId)?.name ?? engineerId) : 'без бригады';
+  const brigade = (engineerId: string) => brigadeName(engineers.get(engineerId)?.name ?? engineerId);
   // Кнопки стоят внутри строки: клик по ним не открывает заявку.
   const handle = (action: () => void) => (event: MouseEvent) => {
     event.stopPropagation();
@@ -55,31 +55,29 @@ export function CommunicationsTab() {
     <div className="calls">
       <div className="tab-toolbar">
         <strong>Кому позвонить</strong>
-        <span className="muted">Новое время клиенту сообщает служба поддержки</span>
+        <span className="muted">Новое окно клиенту сообщает служба поддержки</span>
       </div>
       {eventsAhead(state) && (
         <p className="muted">На шкале есть события впереди часов: что говорить клиентам после них, будет видно, когда часы туда дойдут.</p>
       )}
       {pending.length === 0 ? (
-        <p className="empty">{settled.length === 0 ? 'Звонить некому: клиенты знают то же, что в плане.' : 'Все переносы согласованы.'}</p>
+        <p className="empty">Звонить некому: обещанные клиентам окна выполняются.</p>
       ) : (
         <ul className="call-list">
           {pending.map((row: CallRow) => {
             const request = requests.get(row.requestId);
             if (!request) return null;
-            const badge = KIND_BADGES[row.kind];
             const actions = requestActionState(request, assigned.get(row.requestId)?.visit, { busy, clock });
-            const moved = row.kind === 'moved' && row.previousEngineerId !== row.engineerId;
             return (
               <li key={row.requestId} className={`call call--${row.severity}`} onClick={() => selectRequest(row.requestId)}>
                 <div className="call__head">
                   <strong>{row.label}</strong>
-                  {badge && <span className={badge.className}>{badge.text}</span>}
+                  <span className={CALL_BADGES[row.kind].className}>{CALL_BADGES[row.kind].text}</span>
                 </div>
                 <div className="muted">{row.address}</div>
                 <p className="call__change">
                   {callChangeText(row)}
-                  {moved && ` · ${brigade(row.previousEngineerId)} → ${brigade(row.engineerId)}`}
+                  {row.engineerId !== null && ` · ${brigade(row.engineerId)}`}
                 </p>
                 <div className="call__actions">
                   <button

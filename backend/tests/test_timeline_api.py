@@ -752,22 +752,42 @@ def test_a_strategy_for_an_event_without_strategies_is_409_and_the_event_is_not_
     assert state_of(client, base)["timeline"] == []
 
 
-def test_the_state_carries_the_morning_times_of_the_day_next_to_the_plan(tmp_path, solves):
-    """Утренние время и бригада визитов: с ними видно, что клиенту обещали до всех событий дня."""
+def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(tmp_path, solves):
+    """Утреннее окно каждой заявки: с ним видно, что клиент знает про свой визит до всех событий дня."""
     client, _, base, _ = dataset(tmp_path, solves)
     start = state_of(client, base)
-    morning = [
-        {"request_id": visit["request_id"], "engineer_id": route["engineer_id"], "start": visit["start"]}
+    visits = {
+        visit["request_id"]: (route["engineer_id"], visit["start"])
         for route in start["plan"]["routes"]
         for visit in route["visits"]
+    }
+    morning = [
+        {
+            "request_id": request["id"],
+            "window_start": request["window_start"],
+            "window_end": request["window_end"],
+            "engineer_id": visits.get(request["id"], (None, None))[0],
+            "start": visits.get(request["id"], (None, None))[1],
+        }
+        for request in start["requests"]
     ]
     assert start["morning"] == morning and morning
 
+    before = next(request for request in start["requests"] if request["id"] == "R2")
+    edit = {
+        "type": "request_updated",
+        "time": "12:00",
+        "request_id": "R2",
+        "request": {**before, "window_start": "16:00", "window_end": "18:00"},
+    }
+    added(client, base, edit)
     added(client, base, cancel("R3", "13:00"))
     state = at(client, base, "13:00")
 
-    # План на 13:00 уже без отменённой заявки, а утренний план остался прежним.
+    # План на 13:00 уже без отменённой заявки и с новым окном R2, а утро дня осталось прежним.
     assert "R3" not in planned(state)
+    moved = next(request for request in state["requests"] if request["id"] == "R2")
+    assert (moved["window_start"], moved["window_end"]) == ("16:00", "18:00")
     assert state["morning"] == morning
 
 

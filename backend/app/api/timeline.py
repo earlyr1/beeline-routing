@@ -104,8 +104,8 @@ def planning_state(record: DatasetRecord) -> PlanningState:
             timeline=timeline,
             timeline_ready=ready,
             pending_choice=_choice(record, *pending) if pending is not None else None,
-            # Утро дня — план до событий шкалы, а не первая загрузка файла: пересборка дня делает его заново.
-            morning=record.base.plan if record.base is not None else None,
+            # Утро дня — состояние до событий шкалы, а не первая загрузка файла: пересборка дня делает его заново.
+            morning=record.base,
         )
 
 

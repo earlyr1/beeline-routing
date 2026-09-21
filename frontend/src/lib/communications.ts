@@ -1,29 +1,41 @@
-import type { HHMM, Plan, PlanningState, ServiceRequest } from '../api/types';
-import { requestLabel, shortAddress, toMinutes } from './format';
-import { assignmentIndex } from './planView';
+import type { HHMM, PlanEvent, PlanningState, ServiceRequest } from '../api/types';
+import { fromMinutes, requestLabel, requestWindowPhrase, requestWindowText, shortAddress, toMinutes } from './format';
+import { assignmentIndex, byId } from './planView';
+
+/** Окно клиента: с какого и по какое время он ждёт бригаду. Точного времени визита он не знает. */
+export interface TimeWindow {
+  start: HHMM;
+  end: HHMM;
+  /** Окно «как можно скорее»: его задаёт сервер от времени события до конца смен, и называют его словами. */
+  asap?: boolean;
+}
 
 /**
- * Что клиенту в последний раз сказали про заявку: время визита и бригада.
- * start null — визита он не ждёт: либо ему сказали, что сегодня не приедем, либо не говорили ничего.
+ * Что клиент знает про заявку после звонка: окно, которое ему назвали, либо null — ему сказали,
+ * что сегодня не приедем.
  */
-export interface Promised {
-  start: HHMM | null;
-  engineer_id: string | null;
+export interface AgreedWindow {
+  window: TimeWindow | null;
+  /**
+   * Окно самой заявки в момент разговора: по нему видно, что диспетчер передвинул его уже после звонка.
+   * С окном клиента оно совпадает, пока визит попадает в окно заявки; иначе клиенту назвали новое окно.
+   */
+  requestWindow?: TimeWindow;
   /** Номер плана, на котором договорились. Отметки, записанные до появления номера, его не знают. */
   version?: number;
 }
 
-/** Согласованные времена по номеру заявки: их помнит стор и localStorage набора данных. */
-export type AgreedTimes = Record<string, Promised>;
+/** Согласованные окна по номеру заявки: их помнит стор и localStorage набора данных. */
+export type AgreedWindows = Record<string, AgreedWindow>;
 
-/** Красный — клиент остаётся без визита или визит вне его окна; жёлтый — сдвиг на час и больше; серый — остальное. */
-export type CallSeverity = 'red' | 'yellow' | 'grey';
+/** Красный — обещание не выполняется; жёлтый — окно стало другим, и клиент должен узнать новое. */
+export type CallSeverity = 'red' | 'yellow';
 
 /**
- * Что случилось с заявкой с точки зрения клиента: визит переехал, пропал совсем или появился у заявки,
- * про которую клиенту ничего не обещали.
+ * Почему звоним: сегодня к клиенту не приедем, не попадаем в его окно или у заявки теперь другое окно.
+ * Ни смена бригады, ни переезд визита внутри окна причиной не бывают: клиенту обещали окно, а не минуту.
  */
-export type CallKind = 'moved' | 'lost' | 'added';
+export type CallKind = 'lost' | 'outside' | 'window';
 
 /** Строка списка звонков: одна заявка, по которой план разошёлся с тем, что знает клиент. */
 export interface CallRow {
@@ -33,81 +45,117 @@ export interface CallRow {
   address: string;
   kind: CallKind;
   severity: CallSeverity;
-  /** Время, которое знает клиент; null — визита он не ждёт. */
-  was: HHMM | null;
-  /** Время в плане; null — сегодня к нему не приедут. */
-  now: HHMM | null;
-  /** Бригада в плане и бригада, которую знает клиент; null — без бригады. */
+  /** Окно, которое знает клиент; null — ему сказали, что сегодня не приедем. */
+  known: TimeWindow | null;
+  /** Окно, в которое план не попадает: его и называть нельзя. null — у остальных поводов для звонка. */
+  missed: TimeWindow | null;
+  /** Окно, которое диспетчер назовёт клиенту; null — сегодня к нему не приедут. */
+  promise: TimeWindow | null;
+  /** Начало визита в плане; null — сегодня к клиенту не приедут. Клиенту эту минуту не называют. */
+  start: HHMM | null;
+  /** Бригада плана: справка для диспетчера, а не причина звонка. */
   engineerId: string | null;
-  previousEngineerId: string | null;
 }
 
-/** Кому звонить и что уже согласовано. */
+/** Строка нижнего блока: с этим клиентом уже договорились, звонить не о чем. */
+export interface AgreedRow {
+  requestId: string;
+  label: string;
+  address: string;
+  /** Окно, о котором договорились; null — клиенту сказали, что сегодня не приедем. */
+  known: TimeWindow | null;
+}
+
+/** Кому звонить и с кем уже договорились. */
 export interface CallList {
   pending: CallRow[];
-  agreed: CallRow[];
+  agreed: AgreedRow[];
 }
 
-const SEVERITY_ORDER: Record<CallSeverity, number> = { red: 0, yellow: 1, grey: 2 };
+const windowOf = (item: { window_start: HHMM; window_end: HHMM; asap?: boolean }): TimeWindow => ({
+  start: item.window_start,
+  end: item.window_end,
+  asap: item.asap ?? false,
+});
 
-/** Сдвиг на час и больше клиенту нужно сообщить обязательно: он планировал день под прежнее время. */
-export const BIG_SHIFT_MIN = 60;
+const sameWindow = (a: TimeWindow, b: TimeWindow) => a.start === b.start && a.end === b.end;
 
-/** Время и бригада заявки в плане номер version; null и null — заявки в маршрутах нет. */
-export function plannedPromise(plan: Plan, requestId: string, version: number): Promised {
-  const assigned = assignmentIndex(plan).get(requestId);
-  return { start: assigned?.visit.start ?? null, engineer_id: assigned?.engineerId ?? null, version };
+/** Визит попадает в окно: начало работы не раньше начала окна и не позже его конца. */
+const fits = (window: TimeWindow, start: HHMM) =>
+  toMinutes(window.start) <= toMinutes(start) && toMinutes(start) <= toMinutes(window.end);
+
+/** Новое окно длится столько же, сколько окно заявки, но не меньше часа и не больше четырёх. */
+const SHORTEST_WINDOW = 60;
+const LONGEST_WINDOW = 240;
+/** Новое окно начинается с ровной получасовой отметки: клиенту называют окно, а не минуту плана. */
+const WINDOW_STEP = 30;
+
+/**
+ * Окно, которое диспетчер назовёт вместо сорванного: получасовая отметка перед визитом и столько же времени,
+ * сколько было в окне заявки. Ровная отметка держит окно на месте, пока визит ходит по плану туда-сюда.
+ */
+function suggestedWindow(window: TimeWindow, start: HHMM): TimeWindow {
+  const length = Math.min(LONGEST_WINDOW, Math.max(SHORTEST_WINDOW, toMinutes(window.end) - toMinutes(window.start)));
+  const from = Math.floor(toMinutes(start) / WINDOW_STEP) * WINDOW_STEP;
+  return { start: fromMinutes(from), end: fromMinutes(from + length), asap: false };
 }
 
-function kindOf(known: Promised, now: Promised): CallKind {
-  if (now.start === null) return 'lost';
-  if (known.start === null) return 'added';
-  return 'moved';
+/** Окно, которое диспетчер назовёт клиенту: своё окно заявки, а если визит в него не попадает — новое вокруг визита. */
+function promisedWindow(window: TimeWindow, start: HHMM | null): TimeWindow | null {
+  if (start === null) return null;
+  return fits(window, start) ? window : suggestedWindow(window, start);
 }
 
-function severityOf(
-  kind: CallKind,
-  known: Promised,
-  now: Promised,
-  lateMin: number,
-  promised: boolean,
-): CallSeverity {
-  // Визит вне окна клиента — то же самое, что без визита: обещание не выполняется, и звонить нужно так же срочно.
-  if (kind === 'lost' || lateMin > 0) return 'red';
-  // Время клиенту уже называли, и план его не сдержал: такую строку нельзя терять среди мелких сдвигов,
-  // даже если бригада приедет всего на полчаса раньше — клиента в это время может не быть дома.
-  if (promised) return 'yellow';
-  if (kind === 'added' || known.start === null || now.start === null) return 'grey';
-  return Math.abs(toMinutes(now.start) - toMinutes(known.start)) >= BIG_SHIFT_MIN ? 'yellow' : 'grey';
+/** Окно, которое клиент знает после разговора, и окно самой заявки в этот момент: их запоминает отметка «Согласовано». */
+export function agreedWindow(state: PlanningState, requestId: string): AgreedWindow {
+  const request = byId(state.requests).get(requestId);
+  // Визита в плане нет — значит клиенту сказали, что сегодня не приедем; окна он не ждёт.
+  if (!request) return { window: null, version: state.version };
+  const window = windowOf(request);
+  const visit = assignmentIndex(state.plan).get(requestId);
+  return { window: promisedWindow(window, visit?.visit.start ?? null), requestWindow: window, version: state.version };
 }
 
-function callRow(
-  request: ServiceRequest,
-  known: Promised,
-  now: Promised,
-  lateMin: number,
-  promised: boolean,
-): CallRow {
-  const kind = kindOf(known, now);
-  return {
-    requestId: request.id,
-    label: requestLabel(request.id, request.priority),
-    address: shortAddress(request.address),
-    kind,
-    severity: severityOf(kind, known, now, lateMin, promised),
-    was: known.start,
-    now: now.start,
-    engineerId: now.engineer_id,
-    previousEngineerId: known.engineer_id,
-  };
+/** Повод для звонка: какое окно план не выполняет и какое окно диспетчер назовёт вместо него. */
+interface CallReason {
+  kind: CallKind;
+  missed: TimeWindow | null;
+  promise: TimeWindow | null;
 }
 
-/** Сначала по важности, потом по времени визита: диспетчер звонит в том порядке, в каком идёт день. */
+/**
+ * Почему звоним клиенту, или null — звонить не о чем.
+ *
+ * Клиенту называют окно, а не минуту: визит, переехавший внутри окна, и другая бригада — не повод для звонка.
+ * Повод ровно три: сегодня не приедем, визит вне окна клиента и новое окно самой заявки. Окно, которое диспетчер
+ * назовёт, — то, которое план выполняет: своё окно заявки, если визит в него попадает, иначе новое вокруг визита.
+ */
+function callReason(known: TimeWindow | null, base: TimeWindow, window: TimeWindow, start: HHMM | null): CallReason | null {
+  // Визита сегодня нет: звоним, если клиент ещё ждёт бригаду.
+  if (start === null) return known === null ? null : { kind: 'lost', missed: null, promise: null };
+  // Клиенту сказали, что сегодня не приедем, а визит вернулся: он должен узнать окно.
+  if (known === null) return { kind: 'window', missed: null, promise: promisedWindow(window, start) };
+  // Диспетчер передвинул окно заявки уже после того, как клиент узнал своё: назовём новое.
+  const moved = !sameWindow(base, window);
+  const named = moved ? window : known;
+  // В окно, которое собирались назвать, план не попадает: клиенту нужно другое.
+  if (!fits(named, start)) return { kind: 'outside', missed: named, promise: suggestedWindow(window, start) };
+  return moved ? { kind: 'window', missed: null, promise: window } : null;
+}
+
+/** Сначала срыв обещания, потом перенос окна, внутри — по времени дня: диспетчер звонит по ходу дня. */
 function byUrgency(a: CallRow, b: CallRow): number {
-  const minutes = (row: CallRow) => (row.now ?? row.was ?? '23:59');
+  const when = (row: CallRow) => row.start ?? row.known?.start ?? row.promise?.start ?? '23:59';
   return (
-    SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] ||
-    toMinutes(minutes(a)) - toMinutes(minutes(b)) ||
+    (a.severity === b.severity ? 0 : a.severity === 'red' ? -1 : 1) ||
+    toMinutes(when(a)) - toMinutes(when(b)) ||
+    a.requestId.localeCompare(b.requestId)
+  );
+}
+
+function byWindow(a: AgreedRow, b: AgreedRow): number {
+  return (
+    toMinutes(a.known?.start ?? '23:59') - toMinutes(b.known?.start ?? '23:59') ||
     a.requestId.localeCompare(b.requestId)
   );
 }
@@ -118,53 +166,121 @@ export function eventsAhead(state: PlanningState): boolean {
 }
 
 /**
- * Кому звонить: разница между текущим планом и тем, что клиент знает.
+ * Окно, с которым заявка вошла в день позже утра: её приняли среди дня, и клиенту назвали окно тогда.
+ * У срочной заявки оно лежит в событии `urgent`, у остальных — в `previous_request` первой правки.
+ */
+function acceptedWindows(state: PlanningState): Map<string, TimeWindow> {
+  const accepted = new Map<string, TimeWindow>();
+  const requestOf = (event: PlanEvent): ServiceRequest | null => {
+    if (event.type === 'urgent') return event.request;
+    return event.type === 'request_updated' ? (event.previous_request ?? null) : null;
+  };
+  for (const applied of state.events ?? []) {
+    // Заявку могли править не раз: окно приёма несёт первое событие по ней.
+    const request = requestOf(applied.event);
+    if (request && !accepted.has(request.id)) accepted.set(request.id, windowOf(request));
+  }
+  return accepted;
+}
+
+/**
+ * Кому звонить: где план не выполняет того, что клиенту обещали.
  *
- * Клиенту ещё ничего не говорили — сравниваем с утренним планом; диспетчер отметил «Согласовано» — с тем временем,
- * о котором договорились. Это не разница последнего события: часы дня ходят вперёд и назад, и список по событию
- * врал бы. Зато так возвращается строка, которую уже согласовали на 16:20, если следующее событие увезло визит
- * обратно на 14:00: клиент ждёт в 16:20.
+ * Клиент знает не время визита, а окно: то, которое ему назвали при отметке «Согласовано», иначе то, с которым
+ * заявка вошла в день (правка окна — такое же событие шкалы, поэтому утреннее окно не меняется вместе с ней).
+ * У заявки, принятой среди дня, окно приёма лежит в событии, которым она в день вошла.
+ * Сравнивается не последнее событие, а обещание клиенту: часы дня ходят вперёд и назад, и список по событию врал бы.
  *
  * Отменённые заявки в список не попадают: клиент либо сам отказался, либо ему уже сказали. Не попадают и визиты,
  * которые к времени на часах (clock) уже закончились: работа сделана, звонить не о чем. Договорённость, записанную
  * на плане новее текущего (часы отмотали назад), пропускаем целиком: сравнение с прежним планом перевернуло бы
- * строку и позвало отзывать время, которое никуда не делось.
+ * строку и позвало отзывать окно, которое никуда не делось.
  */
-export function callList(state: PlanningState, agreed: AgreedTimes, clock: HHMM): CallList {
+export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHMM): CallList {
   const assigned = assignmentIndex(state.plan);
-  const morning = new Map((state.morning ?? []).map((item) => [item.request_id, item]));
+  const morning = new Map((state.morning ?? []).map((item) => [item.request_id, windowOf(item)]));
+  const accepted = acceptedWindows(state);
   const now = toMinutes(clock);
   const pending: CallRow[] = [];
-  const settled: CallRow[] = [];
+  const settled: AgreedRow[] = [];
   for (const request of state.requests) {
     if (request.status === 'cancelled') continue;
     const visit = assigned.get(request.id);
     // Визит закончился до времени на часах: работа сделана, звонить поздно и незачем.
     if (visit && toMinutes(visit.visit.end) <= now) continue;
-    const promise = agreed[request.id];
+    const mark = agreed[request.id];
     // Договорились на плане новее текущего: сравнивать их нельзя, строка вышла бы перевёрнутой.
-    if (promise && (promise.version ?? 0) > state.version) continue;
-    const planned: Promised = { start: visit?.visit.start ?? null, engineer_id: visit?.engineerId ?? null };
-    const morningVisit = morning.get(request.id);
-    const known: Promised =
-      promise ?? { start: morningVisit?.start ?? null, engineer_id: morningVisit?.engineer_id ?? null };
-    const same = known.start === planned.start && known.engineer_id === planned.engineer_id;
-    // Ничего не изменилось и звонка не было: сообщать нечего.
-    if (same && promise === undefined) continue;
-    const row = callRow(request, known, planned, visit?.visit.late_min ?? 0, promise !== undefined);
-    (same ? settled : pending).push(row);
+    if (mark && (mark.version ?? 0) > state.version) continue;
+    const window = windowOf(request);
+    // Окно, с которым заявка вошла в день: утреннее, у принятой среди дня — окно приёма.
+    const entered = morning.get(request.id) ?? accepted.get(request.id) ?? window;
+    // Отметка могла записать и окно, названное по телефону: в форме отметки уверенности нет, она из localStorage.
+    const known = mark ? (mark.window ?? null) : entered;
+    const base = mark?.requestWindow ?? entered;
+    const start = visit?.visit.start ?? null;
+    const reason = callReason(known, base, window, start);
+    const label = requestLabel(request.id, request.priority);
+    const address = shortAddress(request.address);
+    if (reason === null) {
+      // Клиенту звонили, и с тех пор ничего не разошлось: строка уходит в блок «Согласовано».
+      if (mark) settled.push({ requestId: request.id, label, address, known });
+      continue;
+    }
+    pending.push({
+      requestId: request.id,
+      label,
+      address,
+      kind: reason.kind,
+      severity: reason.kind === 'window' ? 'yellow' : 'red',
+      known,
+      missed: reason.missed,
+      promise: reason.promise,
+      start,
+      engineerId: visit?.engineerId ?? null,
+    });
   }
-  return { pending: pending.sort(byUrgency), agreed: settled.sort(byUrgency) };
+  return { pending: pending.sort(byUrgency), agreed: settled.sort(byWindow) };
+}
+
+const asRequest = (window: TimeWindow) => ({
+  asap: window.asap ?? false,
+  window_start: window.start,
+  window_end: window.end,
+});
+
+/** Окно словами диспетчера: «12:00–14:00» или «как можно скорее с 13:00». */
+export function windowText(window: TimeWindow): string {
+  return requestWindowText(asRequest(window));
+}
+
+/** То же с подписью: «окно 12:00–14:00» или «как можно скорее с 13:00». */
+function windowPhrase(window: TimeWindow): string {
+  return requestWindowPhrase(asRequest(window));
+}
+
+/** Окно там, где по-русски нужен предлог: «в окно 12:00–14:00», «как можно скорее, с 13:00». */
+function inWindow(window: TimeWindow): string {
+  return window.asap ? `как можно скорее, с ${window.start}` : `в окно ${windowText(window)}`;
+}
+
+/** Окно заявки стало другим: «окно было 12:00–14:00 → стало 16:00–18:00». */
+function changedText(from: TimeWindow, to: TimeWindow): string {
+  if (from.asap || to.asap) return `${windowPhrase(from)} → ${windowPhrase(to)}`;
+  return `окно было ${windowText(from)} → стало ${windowText(to)}`;
 }
 
 /** Что уже сказали клиенту: строка нижнего блока вкладки. */
-export function callAgreedText(row: CallRow): string {
-  return row.now === null ? 'сказали, что сегодня не приедем' : `договорились на ${row.now}`;
+export function callAgreedText(row: AgreedRow): string {
+  if (row.known === null) return 'сказали, что сегодня не приедем';
+  return row.known.asap ? `договорились: ${windowText(row.known)}` : `договорились на окно ${windowText(row.known)}`;
 }
 
-/** Что сказать клиенту про время: «было 14:00 → стало 16:20», а у крайних случаев — словами. */
+/** Что сказать клиенту: разговор идёт про окна, а не про минуты, поэтому минуты плана в строке нет. */
 export function callChangeText(row: CallRow): string {
-  if (row.kind === 'lost') return row.was === null ? 'сегодня не приедем' : `было ${row.was} → сегодня не приедем`;
-  if (row.kind === 'added') return `приедем в ${row.now}`;
-  return row.was === row.now ? `время прежнее, ${row.now}` : `было ${row.was} → стало ${row.now}`;
+  if (row.promise === null) {
+    return row.known === null ? 'сегодня не приедем' : `сегодня не приедем, обещали ${windowPhrase(row.known)}`;
+  }
+  if (row.known === null) return `сказали, что сегодня не приедем → приедем ${inWindow(row.promise)}`;
+  if (row.missed !== null) return `не попадаем ${inWindow(row.missed)} — назовите ${windowPhrase(row.promise)}`;
+  return changedText(row.known, row.promise);
 }

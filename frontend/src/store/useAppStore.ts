@@ -15,7 +15,7 @@ import {
   uploadFile,
 } from '../api/client';
 import type { ClientConfig, DatasetStatus, EventChoice, EventVariant, HHMM, PlanEvent, PlanningState, TimelineItem } from '../api/types';
-import { plannedPromise, type AgreedTimes } from '../lib/communications';
+import { agreedWindow, type AgreedWindows } from '../lib/communications';
 import type { PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
@@ -29,8 +29,12 @@ export const POLL_INTERVAL_MS = 1000;
 export const POLL_RETRIES = 3;
 /** Ключ localStorage с набором данных открытого плана: план переживает перезагрузку страницы и закрытие браузера. */
 export const SESSION_DATASET_KEY = 'routing.datasetId';
-/** Ключ localStorage с согласованными временами набора данных: отметки звонков переживают перезагрузку страницы. */
-export const agreedKey = (datasetId: string) => `routing.agreed.${datasetId}`;
+/**
+ * Ключ localStorage с согласованными окнами набора данных: отметки звонков переживают перезагрузку страницы.
+ * Версия в ключе — из-за смены содержимого отметки: раньше в ней лежали время визита и бригада, теперь окно
+ * клиента. Отметки прежней версии лежат под своим ключом и просто не читаются.
+ */
+export const agreedKey = (datasetId: string) => `routing.agreed.v2.${datasetId}`;
 /** Шаг проигрывания дня: минута плана за 100 мс, то есть час дня за 6 секунд. */
 export const PLAY_TICK_MS = 100;
 /** Часы до первого ответа сервера: плана ещё нет, и шкалы дня, на начало которой их поставить, тоже. */
@@ -113,10 +117,10 @@ export interface AppData {
   /** Обед по плану: диспетчер выбирает его вместе с нагрузкой, сервер возвращает выбор сессии. */
   lunchEnabled: boolean;
   /**
-   * Что уже согласовано с клиентом: номер заявки → время и бригада, о которых ему сказали.
-   * С ними вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда визит снова уезжает.
+   * Что уже согласовано с клиентом: номер заявки → окно, которое ему назвали (null — сказали, что сегодня
+   * не приедем). С ним вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда окно снова уедет.
    */
-  agreed: AgreedTimes;
+  agreed: AgreedWindows;
 }
 
 export interface AppActions {
@@ -166,7 +170,7 @@ export interface AppActions {
   closeWhy(): void;
   setTab(tabId: string): void;
   setUnassignedOnly(value: boolean): void;
-  /** Отметить, что с клиентом согласовали время визита из текущего плана. */
+  /** Отметить, что клиенту назвали окно заявки из текущего плана (или сказали, что сегодня не приедем). */
   markAgreed(requestId: string): void;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
   setWorkloadLevel(level: number): void;
@@ -287,17 +291,17 @@ function savedDatasetId(): string | null {
   }
 }
 
-function loadAgreed(datasetId: string): AgreedTimes {
+function loadAgreed(datasetId: string): AgreedWindows {
   try {
     const saved = localStorage.getItem(agreedKey(datasetId));
-    return saved ? (JSON.parse(saved) as AgreedTimes) : {};
+    return saved ? (JSON.parse(saved) as AgreedWindows) : {};
   } catch {
     // Хранилище недоступно или в нём мусор: считаем, что клиентам ещё не звонили.
     return {};
   }
 }
 
-function saveAgreed(datasetId: string, agreed: AgreedTimes): void {
+function saveAgreed(datasetId: string, agreed: AgreedWindows): void {
   try {
     localStorage.setItem(agreedKey(datasetId), JSON.stringify(agreed));
   } catch {
@@ -633,10 +637,13 @@ export const useAppStore = create<AppState>()((set, get) => {
         const state = await enqueue(current, () => buildPlan(datasetId, { workload_level: workloadLevel, lunch: lunchEnabled }));
         if (!isCurrent(current)) return;
         get().setPlanningState(state);
+        // Пересчитанный день начинается заново, как после сброса событий: обзвона в нём ещё не было.
+        saveAgreed(datasetId, {});
         // Новый день начинается со своего начала: часы встают на начало шкалы дня, и это время уходит на сервер,
         // чтобы курсор плана совпал с часами. Шкала дня после пересчёта пуста, и перевод курсора ничего не считает.
         // Карточка заявки закрывается; панель «Почему» остаётся, только если открыта бригада.
         set({
+          agreed: {},
           selectedRequestId: null,
           whyOpen: get().whyOpen && get().selectedEngineerId !== null,
           clock: fromMinutes(dayScale(state).from),
@@ -934,8 +941,9 @@ export const useAppStore = create<AppState>()((set, get) => {
     markAgreed(requestId) {
       const { state, datasetId, agreed } = get();
       if (!state || !datasetId) return;
-      // Запоминаем время и бригаду текущего плана: когда визит снова уедет, отметка сама перестанет совпадать.
-      const next = { ...agreed, [requestId]: plannedPromise(state.plan, requestId, state.version) };
+      // Запоминаем окно, которое клиент теперь знает (в окно заявки план не попал — то, которое назвали вместо него):
+      // когда обещание снова разойдётся с планом, отметка сама перестанет совпадать.
+      const next = { ...agreed, [requestId]: agreedWindow(state, requestId) };
       saveAgreed(datasetId, next);
       set({ agreed: next });
     },

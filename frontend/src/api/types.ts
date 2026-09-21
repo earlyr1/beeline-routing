@@ -286,11 +286,14 @@ export interface PrecomputedPlan {
   computed_at: string;
 }
 
-/** Визит утреннего плана: время и бригада, которые клиент услышал бы до событий дня. */
-export interface MorningVisit {
+/** Заявка в начале дня: окно, которое знает клиент, и визит утреннего плана, если он был. */
+export interface MorningRequest {
   request_id: string;
-  engineer_id: string;
-  start: HHMM;
+  window_start: HHMM;
+  window_end: HHMM;
+  /** Бригада и время визита утреннего плана; null — утром заявка в маршруты не попала. */
+  engineer_id: string | null;
+  start: HHMM | null;
 }
 
 export interface PlanningState {
@@ -307,10 +310,10 @@ export interface PlanningState {
   control: Plan | null;
   last_diff: PlanDiff | null;
   /**
-   * Утренний план дня (время 00:00, ни одного события шкалы) — только время и бригада каждого визита.
-   * С ним вкладка «Коммуникации» сравнивает план, когда клиенту ещё ничего не говорили.
+   * Начало дня (время 00:00, ни одного события шкалы): окно каждой заявки и её утренний визит.
+   * С окнами отсюда вкладка «Коммуникации» сравнивает план, когда клиенту ещё не звонили.
    */
-  morning: MorningVisit[];
+  morning: MorningRequest[];
   events: AppliedEvent[];
   matrix_source: MatrixSource;
   /** Нагрузка инженеров сессии от 0 (спокойный день) до 2 (на пределе): её используют все расчёты дня. */

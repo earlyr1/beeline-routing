@@ -104,12 +104,20 @@ class VariantRequest(BaseModel):
     variant: EventVariant
 
 
-class MorningVisit(BaseModel):
-    """Визит утреннего плана: время и бригада, которые клиент услышал бы до событий дня."""
+class MorningRequest(BaseModel):
+    """Заявка в начале дня: окно, которое знает клиент, и визит утреннего плана, если он был.
+
+    Окно клиенту называют, когда заявку принимают, поэтому до событий дня он знает именно это окно —
+    с ним вкладка «Коммуникации» сравнивает план. Время визита клиенту не называют (диспетчер обещает окно),
+    но утренние время и бригада в ответе остаются: по ним видно, как день начинался.
+    """
 
     request_id: str
-    engineer_id: str
-    start: HHMM
+    window_start: HHMM
+    window_end: HHMM
+    # Визит утреннего плана; null — утром заявка в маршруты не попала.
+    engineer_id: str | None = None
+    start: HHMM | None = None
 
 
 class PlanningState(BaseModel):
@@ -127,9 +135,9 @@ class PlanningState(BaseModel):
     baseline: Plan
     control: Plan | None = None
     last_diff: PlanDiff | None = None
-    # Утренний план дня (текущее время 00:00, ни одного события шкалы) — только время и бригада каждого визита:
-    # с ним вкладка «Коммуникации» сравнивает план, когда клиенту ещё ничего не говорили.
-    morning: list[MorningVisit] = Field(default_factory=list)
+    # Начало дня (текущее время 00:00, ни одного события шкалы): окно каждой заявки и её утренний визит.
+    # С окнами отсюда вкладка «Коммуникации» сравнивает план, когда клиенту ещё не звонили.
+    morning: list[MorningRequest] = Field(default_factory=list)
     events: list[AppliedEvent] = Field(default_factory=list)
     matrix_source: Literal["osrm", "haversine"]
     # Текущее время плана. now, events, last_diff и previous_plan относятся к плану на это время.
@@ -173,12 +181,27 @@ class ClientConfig(BaseModel):
     work_types: list[WorkType] = Field(default_factory=list)
 
 
-def morning_visits(plan: Plan | None) -> list[MorningVisit]:
-    """Время и бригада каждого визита утреннего плана; пустой список, если утреннего плана нет."""
-    return [
-        MorningVisit(request_id=visit.request_id, engineer_id=route.engineer_id, start=visit.start)
-        for route in (plan.routes if plan is not None else [])
+def morning_requests(morning: PlanningSession | None) -> list[MorningRequest]:
+    """Окно каждой заявки начала дня и её утренний визит; пустой список, если утреннего плана нет.
+
+    Заявка без утреннего визита в список тоже попадает: её окно клиент знает так же, как окно любой другой.
+    """
+    if morning is None:
+        return []
+    visits = {
+        visit.request_id: (route.engineer_id, visit.start)
+        for route in morning.plan.routes
         for visit in route.visits
+    }
+    return [
+        MorningRequest(
+            request_id=request.id,
+            window_start=request.window_start,
+            window_end=request.window_end,
+            engineer_id=visits.get(request.id, (None, None))[0],
+            start=visits.get(request.id, (None, None))[1],
+        )
+        for request in morning.requests
     ]
 
 
@@ -189,11 +212,11 @@ def to_planning_state(
     timeline: list[TimelineItem] | None = None,
     timeline_ready: bool = True,
     pending_choice: EventChoice | None = None,
-    morning: Plan | None = None,
+    morning: PlanningSession | None = None,
 ) -> PlanningState:
     """Состояние на текущее время cursor (по умолчанию время последнего события сессии).
 
-    morning — утренний план дня: из него в ответ идут время и бригада визитов, а не весь план.
+    morning — сессия начала дня: из неё в ответ идут окна заявок и визиты утреннего плана, а не она целиком.
     """
     return PlanningState(
         dataset_id=session.dataset_id,
@@ -210,7 +233,7 @@ def to_planning_state(
         baseline=session.baseline,
         control=session.control,
         last_diff=session.last_diff,
-        morning=morning_visits(morning),
+        morning=morning_requests(morning),
         events=session.events,
         matrix_source=session.problem.travel.base.source,
         cursor=session.now if cursor is None else cursor,

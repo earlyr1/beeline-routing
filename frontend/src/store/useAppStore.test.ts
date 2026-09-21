@@ -1022,18 +1022,38 @@ describe('events being prepared on the server', () => {
   });
 });
 
-describe('agreed times of the calls to clients', () => {
-  it('remembers the time of the current plan and keeps it in localStorage of the dataset', () => {
+describe('agreed windows of the calls to clients', () => {
+  it('remembers the window the client now knows and keeps it in localStorage of the dataset', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState() });
     useAppStore.getState().markAgreed('50104');
-    // Вместе со временем запоминается номер плана: с планом постарше отметку не сравнивают.
-    expect(useAppStore.getState().agreed).toEqual({ '50104': { start: '14:00', engineer_id: 'E01', version: 4 } });
-    expect(JSON.parse(localStorage.getItem(agreedKey('d_test')) ?? '{}')).toEqual({
-      '50104': { start: '14:00', engineer_id: 'E01', version: 4 },
-    });
+    // Вместе с окном запоминается номер плана: с планом постарше отметку не сравнивают.
+    const mark = {
+      window: { start: '14:00', end: '16:00', asap: false },
+      requestWindow: { start: '14:00', end: '16:00', asap: false },
+      version: 4,
+    };
+    expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
+    expect(JSON.parse(localStorage.getItem(agreedKey('d_test')) ?? '{}')).toEqual({ '50104': mark });
+
+    // К 18754 сегодня не приедут: отметка значит, что клиенту так и сказали.
+    useAppStore.getState().markAgreed('18754');
+    expect(useAppStore.getState().agreed['18754']).toMatchObject({ window: null, version: 4 });
   });
 
-  it('drops the agreed times when the events of the day are reset', async () => {
+  it('drops the agreed windows when the day is planned anew', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    useAppStore.getState().markAgreed('50104');
+    vi.mocked(api.buildPlan).mockResolvedValue(at('00:00'));
+    vi.mocked(api.moveCursor).mockResolvedValue(at('09:00', { version: 5 }));
+
+    await useAppStore.getState().plan();
+
+    // Пересчитанный день тоже начинается заново: отметки выброшенного дня в нём не действуют.
+    expect(useAppStore.getState().agreed).toEqual({});
+    expect(localStorage.getItem(agreedKey('d_test'))).toBe('{}');
+  });
+
+  it('drops the agreed windows when the events of the day are reset', async () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState() });
     useAppStore.getState().markAgreed('50104');
     vi.mocked(api.clearTimeline).mockResolvedValue(makePlanningState({ version: 1, cursor: '00:00', timeline: [] }));
@@ -1046,9 +1066,10 @@ describe('agreed times of the calls to clients', () => {
   });
 
   it('takes the marks of the opened dataset and does not carry them to another one', () => {
-    localStorage.setItem(agreedKey('d_test'), JSON.stringify({ '50104': { start: '14:00', engineer_id: 'E02' } }));
+    const known = { '50104': { window: { start: '14:00', end: '16:00' } } };
+    localStorage.setItem(agreedKey('d_test'), JSON.stringify(known));
     useAppStore.getState().setPlanningState(makePlanningState());
-    expect(useAppStore.getState().agreed).toEqual({ '50104': { start: '14:00', engineer_id: 'E02' } });
+    expect(useAppStore.getState().agreed).toEqual(known);
 
     // Тот же набор данных: ответы сервера отметки не сбрасывают.
     useAppStore.getState().markAgreed('46393');
