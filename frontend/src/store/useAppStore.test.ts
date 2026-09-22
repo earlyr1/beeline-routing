@@ -17,6 +17,8 @@ vi.mock('../api/client', async (importOriginal) => {
     getReverseGeocode: vi.fn(),
     getTimelineVariants: vi.fn(),
     setTimelineVariant: vi.fn(),
+    getScenarios: vi.fn(),
+    startScenario: vi.fn(),
   };
 });
 
@@ -126,6 +128,40 @@ describe('useAppStore', () => {
     });
   });
 
+  it('opens a prepared region the same way as an upload: polls the dataset and remembers it', async () => {
+    vi.useFakeTimers();
+    vi.mocked(api.startScenario).mockResolvedValue(processing());
+    vi.mocked(api.getDatasetStatus).mockResolvedValue(makeDatasetStatus());
+
+    const done = useAppStore.getState().startScenario('east');
+    await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS);
+    await done;
+
+    expect(api.startScenario).toHaveBeenCalledWith('east');
+    expect(useAppStore.getState()).toMatchObject({ datasetId: 'd_test', busy: false, error: null });
+    expect(useAppStore.getState().datasetStatus?.status).toBe('ready');
+    expect(localStorage.getItem(SESSION_DATASET_KEY)).toBe('d_test');
+  });
+
+  it('keeps the prepared regions after «Другие данные», and shows the failure of one of them', async () => {
+    vi.mocked(api.getScenarios).mockResolvedValue([
+      { region: 'east', title: 'Восток', requests: 66, engineers: 12, generated: false },
+    ]);
+    await useAppStore.getState().loadScenarios();
+    vi.mocked(api.startScenario).mockRejectedValue(new api.ApiError(404, 'Регион mars не найден: такого подготовленного региона нет.'));
+
+    await useAppStore.getState().startScenario('mars');
+
+    expect(useAppStore.getState()).toMatchObject({
+      busy: false,
+      datasetId: null,
+      error: 'Регион mars не найден: такого подготовленного региона нет.',
+    });
+    // Кнопки регионов нужны и на пустом экране загрузки: их список сброс не трогает.
+    useAppStore.getState().reset();
+    expect(useAppStore.getState().scenarios).toHaveLength(1);
+  });
+
   it('stores the backend failure message', async () => {
     vi.mocked(api.uploadFile).mockResolvedValue(
       makeDatasetStatus({ status: 'failed', stage: 'parsing', report: null, error: 'В файле нет колонок: Адрес' }),
@@ -181,7 +217,7 @@ describe('useAppStore', () => {
     expect(useAppStore.getState().workloadLevel).toBe(0);
   });
 
-  it('keeps the chosen workload level and lunch after «Другой файл»', () => {
+  it('keeps the chosen workload level and lunch after «Другие данные»', () => {
     useAppStore.getState().setPlanningState(makePlanningState({ workload_level: 2, lunch_enabled: false }));
     useAppStore.getState().reset();
     expect(useAppStore.getState()).toMatchObject({ state: null, workloadLevel: 2, lunchEnabled: false });
@@ -203,7 +239,7 @@ describe('useAppStore', () => {
     expect(api.moveCursor).not.toHaveBeenCalled();
   });
 
-  it('ignores a plan response that arrives after «Другой файл»', async () => {
+  it('ignores a plan response that arrives after «Другие данные»', async () => {
     resetStore({ datasetId: 'd_test' });
     const response = deferred<PlanningState>();
     vi.mocked(api.buildPlan).mockReturnValue(response.promise);
@@ -732,7 +768,7 @@ describe('playback of the day', () => {
     });
   });
 
-  it('stops without committing when the day is rebuilt and forgets the playback on «Другой файл»', async () => {
+  it('stops without committing when the day is rebuilt and forgets the playback on «Другие данные»', async () => {
     resetStore({ datasetId: 'd_test', state: at('13:00') });
     useAppStore.getState().play();
     await vi.advanceTimersByTimeAsync(PLAY_TICK_MS * 2);

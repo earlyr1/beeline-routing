@@ -249,7 +249,7 @@ describe('panel «Почему» in the store', () => {
     expect(useAppStore.getState()).toMatchObject({ selectedRequestId: null, selectedEngineerId: 'E01', whyOpen: true });
   });
 
-  it('is closed after «Другой файл»', () => {
+  it('is closed after «Другие данные»', () => {
     useAppStore.setState({ selectedEngineerId: 'E01', whyOpen: true });
     act(() => useAppStore.getState().reset());
     expect(useAppStore.getState().whyOpen).toBe(false);

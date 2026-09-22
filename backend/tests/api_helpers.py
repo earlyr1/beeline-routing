@@ -27,6 +27,13 @@ def sample_bundle():
     return Bundle(region="t", office=OFFICE, requests=requests, engineers=day_engineers())
 
 
+def prepared_bundle(region, title):
+    """Бандл подготовленного региона: регион и название офиса такие же, как у бандлов data/bundles."""
+    bundle = sample_bundle()
+    office = bundle.office.model_copy(update={"region": region, "title": title})
+    return bundle.model_copy(update={"region": region, "office": office})
+
+
 def make_client(tmp_path, bundle=None, geocoder=None, **limits):
     """limits переопределяет лимиты OR-Tools (solver_time_limit_s, solver_time_limit_lunch_s): по умолчанию 1 секунда."""
     bundle = bundle or sample_bundle()

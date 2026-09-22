@@ -31,10 +31,25 @@ class NotFoundAddress(BaseModel):
     address: str
 
 
+class ScenarioInfo(BaseModel):
+    """Подготовленный регион для кнопки на экране загрузки: день из data/bundles открывается одним нажатием."""
+
+    region: str
+    title: str
+    requests: int
+    engineers: int
+    # Выгрузки Билайна по региону нет, данные сгенерированы нами (docs/assumptions.md): кнопка говорит об этом.
+    generated: bool
+
+
 class UploadReport(BaseModel):
     region: str
     region_title: str
-    source: Literal["beeline_csv", "bundle"]
+    # Откуда день: разобранная выгрузка Билайна, загруженный бандл JSON или подготовленный регион по кнопке.
+    source: Literal["beeline_csv", "bundle", "scenario"]
+    # Регион сгенерирован нами, выгрузки Билайна по нему нет (docs/assumptions.md): отчёт говорит об этом
+    # и после кнопки региона, и после загрузки его файла.
+    generated: bool = False
     requests: int
     engineers: int
     skipped_rows: list[str] = Field(default_factory=list)
@@ -126,6 +141,9 @@ class PlanningState(BaseModel):
     workload_level: int
     lunch_enabled: bool
     region: str
+    # Регион сгенерирован нами: «диспетчеры» в нём — наша эвристика, а не решения людей (docs/assumptions.md).
+    # Вкладка «Сравнение» подписывает их колонку по этому полю.
+    generated: bool = False
     office: Office
     now: HHMM
     requests: list[Request]
@@ -213,10 +231,12 @@ def to_planning_state(
     timeline_ready: bool = True,
     pending_choice: EventChoice | None = None,
     morning: PlanningSession | None = None,
+    generated: bool = False,
 ) -> PlanningState:
     """Состояние на текущее время cursor (по умолчанию время последнего события сессии).
 
     morning — сессия начала дня: из неё в ответ идут окна заявок и визиты утреннего плана, а не она целиком.
+    generated — регион сгенерирован нами: об этом говорит вкладка «Сравнение».
     """
     return PlanningState(
         dataset_id=session.dataset_id,
@@ -224,6 +244,7 @@ def to_planning_state(
         workload_level=session.workload_level,
         lunch_enabled=session.lunch_enabled,
         region=session.region,
+        generated=generated,
         office=session.office,
         now=session.now,
         requests=session.requests,

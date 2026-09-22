@@ -20,6 +20,9 @@ class PreparedDay:
     requests: list[Request]
     engineers: list[Engineer]
     control: Plan | None
+    # Выгрузки Билайна по региону нет, день сгенерирован нами (docs/assumptions.md): об этом говорят и отчёт
+    # предподсчёта, и вкладка «Сравнение», где «диспетчеры» такого региона — наша эвристика, а не решения людей.
+    generated: bool = False
 
 
 @dataclass
@@ -92,15 +95,23 @@ class DatasetRecord:
             self.last_version = max(self.last_version, version)
 
 
+# Сколько последних наборов данных живёт в памяти. Экран показывает один, прежние нужны только вкладке, которую
+# не закрыли; каждый день — это заявки, матрица и планы, поэтому бесконечно копить их нельзя.
+MAX_DATASETS = 8
+
+
 class DatasetRegistry:
     def __init__(self) -> None:
         self._items: dict[str, DatasetRecord] = {}
         self._lock = threading.Lock()
 
     def create(self) -> DatasetRecord:
+        """Новый набор данных. Самые давние забываются: их страницы всё равно никто не держит открытыми."""
         record = DatasetRecord(dataset_id=f"d_{uuid.uuid4().hex[:8]}")
         with self._lock:
             self._items[record.dataset_id] = record
+            while len(self._items) > MAX_DATASETS:
+                self._items.pop(next(iter(self._items)))
         return record
 
     def get(self, dataset_id: str) -> DatasetRecord | None:

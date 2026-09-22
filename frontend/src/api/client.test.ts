@@ -6,9 +6,11 @@ import {
   deleteTimelineEvent,
   getReverseGeocode,
   getRouteGeometry,
+  getScenarios,
   getTimelineVariants,
   moveCursor,
   postEvent,
+  startScenario,
   uploadFile,
 } from './client';
 import type { PlanEvent } from './types';
@@ -98,6 +100,18 @@ describe('api client', () => {
     expect(fetchMock.mock.calls[2]).toEqual(['/api/datasets/d1/plan', { method: 'POST' }]);
     await buildPlan('d1', {});
     expect(fetchMock.mock.calls[3]).toEqual(['/api/datasets/d1/plan', { method: 'POST' }]);
+  });
+
+  it('asks for the prepared regions and starts the day of one of them', async () => {
+    const east = { region: 'east', title: 'Восток', requests: 66, engineers: 12, generated: false };
+    const fetchMock = vi.fn().mockResolvedValueOnce(reply(200, [east])).mockResolvedValueOnce(reply(202, { dataset_id: 'd1' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(getScenarios()).resolves.toEqual([east]);
+    expect(fetchMock.mock.calls[0]).toEqual(['/api/scenarios', undefined]);
+
+    await expect(startScenario('north west')).resolves.toEqual({ dataset_id: 'd1' });
+    expect(fetchMock.mock.calls[1]).toEqual(['/api/scenarios/north%20west', { method: 'POST' }]);
   });
 
   it('asks the geometry endpoint for the route of the current plan', async () => {

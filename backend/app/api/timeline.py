@@ -106,6 +106,8 @@ def planning_state(record: DatasetRecord) -> PlanningState:
             pending_choice=_choice(record, *pending) if pending is not None else None,
             # Утро дня — состояние до событий шкалы, а не первая загрузка файла: пересборка дня делает его заново.
             morning=record.base,
+            # Регион дня сгенерирован нами: вкладка «Сравнение» так и подписывает колонку «Диспетчеры».
+            generated=record.prepared is not None and record.prepared.generated,
         )
 
 

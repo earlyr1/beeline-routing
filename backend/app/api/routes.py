@@ -8,7 +8,7 @@ from fastapi import Request as HttpRequest
 
 from app.api.deps import AppDeps
 from app.api.geometry import route_geometry
-from app.api.ingest_service import preprocess_upload
+from app.api.ingest_service import preprocess_scenario, preprocess_upload, scenario_bundle, scenarios
 from app.api.registry import DatasetRecord
 from app.api.schemas import (
     ClientConfig,
@@ -17,6 +17,7 @@ from app.api.schemas import (
     PlanningState,
     PlanRequest,
     RouteGeometry,
+    ScenarioInfo,
     VariantRequest,
 )
 from app.api.timeline import (
@@ -109,6 +110,24 @@ def upload(background: BackgroundTasks, file: Annotated[UploadFile, File()], dep
         raise HTTPException(status_code=400, detail="Файл пустой.")
     record = deps.registry.create()
     background.add_task(preprocess_upload, record, filename, data, deps.ingest)
+    return record.status_model()
+
+
+@router.get("/scenarios", response_model=list[ScenarioInfo])
+def scenario_list(deps: Deps) -> list[ScenarioInfo]:
+    """Подготовленные регионы для кнопок экрана загрузки: заголовок, сколько заявок и бригад, наш ли это регион."""
+    return scenarios(deps.ingest)
+
+
+@router.post("/scenarios/{region}", response_model=DatasetStatus, status_code=202)
+def start_scenario(region: str, background: BackgroundTasks, deps: Deps) -> DatasetStatus:
+    """День подготовленного региона без выбора файла. Дальше всё как после загрузки: тот же датасет и тот же путь."""
+    try:
+        bundle = scenario_bundle(deps.ingest, region)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    record = deps.registry.create()
+    background.add_task(preprocess_scenario, record, bundle, deps.ingest)
     return record.status_model()
 
 

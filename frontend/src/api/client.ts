@@ -15,6 +15,7 @@ import type {
   Proposal,
   ReverseGeocode,
   RouteGeometry,
+  ScenarioInfo,
 } from './types';
 
 export class ApiError extends Error {
@@ -80,6 +81,13 @@ export function uploadFile(file: File): Promise<DatasetStatus> {
 }
 
 export const getDatasetStatus = (datasetId: string) => request<DatasetStatus>(dataset(datasetId));
+
+/** Подготовленные регионы для кнопок экрана загрузки. */
+export const getScenarios = () => request<ScenarioInfo[]>('/scenarios');
+
+/** День подготовленного региона без выбора файла: дальше всё как после загрузки. */
+export const startScenario = (region: string) =>
+  request<DatasetStatus>(`/scenarios/${encodeURIComponent(region)}`, { method: 'POST' });
 
 /** Построить план дня; пропущенные нагрузку и обед сервер берёт из сессии. */
 export function buildPlan(datasetId: string, body: PlanRequest = {}): Promise<PlanningState> {

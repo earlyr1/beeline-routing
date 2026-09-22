@@ -20,6 +20,9 @@ class RegionConfig(BaseModel):
     title: str
     control: str
     synthetic: str
+    # Выгрузки Билайна по региону нет, пара CSV сгенерирована нами (docs/assumptions.md). На досинтез это не влияет:
+    # флаг нужен, чтобы экран загрузки честно подписывал кнопку такого региона.
+    generated: bool = False
 
 
 class TransportRule(BaseModel):

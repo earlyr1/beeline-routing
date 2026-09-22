@@ -148,9 +148,10 @@ export function MetricsStrip() {
           className="btn btn-ghost"
           onClick={reset}
           disabled={busy}
-          title={busy ? 'Дождитесь окончания расчёта' : undefined}
+          // День открывают и файлом, и кнопкой региона: после кнопки никакого файла в сессии нет.
+          title={busy ? 'Дождитесь окончания расчёта' : 'Файл или день региона'}
         >
-          Другой файл
+          Другие данные
         </button>
       </div>
     </div>

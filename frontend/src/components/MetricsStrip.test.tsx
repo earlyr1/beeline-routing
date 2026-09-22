@@ -27,13 +27,13 @@ describe('MetricsStrip', () => {
     render(<MetricsStrip />);
     expect(screen.getByText('+2,7 км к базовому')).toBeInTheDocument();
     expect(screen.getAllByText(/к базовому/)).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'Другой файл' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Другие данные' })).toBeEnabled();
   });
 
   it('blocks switching to another file while a calculation is running', () => {
     useAppStore.setState({ busy: true });
     render(<MetricsStrip />);
-    expect(screen.getByRole('button', { name: 'Другой файл' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Другие данные' })).toBeDisabled();
     // Пересчёта с нуля в шапке нет: день пересчитывает «Применить», события сбрасывает панель событий.
     expect(screen.queryByRole('button', { name: 'Пересчитать с нуля' })).not.toBeInTheDocument();
   });
@@ -199,9 +199,9 @@ describe('MetricsStrip', () => {
   it.each([
     ['the clock plays', { playing: true }],
     ['the plan is being moved to the clock', { committing: true }],
-  ])('keeps «Другой файл» available while %s', (_, patch) => {
+  ])('keeps «Другие данные» available while %s', (_, patch) => {
     useAppStore.setState(patch);
     render(<MetricsStrip />);
-    expect(screen.getByRole('button', { name: 'Другой файл' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Другие данные' })).toBeEnabled();
   });
 });

@@ -9,12 +9,24 @@ import {
   getDatasetStatus,
   getPlanningState,
   getReverseGeocode,
+  getScenarios,
   getTimelineVariants,
   moveCursor,
   setTimelineVariant,
+  startScenario as startScenarioRequest,
   uploadFile,
 } from '../api/client';
-import type { ClientConfig, DatasetStatus, EventChoice, EventVariant, HHMM, PlanEvent, PlanningState, TimelineItem } from '../api/types';
+import type {
+  ClientConfig,
+  DatasetStatus,
+  EventChoice,
+  EventVariant,
+  HHMM,
+  PlanEvent,
+  PlanningState,
+  ScenarioInfo,
+  TimelineItem,
+} from '../api/types';
 import { agreedWindow, type AgreedWindows } from '../lib/communications';
 import type { PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, toMinutes } from '../lib/format';
@@ -60,6 +72,8 @@ export type AddressLookup = 'idle' | 'loading' | 'done';
 
 export interface AppData {
   config: ClientConfig | null;
+  /** Подготовленные регионы для кнопок экрана загрузки; пустой список — сервер их не прислал. */
+  scenarios: ScenarioInfo[];
   datasetId: string | null;
   datasetStatus: DatasetStatus | null;
   /** Открываем прежний план после перезагрузки или закрытия браузера: экран загрузки не показывается. */
@@ -125,7 +139,11 @@ export interface AppData {
 
 export interface AppActions {
   loadConfig(): Promise<void>;
+  /** Спросить подготовленные регионы для кнопок экрана загрузки. */
+  loadScenarios(): Promise<void>;
   upload(file: File): Promise<void>;
+  /** Открыть день подготовленного региона: дальше всё как после загрузки файла. */
+  startScenario(region: string): Promise<void>;
   plan(): Promise<void>;
   /**
    * Поставить событие на шкалу дня. Сначала сервер переводит план на время часов, чтобы событие у часов применилось сразу.
@@ -204,6 +222,7 @@ export type AppState = AppData & AppActions;
 
 export const initialAppData: AppData = {
   config: null,
+  scenarios: [],
   datasetId: null,
   datasetStatus: null,
   restoring: false,
@@ -326,7 +345,7 @@ function rejectedMessage(items: TimelineItem[], state: PlanningState): string {
   return items.map((item) => rejectedNotice(item, engineers, requests)).join(' ');
 }
 
-/** Поколение сессии: растёт при новой загрузке и при «Другой файл». Ответы прошлых поколений игнорируются. */
+/** Поколение сессии: растёт при новой загрузке и при «Другие данные». Ответы прошлых поколений игнорируются. */
 let generation = 0;
 const isCurrent = (value: number) => value === generation;
 
@@ -577,6 +596,46 @@ export const useAppStore = create<AppState>()((set, get) => {
     }
   }
 
+  /**
+   * Новый набор данных: send отдаёт статус предподсчёта (загруженный файл или подготовленный регион).
+   * Дальше оба пути одинаковы: экран забывает прежний план и ждёт готовности набора.
+   */
+  async function openDataset(send: () => Promise<DatasetStatus>): Promise<void> {
+    resetAppSession();
+    const current = generation;
+    saveDatasetId(null);
+    set({
+      busy: true,
+      error: null,
+      datasetId: null,
+      datasetStatus: null,
+      restoring: false,
+      state: null,
+      selectedRequestId: null,
+      selectedEngineerId: null,
+      whyOpen: false,
+      ...NO_FLOATING_DIALOG,
+      ...NO_CLOCK_ACTIVITY,
+      toolbarDialog: null,
+      mapMenu: null,
+      ...NO_ADDRESS_LOOKUP,
+      ...NO_CHOICE,
+    });
+    try {
+      const status = await send();
+      if (!isCurrent(current)) return;
+      const datasetId = status.dataset_id;
+      // Набор запоминается сразу: закрытый во время расчёта браузер при следующем открытии дождётся готовности.
+      saveDatasetId(datasetId);
+      set({ datasetId, datasetStatus: status });
+      await followUpload(datasetId, status, current);
+    } catch (error) {
+      if (isCurrent(current)) set({ error: errorMessage(error) });
+    } finally {
+      if (isCurrent(current)) set({ busy: false });
+    }
+  }
+
   return {
     ...initialAppData,
     // Сохранённый план откроется сразу: до первого ответа сервера экран загрузки не мелькает.
@@ -590,40 +649,20 @@ export const useAppStore = create<AppState>()((set, get) => {
       }
     },
 
-    async upload(file) {
-      resetAppSession();
-      const current = generation;
-      saveDatasetId(null);
-      set({
-        busy: true,
-        error: null,
-        datasetId: null,
-        datasetStatus: null,
-        restoring: false,
-        state: null,
-        selectedRequestId: null,
-        selectedEngineerId: null,
-        whyOpen: false,
-        ...NO_FLOATING_DIALOG,
-        ...NO_CLOCK_ACTIVITY,
-        toolbarDialog: null,
-        mapMenu: null,
-        ...NO_ADDRESS_LOOKUP,
-        ...NO_CHOICE,
-      });
+    async loadScenarios() {
       try {
-        const status = await uploadFile(file);
-        if (!isCurrent(current)) return;
-        const datasetId = status.dataset_id;
-        // Набор запоминается сразу: закрытый во время расчёта браузер при следующем открытии дождётся готовности.
-        saveDatasetId(datasetId);
-        set({ datasetId, datasetStatus: status });
-        await followUpload(datasetId, status, current);
-      } catch (error) {
-        if (isCurrent(current)) set({ error: errorMessage(error) });
-      } finally {
-        if (isCurrent(current)) set({ busy: false });
+        set({ scenarios: await getScenarios() });
+      } catch {
+        // Список регионов не пришёл: кнопок нет, а выбор файла работает как раньше.
       }
+    },
+
+    upload(file) {
+      return openDataset(() => uploadFile(file));
+    },
+
+    startScenario(region) {
+      return openDataset(() => startScenarioRequest(region));
     },
 
     async plan() {
@@ -1047,8 +1086,8 @@ export const useAppStore = create<AppState>()((set, get) => {
       resetAppSession();
       saveDatasetId(null);
       // Нагрузку и обед диспетчер выбирал сам: следующий файл он планирует с тем же выбором.
-      const { config, workloadLevel, lunchEnabled } = get();
-      set({ ...initialAppData, config, workloadLevel, lunchEnabled });
+      const { config, scenarios, workloadLevel, lunchEnabled } = get();
+      set({ ...initialAppData, config, scenarios, workloadLevel, lunchEnabled });
     },
   };
 });

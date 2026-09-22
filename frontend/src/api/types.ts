@@ -29,6 +29,8 @@ export type DatasetStage = 'parsing' | 'geocoding' | 'matrix' | 'solving' | 'rea
 export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'failed';
 export type SolverName = 'ortools' | 'fcfs' | 'dispatchers';
 export type MatrixSource = 'osrm' | 'haversine';
+/** Откуда день: выгрузка Билайна CSV, загруженный бандл JSON или подготовленный регион по кнопке. */
+export type DataSource = 'beeline_csv' | 'bundle' | 'scenario';
 /** Время в формате HH:MM */
 export type HHMM = string;
 
@@ -167,10 +169,22 @@ export interface Plan {
   violations: string[];
 }
 
+/** Подготовленный регион для кнопки на экране загрузки. */
+export interface ScenarioInfo {
+  region: string;
+  title: string;
+  requests: number;
+  engineers: number;
+  /** Выгрузки Билайна по региону нет, данные сгенерированы нами: кнопка говорит об этом. */
+  generated: boolean;
+}
+
 export interface UploadReport {
   region: string;
   region_title: string;
-  source: 'beeline_csv' | 'bundle';
+  source: DataSource;
+  /** Выгрузки Билайна по региону нет, день сгенерирован нами: отчёт загрузки говорит об этом. */
+  generated: boolean;
   requests: number;
   engineers: number;
   skipped_rows: string[];
@@ -300,6 +314,8 @@ export interface PlanningState {
   dataset_id: string;
   version: number;
   region: string;
+  /** Регион сгенерирован нами: «диспетчеры» в нём — наша эвристика, а не решения людей. */
+  generated: boolean;
   office: Office;
   now: HHMM;
   requests: ServiceRequest[];

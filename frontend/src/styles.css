@@ -245,6 +245,42 @@ h4 {
   padding: 32px;
 }
 
+/* Подготовленные регионы: день открывается одной кнопкой, без выбора файла */
+.scenarios {
+  margin-top: 20px;
+}
+
+.scenarios h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+}
+
+.scenarios__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.scenario {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 8px 12px;
+  text-align: left;
+  white-space: normal;
+}
+
+.scenario__title {
+  font-weight: 600;
+}
+
+.scenario__meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+
 .dropzone {
   margin: 20px 0;
   border: 2px dashed var(--border);
@@ -298,6 +334,11 @@ h4 {
 .report__grid dd {
   margin: 2px 0 0;
   font-weight: 600;
+}
+
+/* Сгенерированный нами регион: про это говорит и отчёт загрузки, а не только кнопка */
+.report__generated {
+  margin: 0 0 12px;
 }
 
 /* Нагрузка инженеров */

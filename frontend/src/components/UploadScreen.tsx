@@ -1,6 +1,6 @@
-import { useRef, useState, type DragEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent } from 'react';
 import type { GeocodePrecision } from '../api/types';
-import { MATRIX_SOURCE_LABELS, PRECISION_LABELS, STAGE_LABELS } from '../lib/format';
+import { MATRIX_SOURCE_LABELS, PRECISION_LABELS, SOURCE_LABELS, STAGE_LABELS, plural } from '../lib/format';
 import { MAX_WORKLOAD_LEVEL, MIN_WORKLOAD_LEVEL, WORKLOAD_LEVELS, travelBufferText, workloadLevel } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
 
@@ -13,6 +13,9 @@ export function UploadScreen() {
   const busy = useAppStore((s) => s.busy);
   const error = useAppStore((s) => s.error);
   const upload = useAppStore((s) => s.upload);
+  const scenarios = useAppStore((s) => s.scenarios);
+  const loadScenarios = useAppStore((s) => s.loadScenarios);
+  const startScenario = useAppStore((s) => s.startScenario);
   const plan = useAppStore((s) => s.plan);
   const level = useAppStore((s) => s.workloadLevel);
   const setWorkloadLevel = useAppStore((s) => s.setWorkloadLevel);
@@ -22,10 +25,21 @@ export function UploadScreen() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
+  useEffect(() => {
+    void loadScenarios();
+  }, [loadScenarios]);
+
   const start = (file: File | undefined) => {
-    if (!file) return;
+    // Перетаскивание идёт мимо кнопок, поэтому файл во время предподсчёта или расчёта не открывается и здесь.
+    if (!file || waiting) return;
     setFileName(file.name);
     void upload(file);
+  };
+
+  const openScenario = (region: string) => {
+    // Файл диспетчер не выбирал: имя прежнего файла со страницы уходит.
+    setFileName(null);
+    void startScenario(region);
   };
 
   const onDrop = (event: DragEvent<HTMLDivElement>) => {
@@ -35,7 +49,14 @@ export function UploadScreen() {
   };
 
   const processing = status?.status === 'processing';
+  // Новый день не открывается, пока идёт предподсчёт или расчёт плана: второе нажатие бросило бы уже идущий поиск.
+  const waiting = processing || busy;
   const report = status?.report ?? null;
+  // Названия сгенерированных нами регионов из ответа сервера: подпись под рядом кнопок называет их сама.
+  const generatedTitles = scenarios
+    .filter((scenario) => scenario.generated)
+    .map((scenario) => scenario.title)
+    .join(', ');
   const progress = status && status.progress.total > 0 ? Math.round((status.progress.done / status.progress.total) * 100) : 0;
   // Пока файл обрабатывается, нагрузку и обед можно менять: сервер получит их только вместе с «Спланировать».
   const planning = busy && status?.status === 'ready';
@@ -60,7 +81,7 @@ export function UploadScreen() {
           onDrop={onDrop}
         >
           <p>Перетащите файл сюда или</p>
-          <button type="button" className="btn btn-primary" onClick={() => inputRef.current?.click()} disabled={processing}>
+          <button type="button" className="btn btn-primary" onClick={() => inputRef.current?.click()} disabled={waiting}>
             Загрузить CSV или JSON
           </button>
           <input
@@ -73,6 +94,40 @@ export function UploadScreen() {
           />
           {fileName && <p className="muted">Файл: {fileName}</p>}
         </div>
+
+        {scenarios.length > 0 && (
+          <section className="scenarios" aria-labelledby="scenarios-title">
+            {/* Главный путь по ТЗ — сырая выгрузка, поэтому регионы стоят под выбором файла, а не над ним. */}
+            <h2 id="scenarios-title">Или открыть день региона</h2>
+            <div className="scenarios__row">
+              {scenarios.map((scenario) => (
+                <button
+                  key={scenario.region}
+                  type="button"
+                  className="btn scenario"
+                  disabled={waiting}
+                  onClick={() => openScenario(scenario.region)}
+                >
+                  {/* Регион без выгрузки Билайна подписан прямо на кнопке, а не в подсказке. */}
+                  <span className="scenario__title">
+                    {scenario.generated ? `${scenario.title} (сгенерирован нами)` : scenario.title}
+                  </span>
+                  <span className="scenario__meta">
+                    {scenario.requests} {plural(scenario.requests, 'заявка', 'заявки', 'заявок')} ·{' '}
+                    {scenario.engineers} {plural(scenario.engineers, 'бригада', 'бригады', 'бригад')}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <p className="muted">Те же выгрузки, уже разобранные: день открывается сразу, без выбора файла.</p>
+            {generatedTitles && (
+              // Про сгенерированный регион говорим сами: «те же выгрузки» к нему не относится.
+              <p className="muted">
+                {`${generatedTitles} — наш регион: выгрузки Билайна по нему нет, адреса и бригады сгенерированы нами.`}
+              </p>
+            )}
+          </section>
+        )}
 
         {status && (
           <div className="upload-status" aria-live="polite">
@@ -100,7 +155,8 @@ export function UploadScreen() {
 
         {report && (
           <div className="report">
-            <h2>{report.region_title}</h2>
+            {/* Пометка держится и после нажатия кнопки: иначе сгенерированный день не отличить от настоящего. */}
+            <h2>{report.generated ? `${report.region_title} — сгенерирован нами` : report.region_title}</h2>
             <dl className="report__grid">
               <div>
                 <dt>Заявок</dt>
@@ -116,9 +172,14 @@ export function UploadScreen() {
               </div>
               <div>
                 <dt>Источник</dt>
-                <dd>{report.source === 'bundle' ? 'Готовый набор JSON' : 'Выгрузка Билайна CSV'}</dd>
+                <dd>{SOURCE_LABELS[report.source]}</dd>
               </div>
             </dl>
+            {report.generated && (
+              <p className="note report__generated">
+                {`Выгрузки Билайна по региону «${report.region_title}» нет: адреса, бригады и распределение «диспетчеров» сгенерированы нами (docs/assumptions.md).`}
+              </p>
+            )}
             <p className="report__geo">
               Адреса на карте: {PRECISIONS.map((key) => `${PRECISION_LABELS[key]} ${report.geocoding[key] ?? 0}`).join(' · ')}
             </p>

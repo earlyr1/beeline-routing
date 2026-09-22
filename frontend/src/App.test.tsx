@@ -67,7 +67,7 @@ describe('App', () => {
     const banner = within(screen.getByRole('banner'));
     expect(banner.getAllByRole('button').map((button) => button.textContent)).toEqual([
       'с обедом',
-      'Другой файл',
+      'Другие данные',
       'Сброс событий',
       'Срочная заявка',
     ]);

@@ -65,6 +65,13 @@ describe('panel tabs', () => {
     expect(screen.getByText('Колонка «Диспетчеры» — исходный день, события (3) в ней не учтены.')).toBeInTheDocument();
   });
 
+  it('ComparisonTab does not call our heuristic a dispatchers plan in the generated region', () => {
+    resetStore({ state: makePlanningState({ generated: true }) });
+    render(<ComparisonTab />);
+    expect(screen.getByText(/регион сгенерирован нами, заявки разложила простая эвристика/)).toBeInTheDocument();
+    expect(screen.queryByText(/фактическое распределение из контрольного файла/)).not.toBeInTheDocument();
+  });
+
   it('ComparisonTab has no events note before any event', () => {
     resetStore({ state: makePlanningState({ events: [] }) });
     render(<ComparisonTab />);

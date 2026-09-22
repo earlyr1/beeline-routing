@@ -1,5 +1,6 @@
 import type {
   DatasetStage,
+  DataSource,
   EventType,
   GeocodePrecision,
   HHMM,
@@ -80,6 +81,12 @@ export const PRECISION_LABELS: Record<GeocodePrecision, string> = {
   street: 'до улицы',
   locality: 'до района',
   none: 'не найдено',
+};
+
+export const SOURCE_LABELS: Record<DataSource, string> = {
+  beeline_csv: 'Выгрузка Билайна CSV',
+  bundle: 'Готовый набор JSON',
+  scenario: 'Подготовленный регион',
 };
 
 export const MATRIX_SOURCE_LABELS: Record<MatrixSource, string> = {

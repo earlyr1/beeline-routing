@@ -1,7 +1,12 @@
-"""Фоновый предподсчёт загруженного файла: разбор, регион, геокодинг, матрица, первый план."""
+"""Фоновый предподсчёт дня: разбор, регион, геокодинг, матрица, первый план.
+
+Тем же путём идут загруженный файл и подготовленный регион с экрана загрузки: у них различается только то, откуда
+берутся заявки и бригады, а дальше день собирается одинаково и одинаково подхватывает ночной план региона.
+"""
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections import Counter
 from collections.abc import Callable
@@ -11,7 +16,7 @@ from pathlib import Path
 from pydantic import ValidationError
 
 from app.api.registry import DatasetRecord, PreparedDay
-from app.api.schemas import GeocodingCounts, NotFoundAddress, UploadReport
+from app.api.schemas import GeocodingCounts, NotFoundAddress, ScenarioInfo, UploadReport
 from app.domain.models import Bundle, Request
 from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
 from app.ingest.bundle import load_bundle
@@ -22,23 +27,41 @@ from app.synth.config import SynthConfig
 from app.synth.requests import build_requests
 
 GeocodeFn = Callable[[str, str], GeoResult]
+logger = logging.getLogger(__name__)
 
 
 class BundleStore:
-    """Подготовленные бандлы регионов из data/bundles/<region>/bundle.json (читаются один раз)."""
+    """Подготовленные бандлы регионов из data/bundles/<region>/bundle.json (читаются один раз).
+
+    Нечитаемый бандл одного региона не уносит с собой остальные: такой регион пропускается, в списке кнопок его
+    нет, а на запрос его дня сервис отвечает по-русски. Иначе один повреждённый файл ломал бы весь экран загрузки.
+    """
 
     def __init__(self, bundles_dir: Path) -> None:
         self._dir = Path(bundles_dir)
         self._bundles: dict[str, Bundle] | None = None
+        self._broken: set[str] = set()
         self._lock = threading.Lock()
 
     def all(self) -> dict[str, Bundle]:
         with self._lock:
             if self._bundles is None:
-                self._bundles = {
-                    path.parent.name: load_bundle(path) for path in sorted(self._dir.glob("*/bundle.json"))
-                }
+                bundles: dict[str, Bundle] = {}
+                for path in sorted(self._dir.glob("*/bundle.json")):
+                    region = path.parent.name
+                    try:
+                        bundles[region] = load_bundle(path)
+                    except (ValueError, OSError) as error:
+                        self._broken.add(region)
+                        logger.warning("Бандл региона %r не прочитан, регион пропущен: %s", region, error)
+                self._bundles = bundles
             return self._bundles
+
+    def is_broken(self, region: str) -> bool:
+        """Бандл региона лежит в каталоге, но не читается: повреждён или не соответствует схеме."""
+        self.all()
+        with self._lock:
+            return region in self._broken
 
 
 @dataclass
@@ -47,6 +70,45 @@ class IngestDeps:
     synth_config: SynthConfig
     geocode: GeocodeFn
     planning: PlanningContext
+
+
+def scenarios(deps: IngestDeps) -> list[ScenarioInfo]:
+    """Подготовленные регионы: у них есть и бандл в data/bundles, и описание в synth_config.yaml.
+
+    Порядок — как в конфиге: настоящие регионы Билайна идут раньше сгенерированного нами. Название берётся оттуда
+    же, откуда его взял prepare для офиса бандла, поэтому кнопка и заголовок отчёта после загрузки совпадают.
+    """
+    bundles = deps.bundles.all()
+    return [
+        ScenarioInfo(
+            region=region,
+            title=config.title,
+            requests=len(bundle.requests),
+            engineers=len(bundle.engineers),
+            generated=config.generated,
+        )
+        for region, config in deps.synth_config.regions.items()
+        if (bundle := bundles.get(region)) is not None
+    ]
+
+
+def scenario_bundle(deps: IngestDeps, region: str) -> Bundle:
+    """Бандл подготовленного региона; LookupError — региона нет в конфиге, его бандл не собран или не читается."""
+    config = deps.synth_config.regions.get(region)
+    if config is None:
+        raise LookupError(f"Регион {region} не найден: такого подготовленного региона нет.")
+    bundle = deps.bundles.all().get(region)
+    if bundle is None:
+        if deps.bundles.is_broken(region):
+            raise LookupError(f"Регион «{config.title}» не читается: бандл data/bundles/{region} повреждён.")
+        raise LookupError(f"Регион «{config.title}» не подготовлен: нет бандла в data/bundles/{region}.")
+    return bundle
+
+
+def is_generated(deps: IngestDeps, region: str) -> bool:
+    """Регион сгенерирован нами: выгрузки Билайна по нему нет (docs/assumptions.md)."""
+    config = deps.synth_config.regions.get(region)
+    return config is not None and config.generated
 
 
 def _normalize(text: str) -> str:
@@ -122,6 +184,20 @@ def _drop_repeated_ids(raw: RawFile) -> RawFile:
     return replace(raw, rows=rows, skipped=skipped)
 
 
+def _bundle_day(record: DatasetRecord, bundle: Bundle, deps: IngestDeps) -> PreparedDay:
+    """День из бандла: заявкам без координат ищутся адреса, остальное берётся как есть."""
+    requests = _geocode_missing(record, bundle.requests, deps.geocode)
+    return PreparedDay(
+        bundle.region,
+        bundle.office.title,
+        bundle.office,
+        requests,
+        bundle.engineers,
+        bundle.control_plan,
+        is_generated(deps, bundle.region),
+    )
+
+
 def _read_upload(
     record: DatasetRecord, filename: str, data: bytes, deps: IngestDeps
 ) -> tuple[PreparedDay, str, list[str]]:
@@ -134,16 +210,7 @@ def _read_upload(
             message = str(first["msg"]).removeprefix("Value error, ")
             detail = f"{location}: {message}" if location else message
             raise ValueError(f"JSON не соответствует схеме бандла: {detail}") from error
-        requests = _geocode_missing(record, bundle.requests, deps.geocode)
-        day = PreparedDay(
-            bundle.region,
-            bundle.office.title,
-            bundle.office,
-            requests,
-            bundle.engineers,
-            bundle.control_plan,
-        )
-        return day, "bundle", []
+        return _bundle_day(record, bundle, deps), "bundle", []
 
     raw = parse_beeline_csv(data)
     if raw.is_control:
@@ -165,14 +232,19 @@ def _read_upload(
         requests,
         reference.engineers,
         control,
+        is_generated(deps, reference.region),
     )
     return day, "beeline_csv", raw.skipped
 
 
-def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: IngestDeps) -> None:
+ReadDay = Callable[[], tuple[PreparedDay, str, list[str]]]
+
+
+def _preprocess(record: DatasetRecord, read: ReadDay, deps: IngestDeps) -> None:
+    """Общий путь дня: read даёт заявки и бригады, дальше матрица, план начала дня и отчёт предподсчёта."""
     try:
         _set(record, stage="parsing")
-        day, source, skipped = _read_upload(record, filename, data, deps)
+        day, source, skipped = read()
         _set(record, stage="matrix")
         ctx = deps.planning
         problem = make_problem(
@@ -193,6 +265,7 @@ def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: I
             region=day.region,
             region_title=day.region_title,
             source=source,
+            generated=day.generated,
             requests=len(day.requests),
             engineers=len(day.engineers),
             skipped_rows=skipped,
@@ -216,3 +289,13 @@ def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: I
         _set(record, status="failed", error=str(error))
     except Exception as error:  # noqa: BLE001 - любой сбой предподсчёта показываем пользователю
         _set(record, status="failed", error=f"Внутренняя ошибка предподсчёта: {error}")
+
+
+def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: IngestDeps) -> None:
+    """Предподсчёт загруженного файла: выгрузка Билайна CSV или готовый бандл JSON."""
+    _preprocess(record, lambda: _read_upload(record, filename, data, deps), deps)
+
+
+def preprocess_scenario(record: DatasetRecord, bundle: Bundle, deps: IngestDeps) -> None:
+    """Предподсчёт подготовленного региона: тот же путь, что у загруженного бандла, только файл не разбирается."""
+    _preprocess(record, lambda: (_bundle_day(record, bundle, deps), "scenario", []), deps)

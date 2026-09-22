@@ -33,7 +33,7 @@ from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.portfolio import PORTFOLIO, SolverPool, plan_cost
 from scripts import night_plan as cli
-from tests.api_helpers import csv_bytes, make_client, sample_bundle, upload
+from tests.api_helpers import csv_bytes, make_client, prepared_bundle, sample_bundle, upload
 from tests.helpers import at, eng
 from tests.planning_helpers import (
     EXACT_TRAVEL_LEVEL,
@@ -500,6 +500,29 @@ def test_state_says_where_the_morning_plan_came_from(tmp_path):
     assert other["workload_level"] == 0 and other["precomputed"] is None
     back = client.post(f"{base}/plan", json={"workload_level": DEFAULT_WORKLOAD_LEVEL}).json()
     assert back["precomputed"] == precomputed
+
+
+def test_scenario_day_takes_the_night_plan_of_its_region(tmp_path):
+    """Подготовленный регион идёт тем же путём, что и загрузка файла, поэтому и ночной план подхватывает так же."""
+    bundle = prepared_bundle("east", "Восток")
+    client, deps = make_client(tmp_path, bundle=bundle)
+    write_night_plan(
+        tmp_path / "bundles",
+        deps.ingest.planning,
+        bundle.requests,
+        bundle.engineers,
+        night_routes=SECOND_CREW,
+        region="east",
+    )
+
+    dataset_id = client.post("/api/scenarios/east").json()["dataset_id"]
+    state = client.get(f"/api/datasets/{dataset_id}/state").json()
+
+    assert state["precomputed"] == {"search_minutes": 120.0, "computed_at": COMPUTED_AT}
+    assert {r["engineer_id"]: [v["request_id"] for v in r["visits"]] for r in state["plan"]["routes"]} == {
+        "E1": [],
+        **SECOND_CREW,
+    }
 
 
 def test_state_without_night_plan_has_no_precomputed(tmp_path):

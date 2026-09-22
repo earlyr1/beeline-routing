@@ -3,17 +3,34 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
-  return { ...actual, uploadFile: vi.fn(), getDatasetStatus: vi.fn(), buildPlan: vi.fn(), moveCursor: vi.fn() };
+  return {
+    ...actual,
+    uploadFile: vi.fn(),
+    getDatasetStatus: vi.fn(),
+    buildPlan: vi.fn(),
+    moveCursor: vi.fn(),
+    getScenarios: vi.fn(),
+    startScenario: vi.fn(),
+  };
 });
 
 import * as api from '../api/client';
+import type { ScenarioInfo } from '../api/types';
 import { useAppStore } from '../store/useAppStore';
 import { makeDatasetStatus, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { UploadScreen } from './UploadScreen';
 
+/** Ответ сервера о подготовленных регионах: настоящая выгрузка Билайна и сгенерированный нами регион. */
+const SCENARIOS: ScenarioInfo[] = [
+  { region: 'east', title: 'Восток', requests: 66, engineers: 12, generated: false },
+  { region: 'north_west', title: 'Северо-Запад', requests: 72, engineers: 12, generated: true },
+];
+
 beforeEach(() => {
   vi.resetAllMocks();
+  // По умолчанию подготовленных регионов нет: тесты про файл видят экран без кнопок регионов.
+  vi.mocked(api.getScenarios).mockResolvedValue([]);
   resetStore();
 });
 
@@ -115,5 +132,94 @@ describe('UploadScreen', () => {
     resetStore({ error: 'В файле нет колонок: Адрес' });
     render(<UploadScreen />);
     expect(screen.getByRole('alert')).toHaveTextContent('В файле нет колонок: Адрес');
+  });
+
+  it('opens a prepared region by one click and keeps the file picker in its place', async () => {
+    vi.mocked(api.getScenarios).mockResolvedValue(SCENARIOS);
+    const ready = makeDatasetStatus();
+    vi.mocked(api.startScenario).mockResolvedValue({
+      ...ready,
+      report: ready.report && { ...ready.report, source: 'scenario' },
+    });
+    render(<UploadScreen />);
+
+    // Названия, числа заявок и бригад приходят с сервера, во фронтенде их нет.
+    const east = await screen.findByRole('button', { name: 'Восток 66 заявок · 12 бригад' });
+    // Сгенерированный нами регион подписан на самой кнопке, а не в подсказке.
+    expect(screen.getByRole('button', { name: 'Северо-Запад (сгенерирован нами) 72 заявки · 12 бригад' })).toBeInTheDocument();
+    const file = screen.getByRole('button', { name: 'Загрузить CSV или JSON' });
+    expect(screen.getByTestId('file-input')).toBeInTheDocument();
+    // Главный путь по ТЗ — сырая выгрузка: выбор файла стоит выше ряда регионов.
+    expect(file.compareDocumentPosition(east) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      screen.getByText('Северо-Запад — наш регион: выгрузки Билайна по нему нет, адреса и бригады сгенерированы нами.'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(east);
+
+    expect(await screen.findByRole('heading', { name: 'Восток' })).toBeInTheDocument();
+    expect(api.startScenario).toHaveBeenCalledWith('east');
+    expect(api.uploadFile).not.toHaveBeenCalled();
+    // Файла диспетчер не выбирал: строки с его именем на экране нет.
+    expect(screen.queryByText(/^Файл: /)).not.toBeInTheDocument();
+    expect(screen.getByText('Подготовленный регион')).toBeInTheDocument();
+    expect(useAppStore.getState().datasetId).toBe('d_test');
+  });
+
+  it('shows the same error when a prepared region fails to start', async () => {
+    vi.mocked(api.getScenarios).mockResolvedValue(SCENARIOS);
+    vi.mocked(api.startScenario).mockRejectedValue(
+      new api.ApiError(404, 'Регион «Юго-восток» не подготовлен: нет бандла в data/bundles/south_east.'),
+    );
+    render(<UploadScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Восток 66 заявок · 12 бригад' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Регион «Юго-восток» не подготовлен: нет бандла в data/bundles/south_east.',
+    );
+  });
+
+  it('keeps the file picker working when the server does not list prepared regions', async () => {
+    vi.mocked(api.getScenarios).mockRejectedValue(new api.ApiError(500, 'Ошибка сервера 500'));
+    vi.mocked(api.uploadFile).mockResolvedValue(makeDatasetStatus());
+    render(<UploadScreen />);
+
+    fireEvent.change(screen.getByTestId('file-input'), { target: { files: [new File(['x'], 'east.csv')] } });
+
+    expect(await screen.findByRole('heading', { name: 'Восток' })).toBeInTheDocument();
+    // Список регионов не пришёл: кнопок нет, ошибку диспетчеру не показываем, файл загрузился как раньше.
+    expect(screen.queryByRole('heading', { name: 'Или открыть день региона' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('marks the day of the generated region in the report, not only on the button', async () => {
+    vi.mocked(api.getScenarios).mockResolvedValue(SCENARIOS);
+    const ready = makeDatasetStatus();
+    vi.mocked(api.startScenario).mockResolvedValue({
+      ...ready,
+      report: ready.report && { ...ready.report, region: 'north_west', region_title: 'Северо-Запад', source: 'scenario', generated: true },
+    });
+    render(<UploadScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Северо-Запад (сгенерирован нами) 72 заявки · 12 бригад' }));
+
+    // После нажатия честность не пропадает: отчёт называет регион нашим, а не просто «Северо-Запад».
+    expect(await screen.findByRole('heading', { name: 'Северо-Запад — сгенерирован нами' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Выгрузки Билайна по региону «Северо-Запад» нет: адреса, бригады и распределение «диспетчеров» сгенерированы нами (docs/assumptions.md).',
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('blocks the region buttons and the file picker while a day is being opened or planned', async () => {
+    vi.mocked(api.getScenarios).mockResolvedValue(SCENARIOS);
+    resetStore({ busy: true, datasetStatus: makeDatasetStatus() });
+    render(<UploadScreen />);
+
+    // Второе нажатие во время расчёта бросило бы идущий поиск и завело на сервере лишний набор данных.
+    expect(await screen.findByRole('button', { name: 'Восток 66 заявок · 12 бригад' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Загрузить CSV или JSON' })).toBeDisabled();
   });
 });
