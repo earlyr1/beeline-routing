@@ -13,7 +13,7 @@ from app.ingest.beeline_csv import parse_beeline_csv
 from app.ingest.window_check import check_windows
 from app.settings import BACKEND_DIR, REPO_ROOT
 from app.synth.config import SynthConfig
-from tests.api_helpers import make_client, sample_bundle, upload
+from tests.api_helpers import sample_bundle, upload
 from tests.planning_helpers import OFFICE
 
 CONFIG = Path(BACKEND_DIR) / "config" / "synth_config.yaml"
@@ -157,9 +157,9 @@ def test_the_real_files_lose_no_rows_and_get_no_findings(cfg, path):
     assert checked.window_warnings == []
 
 
-def test_the_upload_report_shows_the_findings_and_the_day_is_planned_without_the_dropped_rows(tmp_path):
+def test_the_upload_report_shows_the_findings_and_the_day_is_planned_without_the_dropped_rows(api):
     """Диспетчер видит то же самое в отчёте разбора, а причина неназначения называет те же числа."""
-    client, _ = make_client(tmp_path)
+    client, _ = api()
 
     dataset_id = upload(client, "junk.csv", csv_of(JUNK))
 
@@ -182,13 +182,13 @@ def test_the_upload_report_shows_the_findings_and_the_day_is_planned_without_the
     assert "02:00–04:00" in reason["reason_text"]
 
 
-def test_a_repeated_row_is_dropped_before_its_window_is_judged(tmp_path):
+def test_a_repeated_row_is_dropped_before_its_window_is_judged(api):
     """Про окно строки, которой в дне не будет, диспетчеру не говорят: у заявки такого окна нет.
 
     Раньше повторы выбрасывались после проверки окон, и диспетчер шёл искать у заявки ночное окно, которого
     в дне нет, а знаменатель «столько-то из скольких» считал выброшенные строки.
     """
-    client, _ = make_client(tmp_path)
+    client, _ = api()
     rows = [
         ("N1", "Локальная заявка", "10:00", "12:00"),
         ("N1", "Подключение", "02:00", "02:30"),  # повтор номера, да ещё и с ночным окном
@@ -203,9 +203,9 @@ def test_a_repeated_row_is_dropped_before_its_window_is_judged(tmp_path):
     assert report["requests"] == 2
 
 
-def test_a_file_eaten_by_the_check_says_why_instead_of_looking_empty(tmp_path):
+def test_a_file_eaten_by_the_check_says_why_instead_of_looking_empty(api):
     """Не осталось ни одной заявки — диспетчер слышит, что дело в окнах: отчёта у неудавшейся загрузки нет."""
-    client, _ = make_client(tmp_path)
+    client, _ = api()
     rows = [("N1", "Локальная заявка", "12:00", "10:00"), ("N2", "Локальная заявка", "14:00", "14:00")]
 
     dataset_id = upload(client, "all_bad.csv", csv_of(rows))
@@ -219,14 +219,14 @@ def test_a_file_eaten_by_the_check_says_why_instead_of_looking_empty(tmp_path):
     )
 
 
-def test_an_edited_window_is_planned_from_the_file_and_not_from_the_prepared_bundle(tmp_path):
+def test_an_edited_window_is_planned_from_the_file_and_not_from_the_prepared_bundle(api):
     """Правленое в Excel окно номера заявки не меняет — и день всё равно строится по файлу, а не по бандлу.
 
     Ярлык на подготовленный бандл региона (он же даёт распределение диспетчеров) срабатывает только на той самой
     выгрузке, из которой бандл собран: совпасть должны и номера заявок, и окна. Иначе отчёт показывал бы замечания
     к окнам файла, а план строился бы по другим окнам — ровно та тихая подмена данных, которой мы не делаем.
     """
-    client, _ = make_client(tmp_path)
+    client, _ = api()
     # Номера — как в бандле, окно первой заявки подправлено: 10:00–12:00 стало 11:30–13:30.
     rows = [
         ("R1", "Локальная заявка", "11:30", "13:30"),
@@ -245,9 +245,9 @@ def test_an_edited_window_is_planned_from_the_file_and_not_from_the_prepared_bun
     assert {r["address"] for r in state["requests"]} == {ADDRESS}
 
 
-def test_the_untouched_export_still_goes_straight_to_the_prepared_bundle(tmp_path):
+def test_the_untouched_export_still_goes_straight_to_the_prepared_bundle(api):
     """Нетронутый файл остаётся на быстром пути: окна совпали с бандлом, значит подменять нечего."""
-    client, _ = make_client(tmp_path)
+    client, _ = api()
     rows = [
         ("R1", "Локальная заявка", "10:00", "12:00"),
         ("R2", "Локальная заявка", "14:00", "16:00"),
@@ -260,9 +260,9 @@ def test_the_untouched_export_still_goes_straight_to_the_prepared_bundle(tmp_pat
     assert {r["address"] for r in state["requests"]} == {"адрес R1", "адрес R2", "адрес R3"}
 
 
-def test_a_bundle_with_a_zero_window_is_not_loaded_either(tmp_path):
+def test_a_bundle_with_a_zero_window_is_not_loaded_either(api):
     """Нулевое окно уносит строку выгрузки — и JSON-бандл с ним тоже не загрузится: пути не расходятся."""
-    client, _ = make_client(tmp_path)
+    client, _ = api()
     bundle = json.loads(sample_bundle().model_dump_json())
     bundle["requests"][0]["window_end"] = bundle["requests"][0]["window_start"]
 
@@ -273,9 +273,9 @@ def test_a_bundle_with_a_zero_window_is_not_loaded_either(tmp_path):
     assert status["error"] == "JSON не соответствует схеме бандла: временное окно нулевой длины у заявок: R1"
 
 
-def test_a_clean_upload_keeps_the_report_as_it_was(tmp_path):
+def test_a_clean_upload_keeps_the_report_as_it_was(api):
     """Чистый файл — чистый отчёт: новый раздел пуст, и диспетчер видит ровно то же, что и раньше."""
-    client, _ = make_client(tmp_path)
+    client, _ = api()
     rows = [("N1", "Локальная заявка", "10:00", "12:00"), ("N2", "Подключение", "14:00", "16:00")]
 
     dataset_id = upload(client, "clean.csv", csv_of(rows))

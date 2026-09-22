@@ -2,7 +2,7 @@ import json
 
 import httpx
 
-from tests.api_helpers import HashGeocoder, make_client, sample_bundle, upload
+from tests.api_helpers import HashGeocoder, sample_bundle, upload
 from tests.llm_helpers import ScriptedProvider, completion, tool_call
 
 
@@ -12,29 +12,29 @@ def ready(client):
     return f"/api/datasets/{dataset_id}"
 
 
-def with_llm(tmp_path, *responses, geocoder=None):
-    client, deps = make_client(tmp_path, geocoder=geocoder)
+def with_llm(api, *responses, geocoder=None):
+    client, deps = api(geocoder=geocoder)
     provider = ScriptedProvider(*responses)
     deps.llm = provider.client()
     return client, provider
 
 
-def test_chat_is_503_without_llm_and_config_says_disabled(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_chat_is_503_without_llm_and_config_says_disabled(api):
+    client, _ = api()
     base = ready(client)
     response = client.post(f"{base}/chat", json={"text": "Инженер E1 заболел"})
     assert response.status_code == 503 and "LLM_BASE_URL" in response.json()["detail"]
     assert client.get("/api/config").json()["llm_enabled"] is False
 
 
-def test_chat_creates_proposals_and_approve_goes_through_event_pipeline(tmp_path):
+def test_chat_creates_proposals_and_approve_goes_through_event_pipeline(api):
     calls = [
         tool_call(
             "propose_cancel", {"request_id": "R2", "time": "13:00", "rationale": "Клиент отменил визит"}
         ),
         tool_call("propose_engineer_unavailable", {"engineer_id": "E9", "rationale": "Не выйдет"}, "call_2"),
     ]
-    client, provider = with_llm(tmp_path, completion(tool_calls=calls))
+    client, provider = with_llm(api, completion(tool_calls=calls))
     base = ready(client)
     assert client.get("/api/config").json()["llm_enabled"] is True
 
@@ -75,7 +75,7 @@ def test_chat_creates_proposals_and_approve_goes_through_event_pipeline(tmp_path
     assert client.post(f"{base}/proposals/pr_9/approve").status_code == 404
 
 
-def test_urgent_proposal_is_geocoded_and_added_on_approve(tmp_path):
+def test_urgent_proposal_is_geocoded_and_added_on_approve(api):
     arguments = {
         "address": "Город Москва, ул.Таганская, д. 3",
         "window_start": "13:00",
@@ -85,7 +85,7 @@ def test_urgent_proposal_is_geocoded_and_added_on_approve(tmp_path):
         "time": "13:00",
         "rationale": "Срочный вызов",
     }
-    client, _ = with_llm(tmp_path, completion(tool_calls=[tool_call("propose_urgent_request", arguments)]))
+    client, _ = with_llm(api, completion(tool_calls=[tool_call("propose_urgent_request", arguments)]))
     base = ready(client)
     [proposal] = client.post(f"{base}/chat", json={"text": "Срочно на Таганскую, 3"}).json()["proposals"]
     assert proposal["status"] == "pending" and proposal["event"]["request"]["id"] == "URG-AI-001"
@@ -100,7 +100,7 @@ def _request_of(state, request_id):
     return next(request for request in state["requests"] if request["id"] == request_id)
 
 
-def test_approved_proposals_keep_the_applied_event(tmp_path):
+def test_approved_proposals_keep_the_applied_event(api, restarted):
     calls = [
         tool_call(
             "propose_request_update",
@@ -117,7 +117,7 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
             "call_2",
         ),
     ]
-    client, _ = with_llm(tmp_path, completion(tool_calls=calls))
+    client, _ = with_llm(api, completion(tool_calls=calls))
     base = ready(client)
     before = _request_of(client.get(f"{base}/state").json(), "R2")
     edit, transport = client.post(
@@ -160,10 +160,13 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
         "bike",
     )
 
+    # Предложения помощника со своими статусами и принятым событием поднимаются из базы такими же.
+    restarted(client, f"{base}/state", f"{base}/proposals")
 
-def test_approved_delay_proposal_keeps_the_applied_event_and_forecast(tmp_path):
+
+def test_approved_delay_proposal_keeps_the_applied_event_and_forecast(api):
     arguments = {"engineer_id": "E2", "delay_min": 30, "time": "10:15", "rationale": "Работа затянулась"}
-    client, _ = with_llm(tmp_path, completion(tool_calls=[tool_call("propose_engineer_delay", arguments)]))
+    client, _ = with_llm(api, completion(tool_calls=[tool_call("propose_engineer_delay", arguments)]))
     base = ready(client)
     [proposal] = client.post(f"{base}/chat", json={"text": "У Белузина работа затянулась на полчаса"}).json()[
         "proposals"
@@ -189,7 +192,7 @@ def test_approved_delay_proposal_keeps_the_applied_event_and_forecast(tmp_path):
     assert approved["state"]["last_diff"]["delay_forecast"] == forecast
 
 
-def test_address_change_proposal_keeps_geocoder_precision_after_approve(tmp_path):
+def test_address_change_proposal_keeps_geocoder_precision_after_approve(api):
     arguments = {
         "request_id": "R2",
         "address": "Город Москва, ул.Таганская, д. 7",
@@ -197,7 +200,7 @@ def test_address_change_proposal_keeps_geocoder_precision_after_approve(tmp_path
         "rationale": "Клиент переехал",
     }
     client, _ = with_llm(
-        tmp_path,
+        api,
         completion(tool_calls=[tool_call("propose_request_update", arguments)]),
         geocoder=HashGeocoder(category="highway"),
     )
@@ -215,7 +218,7 @@ def test_address_change_proposal_keeps_geocoder_precision_after_approve(tmp_path
     assert approved["proposal"]["event"]["previous_request"] == before
 
 
-def test_approve_all_survives_stale_proposals_and_reject_endpoints(tmp_path):
+def test_approve_all_survives_stale_proposals_and_reject_endpoints(api):
     cancels = [
         tool_call("propose_cancel", {"request_id": "R3", "time": "13:00", "rationale": "Отказ клиента"}),
         tool_call(
@@ -224,7 +227,7 @@ def test_approve_all_survives_stale_proposals_and_reject_endpoints(tmp_path):
     ]
     restore = [tool_call("propose_restore", {"request_id": "R2", "rationale": "Снова в силе"})]
     client, _ = with_llm(
-        tmp_path,
+        api,
         completion(tool_calls=cancels),
         completion(tool_calls=restore),
         completion(tool_calls=restore),
@@ -260,10 +263,8 @@ def test_approve_all_survives_stale_proposals_and_reject_endpoints(tmp_path):
     assert client.get(f"{base}/state").json()["version"] == 3
 
 
-def test_chat_errors_are_russian(tmp_path):
-    client, _ = with_llm(
-        tmp_path, httpx.Response(401, json={"error": {"message": "no"}}), completion(content="")
-    )
+def test_chat_errors_are_russian(api):
+    client, _ = with_llm(api, httpx.Response(401, json={"error": {"message": "no"}}), completion(content=""))
     base = ready(client)
     empty = client.post(f"{base}/chat", json={"text": "   "})
     assert (

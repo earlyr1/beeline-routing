@@ -99,3 +99,24 @@ def test_request_without_a_point_stays_unplannable():
     assert [u.model_dump() for u in restored.problem.unplannable] == [
         u.model_dump() for u in session.problem.unplannable
     ]
+
+
+def test_a_zero_byte_does_not_reach_the_snapshot():
+    """jsonb нулевого байта не принимает, и день с ним не сохранился бы целиком: кодек убирает его сам."""
+    requests = [day_requests()[0].model_copy(update={"address": "ул.\x00 Тихая"}), *day_requests()[1:]]
+    day = PreparedDay("t", "Тест", OFFICE, requests, day_engineers(), None, False)
+
+    raw = dump_prepared(day)
+
+    # Искать нужно запись байта в JSON, а не сам байт: model_dump_json отдаёт его escape-последовательностью.
+    assert "\\u0000" not in raw
+    assert load_prepared(raw).requests[0].address == "ул. Тихая"
+
+
+def test_text_that_only_looks_like_an_escape_is_left_alone():
+    """Обратная косая, буква u и четыре нуля в адресе — обычные символы: портить их чисткой нельзя."""
+    address = "ул. \\u0000 Тихая"
+    requests = [day_requests()[0].model_copy(update={"address": address}), *day_requests()[1:]]
+    day = PreparedDay("t", "Тест", OFFICE, requests, day_engineers(), None, False)
+
+    assert load_prepared(dump_prepared(day)).requests[0].address == address

@@ -1,9 +1,9 @@
 """День диспетчера переживает перезапуск backend: тот же план, та же шкала, те же договорённости.
 
-Идёт только с TEST_DATABASE_URL (см. tests/test_state_repo.py); без базы пропускается целиком.
+Памяти тут места нет: перезапускать нечего, если день никуда не записан. Поэтому файл переопределяет
+state_backend (tests/conftest.py) на одну только базу — каждый тест идёт один раз и на Postgres, а без
+TEST_DATABASE_URL пропускается целиком.
 """
-
-import os
 
 import pytest
 
@@ -11,12 +11,13 @@ from app.domain.enums import EventType
 from app.domain.models import Event
 from app.planning import session as session_module
 from app.state.repo import StateUnavailable
-from tests.api_helpers import make_client, sample_bundle, upload
+from tests.api_helpers import csv_bytes, sample_bundle, upload
 
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
-pytestmark = pytest.mark.skipif(
-    not TEST_DATABASE_URL, reason="TEST_DATABASE_URL не задан: базы для теста нет"
-)
+
+@pytest.fixture
+def state_backend(postgres_state):
+    """День этого файла живёт только в базе: на памяти проверять нечего."""
+    return postgres_state
 
 
 class Background(list):
@@ -27,9 +28,9 @@ class Background(list):
             self.pop(0)()
 
 
-def open_day(tmp_path):
+def open_day(api):
     """Клиент с днём из бандла, сохранённым в базу. Фоновый предподсчёт выполняется тут же."""
-    client, deps = make_client(tmp_path, database_url=TEST_DATABASE_URL)
+    client, deps = api()
     background = Background()
     deps.run_background = background.append
     dataset_id = upload(client, "bundle.json", sample_bundle().model_dump_json().encode())
@@ -37,13 +38,13 @@ def open_day(tmp_path):
     return client, deps, f"/api/datasets/{dataset_id}", background
 
 
-def restart(tmp_path, monkeypatch):
+def restart(api, monkeypatch):
     """Новый процесс backend: та же база, тот же kv-кэш, но решатель под запретом.
 
     Запрет и есть проверка: восстановленный день показывает записанный план, а не посчитанный заново.
     Солвер ограничен по времени, и второй запуск нашёл бы другие маршруты.
     """
-    client, deps = make_client(tmp_path, database_url=TEST_DATABASE_URL)
+    client, deps = api()
     deps.run_background = Background().append
 
     def forbidden(*args, **kwargs):
@@ -53,9 +54,9 @@ def restart(tmp_path, monkeypatch):
     return client
 
 
-def reopen(tmp_path):
+def reopen(api):
     """Новый процесс backend, которому досчитывать шаги можно: его очередь фоновых задач отдаётся тесту."""
-    client, deps = make_client(tmp_path, database_url=TEST_DATABASE_URL)
+    client, deps = api()
     background = Background()
     deps.run_background = background.append
     return client, deps, background
@@ -71,8 +72,8 @@ def cancel_at(client, base, time, request_id):
     )
 
 
-def test_plan_timeline_cursor_and_calls_survive_a_restart(tmp_path, monkeypatch):
-    client, _, base, background = open_day(tmp_path)
+def test_plan_timeline_cursor_and_calls_survive_a_restart(api, monkeypatch):
+    client, _, base, background = open_day(api)
     breaking = Event(type=EventType.ENGINEER_UNAVAILABLE, time="11:00", engineer_id="E1")
     assert client.post(f"{base}/timeline/events", json=breaking.model_dump(mode="json")).status_code == 200
     background.run()
@@ -87,18 +88,18 @@ def test_plan_timeline_cursor_and_calls_survive_a_restart(tmp_path, monkeypatch)
     assert [item["variant"] for item in before["timeline"]] == ["keep"]
     assert before["agreed"]["R2"]["window"] == {"start": "14:00", "end": "16:00", "asap": False}
 
-    after = restart(tmp_path, monkeypatch).get(f"{base}/state").json()
+    after = restart(api, monkeypatch).get(f"{base}/state").json()
     assert after == before
 
 
-def test_a_day_the_service_never_saw_is_not_found(tmp_path, monkeypatch):
-    open_day(tmp_path)
-    assert restart(tmp_path, monkeypatch).get("/api/datasets/d_nosuch/state").status_code == 404
+def test_a_day_the_service_never_saw_is_not_found(api, monkeypatch):
+    open_day(api)
+    assert restart(api, monkeypatch).get("/api/datasets/d_nosuch/state").status_code == 404
 
 
-def test_numbering_goes_on_after_a_restart(tmp_path, monkeypatch):
+def test_numbering_goes_on_after_a_restart(api, monkeypatch):
     """Номера событий и планов не начинаются заново: иначе новые ключи шагов налезли бы на старые."""
-    client, _, base, background = open_day(tmp_path)
+    client, _, base, background = open_day(api)
     assert (
         client.post(
             f"{base}/timeline/events", json={"type": "cancel", "time": "10:00", "request_id": "R3"}
@@ -108,7 +109,7 @@ def test_numbering_goes_on_after_a_restart(tmp_path, monkeypatch):
     background.run()
     before = client.get(f"{base}/state").json()
 
-    fresh = restart(tmp_path, monkeypatch)
+    fresh = restart(api, monkeypatch)
     state = fresh.get(f"{base}/state").json()
     assert [item["id"] for item in state["timeline"]] == ["tl_1"]
     assert state["version"] == before["version"]
@@ -122,13 +123,13 @@ def test_numbering_goes_on_after_a_restart(tmp_path, monkeypatch):
     assert [item["id"] for item in fresh.get(f"{base}/state").json()["timeline"]] == ["tl_1", "tl_2"]
 
 
-def test_a_write_the_base_refused_stays_out_of_memory_too(tmp_path):
+def test_a_write_the_base_refused_stays_out_of_memory_too(api):
     """Неудавшаяся запись не оставляет события на экране и не ломает следующие: они не получают 409.
 
     До этого правка ложилась в память раньше базы: день на экране продолжал жить «сохранённым», а каждая
     следующая правка шкалы отвечала «Данные изменились в другой вкладке».
     """
-    client, deps, base, background = open_day(tmp_path)
+    client, deps, base, background = open_day(api)
     writer = day_record(deps, base).store
     real, refusals = writer.add_entry, {"left": 1}
 
@@ -148,17 +149,17 @@ def test_a_write_the_base_refused_stays_out_of_memory_too(tmp_path):
     background.run()
     shown = client.get(f"{base}/state").json()["timeline"]
 
-    fresh, _, _ = reopen(tmp_path)
+    fresh, _, _ = reopen(api)
     assert fresh.get(f"{base}/state").json()["timeline"] == shown
 
 
-def test_a_precompute_the_base_broke_starts_again(tmp_path):
+def test_a_precompute_the_base_broke_starts_again(api):
     """Обрыв базы в фоновом счёте не замораживает шкалу: следующий /state начинает счёт заново.
 
     Иначе ревизия оставалась занятой упавшим счётом, timeline_ready навсегда оставался false, и вкладка
     опрашивала /state раз в секунду вечно.
     """
-    client, deps, base, background = open_day(tmp_path)
+    client, deps, base, background = open_day(api)
     record = day_record(deps, base)
     real, broken = record.store.add_step, {"on": True}
 
@@ -180,12 +181,12 @@ def test_a_precompute_the_base_broke_starts_again(tmp_path):
     assert client.get(f"{base}/state").json()["timeline_ready"] is True
 
 
-def test_a_restart_that_caught_the_solver_keeps_clock_and_plan_together(tmp_path):
+def test_a_restart_that_caught_the_solver_keeps_clock_and_plan_together(api):
     """Шаг не успел попасть в базу: часы встают на время посчитанного плана, а досчёт возвращает их назад.
 
     Иначе на экране были бы часы на 11:00 и план на 10:00 — с заявкой, которую диспетчер только что отменил.
     """
-    client, deps, base, background = open_day(tmp_path)
+    client, deps, base, background = open_day(api)
     assert cancel_at(client, base, "10:00", "R3").status_code == 200
     assert cancel_at(client, base, "11:00", "R2").status_code == 200
     background.run()
@@ -199,7 +200,7 @@ def test_a_restart_that_caught_the_solver_keeps_clock_and_plan_together(tmp_path
         cur.execute("DELETE FROM plans WHERE dataset_id = %s AND token LIKE 'tl_2%%'", (dataset_id,))
         assert cur.rowcount == 1
 
-    fresh, _, fresh_background = reopen(tmp_path)
+    fresh, _, fresh_background = reopen(api)
     caught = fresh.get(f"{base}/state").json()
     assert caught["cursor"] == caught["now"] == "10:00" and caught["timeline_ready"] is False
 
@@ -207,3 +208,22 @@ def test_a_restart_that_caught_the_solver_keeps_clock_and_plan_together(tmp_path
     settled = fresh.get(f"{base}/state").json()
     assert settled["cursor"] == "11:00" and settled["now"] == "11:00"
     assert settled["timeline_ready"] is True
+
+
+def test_everything_about_the_status_comes_back_except_the_address_counter(api, monkeypatch):
+    """У поднятого дня совпадает весь статус: и стадия, и отчёт разбора, и ошибка. Кроме счётчика адресов.
+
+    Счётчик (done/total) в базу не идёт нарочно (app/state/repo.py): он тикает на каждый адрес, а день,
+    пойманный перезапуском на предподсчёте, всё равно не возобновляется — готовому же дню считать нечего.
+    Расхождение одно на весь DatasetStatus, и пусть оно будет описанным, а не найденным.
+    """
+    client, deps = api()
+    deps.run_background = Background().append
+    rows = [("N1", "10:00", "12:00", "Город Москва, ул.Таганская, д. 1")]
+    dataset_id = upload(client, "new.csv", csv_bytes(rows, office=None))
+    before = client.get(f"/api/datasets/{dataset_id}").json()
+    assert before["status"] == "ready" and before["progress"] == {"done": 1, "total": 1}
+
+    after = restart(api, monkeypatch).get(f"/api/datasets/{dataset_id}").json()
+
+    assert after == {**before, "progress": {"done": 0, "total": 0}}

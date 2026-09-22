@@ -34,7 +34,7 @@ from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.portfolio import PORTFOLIO, SolverPool, plan_cost
 from scripts import night_plan as cli
-from tests.api_helpers import csv_bytes, make_client, prepared_bundle, sample_bundle, upload
+from tests.api_helpers import csv_bytes, prepared_bundle, sample_bundle, upload
 from tests.helpers import at, eng
 from tests.planning_helpers import (
     EXACT_TRAVEL_LEVEL,
@@ -470,8 +470,8 @@ def test_pool_starts_only_the_first_strategy_from_the_night_routes(monkeypatch):
 # --- API ---
 
 
-def test_state_says_where_the_morning_plan_came_from(tmp_path):
-    client, deps = make_client(tmp_path)
+def test_state_says_where_the_morning_plan_came_from(api, tmp_path):
+    client, deps = api()
     bundle = sample_bundle()
     write_night_plan(
         tmp_path / "bundles",
@@ -503,10 +503,10 @@ def test_state_says_where_the_morning_plan_came_from(tmp_path):
     assert back["precomputed"] == precomputed
 
 
-def test_scenario_day_takes_the_night_plan_of_its_region(tmp_path):
+def test_scenario_day_takes_the_night_plan_of_its_region(api, tmp_path):
     """Подготовленный регион идёт тем же путём, что и загрузка файла, поэтому и ночной план подхватывает так же."""
     bundle = prepared_bundle("east", "Восток")
-    client, deps = make_client(tmp_path, bundle=bundle)
+    client, deps = api(bundle=bundle)
     write_night_plan(
         tmp_path / "bundles",
         deps.ingest.planning,
@@ -526,14 +526,14 @@ def test_scenario_day_takes_the_night_plan_of_its_region(tmp_path):
     }
 
 
-def test_state_without_night_plan_has_no_precomputed(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_state_without_night_plan_has_no_precomputed(api):
+    client, _ = api()
     dataset_id = upload(client, "bundle.json", sample_bundle().model_dump_json().encode())
     assert client.get(f"/api/datasets/{dataset_id}/state").json()["precomputed"] is None
 
 
-def test_raw_csv_of_a_prepared_region_has_the_fingerprint_of_its_bundle(tmp_path):
-    client, deps = make_client(tmp_path)
+def test_raw_csv_of_a_prepared_region_has_the_fingerprint_of_its_bundle(api, tmp_path):
+    client, deps = api()
     bundle = sample_bundle()
     write_night_plan(tmp_path / "bundles", deps.ingest.planning, bundle.requests, bundle.engineers)
     from_bundle = upload(client, "bundle.json", bundle.model_dump_json().encode())

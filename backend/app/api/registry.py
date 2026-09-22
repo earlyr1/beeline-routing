@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import threading
 import uuid
+import weakref
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -308,7 +309,8 @@ class DatasetRecord:
 
 # Сколько последних наборов данных живёт в памяти. Экран показывает один, прежние нужны только вкладке, которую
 # не закрыли; каждый день — это заявки, матрица и планы, поэтому бесконечно копить их нельзя. С Postgres забытый
-# день не теряется: следующее обращение поднимет его из базы.
+# день не теряется: следующее обращение поднимет его из базы. А пока на забытую запись кто-то ссылается —
+# идущий запрос, фоновый предподсчёт, — поднимать нечего: она и есть единственный экземпляр дня.
 MAX_DATASETS = 8
 
 # Что сделать с днём, поднятым из хранилища, кроме самого DatasetRecord: восстановить предложения помощника.
@@ -320,21 +322,28 @@ class DatasetRegistry:
         self._store: StateRepo = store or MemoryStateRepo()
         self._hydrated = hydrated
         self._items: dict[str, DatasetRecord] = {}
+        # Забытые дни, на которые кто-то ещё ссылается: идущий запрос, фоновый предподсчёт. Пока живёт
+        # сам объект, живёт и эта запись, а как только последняя ссылка ушла — исчезает и она.
+        self._evicted: weakref.WeakValueDictionary[str, DatasetRecord] = weakref.WeakValueDictionary()
         self._lock = threading.Lock()
 
     def create(self) -> DatasetRecord:
         """Новый набор данных. Самые давние забываются: их страницы всё равно никто не держит открытыми."""
         dataset_id = f"d_{uuid.uuid4().hex[:8]}"
-        record = DatasetRecord(dataset_id=dataset_id, store=self._store.create(dataset_id))
+        record = DatasetRecord(dataset_id=dataset_id, store=self._store.create(dataset_id, keep=self._live()))
         with self._lock:
             self._items[dataset_id] = record
             self._forget()
         return record
 
+    def _live(self) -> list[str]:
+        """Дни, которые процесс держит в руках: хранилищу их вытеснять нельзя, писать станет некуда."""
+        with self._lock:
+            return [*self._items, *self._evicted]
+
     def get(self, dataset_id: str) -> DatasetRecord | None:
         """Набор данных из памяти, а если его там нет — из хранилища. None — такого дня нет нигде."""
-        with self._lock:
-            record = self._items.get(dataset_id)
+        record = self._known(dataset_id)
         if record is not None:
             return record
         # Подъём дня читает и разбирает мегабайты, поэтому идёт без блокировки реестра: остальные запросы
@@ -344,7 +353,7 @@ class DatasetRegistry:
             return None
         record = _restored(state, self._store.writer(dataset_id))
         with self._lock:
-            existing = self._items.get(dataset_id)
+            existing = self._items.get(dataset_id) or self._evicted.get(dataset_id)
             if existing is not None:
                 return existing
             self._items[dataset_id] = record
@@ -353,11 +362,29 @@ class DatasetRegistry:
             self._hydrated(state)
         return record
 
+    def _known(self, dataset_id: str) -> DatasetRecord | None:
+        """День, который у процесса уже есть, — в памяти реестра или у кого-то в руках.
+
+        Забытая, но ещё живая запись возвращается в память и не поднимается из базы заново: двух экземпляров
+        одного дня быть не должно. У них разошлись бы номера событий и ревизия шкалы, и следующая правка
+        диспетчера упёрлась бы в «tl_1 уже есть» на ровном месте.
+        """
+        with self._lock:
+            record = self._items.get(dataset_id)
+            if record is not None:
+                return record
+            record = self._evicted.get(dataset_id)
+            if record is not None:
+                self._items[dataset_id] = record
+                self._forget()
+            return record
+
     def _forget(self) -> None:
         """Под self._lock: забывает самые давние наборы данных сверх MAX_DATASETS.
 
-        День, которому считают шаги в фоне, не забывается: иначе следующее обращение подняло бы из базы второй
-        экземпляр того же дня, и два объекта считали бы одно и то же.
+        День, которому считают шаги в фоне, не забывается: досчёт пишет в свою запись, и поднимать рядом
+        вторую незачем. Остальные уходят в _evicted: они забыты, но пока на них кто-то ссылается, это
+        по-прежнему единственный экземпляр дня.
         """
         while len(self._items) > MAX_DATASETS:
             oldest = next(
@@ -366,7 +393,7 @@ class DatasetRegistry:
             )
             if oldest is None:
                 return
-            self._items.pop(oldest)
+            self._evicted[oldest] = self._items.pop(oldest)
 
 
 def _restored(state: DayState, writer: DayWriter) -> DatasetRecord:

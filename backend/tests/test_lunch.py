@@ -12,7 +12,7 @@ from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import EngineerState
 from app.solvers.simulate import simulate_route
-from tests.api_helpers import make_client, sample_bundle, upload
+from tests.api_helpers import sample_bundle, upload
 from tests.helpers import eng, problem_of, req
 from tests.planning_helpers import (
     EXACT_TRAVEL_LEVEL,
@@ -308,8 +308,8 @@ def test_explanation_mentions_engineer_lunch():
     assert "Обед 12:00–12:45." in explanation.factors
 
 
-def test_state_json_has_route_lunch(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_state_json_has_route_lunch(api):
+    client, _ = api()
     dataset_id = upload(client, "bundle.json", sample_bundle().model_dump_json().encode())
     state = client.get(f"/api/datasets/{dataset_id}/state").json()
     for plan in (state["plan"], state["baseline"]):

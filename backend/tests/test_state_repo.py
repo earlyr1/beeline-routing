@@ -1,11 +1,9 @@
 """Контракт хранилища дня: память ничего не сохраняет, Postgres поднимает день ровно таким, каким записал.
 
-Постгресовая часть идёт, только если задан TEST_DATABASE_URL (например,
-`TEST_DATABASE_URL=postgresql://routing:routing@localhost:55432/routing`); без него она пропускается, и
-обычный прогон тестов базы не требует.
+Постгресовая часть идёт, только если задан TEST_DATABASE_URL (его подставляет `make test-db`); без него она
+пропускается вместе с остальными тестами базы. Схему мигрирует и дни между тестами убирает общая фикстура
+postgres_state (tests/conftest.py) — та же, на которой стоят параметризованные тесты уровня API.
 """
-
-import os
 
 import pytest
 
@@ -14,14 +12,9 @@ from app.api.schemas import AgreedWindow, TimeWindow
 from app.llm.schemas import Proposal
 from app.planning.timeline import Timeline, TimelineStep, entry_token, replay_step
 from app.state.memory import MemoryStateRepo
-from app.state.repo import StateConflict
+from app.state.repo import StateConflict, StateMissing
 from tests.planning_helpers import OFFICE, context, day_engineers, day_requests, new_session
 from tests.timeline_helpers import cancel
-
-TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL", "")
-needs_postgres = pytest.mark.skipif(
-    not TEST_DATABASE_URL, reason="TEST_DATABASE_URL не задан: базы для теста нет"
-)
 
 
 def prepared_day():
@@ -49,23 +42,30 @@ def test_memory_repo_keeps_nothing():
 
 
 @pytest.fixture
-def repo():
-    from app.state.migrate import migrate
+def repo(postgres_state):
+    """Хранилище на тестовой базе: схему мигрировала сессионная фикстура, дни прошлого теста она же убрала."""
     from app.state.postgres import PostgresStateRepo
 
-    migrate(TEST_DATABASE_URL)
-    store = PostgresStateRepo(TEST_DATABASE_URL, context())
-    with store.cursor() as cur:
-        cur.execute("DELETE FROM days")
+    store = PostgresStateRepo(postgres_state, context())
     yield store
     store.close()
 
 
-def reopen():
+@pytest.fixture
+def reopen(postgres_state):
     """Тот же день глазами нового процесса: соединение другое, данные те же."""
     from app.state.postgres import PostgresStateRepo
 
-    return PostgresStateRepo(TEST_DATABASE_URL, context())
+    stores = []
+
+    def open_again():
+        store = PostgresStateRepo(postgres_state, context())
+        stores.append(store)
+        return store
+
+    yield open_again
+    for store in stores:
+        store.close()
 
 
 def saved_day(repo, dataset_id="d_pg"):
@@ -77,13 +77,11 @@ def saved_day(repo, dataset_id="d_pg"):
     return writer, session
 
 
-@needs_postgres
 def test_unknown_day_is_not_found(repo):
     assert repo.load("d_missing") is None
 
 
-@needs_postgres
-def test_the_whole_day_comes_back(repo):
+def test_the_whole_day_comes_back(repo, reopen):
     writer, morning = saved_day(repo)
     timeline = Timeline()
     entry = timeline.create(cancel("R2", "09:00"))
@@ -123,8 +121,7 @@ def test_the_whole_day_comes_back(repo):
     assert [p.id for p in day.proposals] == ["pr_1"] and day.urgent_number == 4
 
 
-@needs_postgres
-def test_the_plan_the_dispatcher_saw_is_not_overwritten(repo):
+def test_the_plan_the_dispatcher_saw_is_not_overwritten(repo, reopen):
     """Солвер ограничен по времени и недетерминирован: повторный расчёт того же шага затирать план не вправе."""
     writer, morning = saved_day(repo)
     timeline = Timeline()
@@ -142,8 +139,7 @@ def test_the_plan_the_dispatcher_saw_is_not_overwritten(repo):
     assert day.steps[key].session.plan.model_dump_json() == shown.session.plan.model_dump_json()
 
 
-@needs_postgres
-def test_rejected_step_keeps_the_previous_plan(repo):
+def test_rejected_step_keeps_the_previous_plan(repo, reopen):
     """У отклонённого шага своего плана нет: на подъёме он берёт план предыдущего шага."""
     writer, morning = saved_day(repo)
     timeline = Timeline()
@@ -169,8 +165,7 @@ def test_rejected_step_keeps_the_previous_plan(repo):
     assert restored.session.plan.model_dump_json() == step.session.plan.model_dump_json()
 
 
-@needs_postgres
-def test_pruning_never_drops_the_morning_plan(repo):
+def test_pruning_never_drops_the_morning_plan(repo, reopen):
     writer, morning = saved_day(repo)
     timeline = Timeline()
     entry = timeline.create(cancel("R2", "09:00"))
@@ -186,8 +181,7 @@ def test_pruning_never_drops_the_morning_plan(repo):
     assert day.base is not None and day.steps == {}
 
 
-@needs_postgres
-def test_day_built_anew_forgets_events_and_calls(repo):
+def test_day_built_anew_forgets_events_and_calls(repo, reopen):
     writer, morning = saved_day(repo)
     timeline = Timeline()
     entry = timeline.create(cancel("R2", "09:00"))
@@ -203,7 +197,6 @@ def test_day_built_anew_forgets_events_and_calls(repo):
     assert day.revision == day.day_revision == 2
 
 
-@needs_postgres
 def test_a_stranger_writing_the_same_day_is_refused(repo):
     """Оптимистичная проверка ревизии: при одном процессе не срабатывает, при двух даёт внятный отказ."""
     writer, _ = saved_day(repo)
@@ -213,15 +206,13 @@ def test_a_stranger_writing_the_same_day_is_refused(repo):
         writer.add_entry(entry, revision=9, expect=8)
 
 
-@needs_postgres
-def test_preprocessing_interrupted_by_a_restart_is_not_a_spinner(repo):
+def test_preprocessing_interrupted_by_a_restart_is_not_a_spinner(repo, reopen):
     repo.create("d_busy")
     day = reopen().load("d_busy")
     assert day.status == "failed" and "перезапуск" in day.error
 
 
-@needs_postgres
-def test_an_orphan_continuation_does_not_pass_for_a_step_of_the_new_plan(repo):
+def test_an_orphan_continuation_does_not_pass_for_a_step_of_the_new_plan(repo, reopen):
     """Продолжение шага, которого в базе не оказалось, не выдаёт себя за продолжение пересчитанного.
 
     Решатель недетерминирован: пересчитанный шаг — другой план, и цепочка от прежнего к нему не относится.
@@ -253,7 +244,6 @@ def test_an_orphan_continuation_does_not_pass_for_a_step_of_the_new_plan(repo):
     assert list(day.steps) == [key], "сирота осталась в базе и выдала себя за продолжение"
 
 
-@needs_postgres
 def test_a_day_written_by_another_build_reads_as_missing(repo):
     """День, снятый прежними моделями, не валит запросы в 500: он ведёт себя как ненайденный."""
     repo.create("d_old")
@@ -263,3 +253,50 @@ def test_a_day_written_by_another_build_reads_as_missing(repo):
             ('{"region": "t", "region_title": "Тест"}',),
         )
     assert repo.load("d_old") is None
+
+
+def test_a_zero_byte_in_the_text_of_a_day_does_not_lose_the_day(repo, reopen):
+    """\x00 в адресе приезжает из настоящей выгрузки, а Postgres такого текста не держит вовсе.
+
+    Раньше день с таким байтом не сохранялся целиком и отвечал «база недоступна» на здоровой базе —
+    причём повторная загрузка того же файла падала так же, и день было не вернуть.
+    """
+    requests = [day_requests()[0].model_copy(update={"address": "г. Москва, ул.\x00 Тихая, д. 2"})]
+    day = PreparedDay("t", "Тест", OFFICE, [*requests, *day_requests()[1:]], day_engineers(), None, False)
+    writer = repo.create("d_zero")
+    writer.save_day(day, new_session(), revision=0, day_revision=0, last_number=0, last_version=1)
+    writer.save_status(status="failed", stage="ready", report=None, error="Адрес\x00 не найден")
+
+    restored = reopen().load("d_zero")
+
+    assert restored.prepared.requests[0].address == "г. Москва, ул. Тихая, д. 2"
+    assert restored.error == "Адрес не найден"
+
+
+def test_a_day_the_base_no_longer_keeps_refuses_out_loud(repo):
+    """День, вытесненный из базы, не должен принимать правки в никуда: молчаливый успех хуже отказа."""
+    writer, _ = saved_day(repo)
+    with repo.cursor() as cur:
+        cur.execute("DELETE FROM days WHERE dataset_id = 'd_pg'")
+
+    for save in (
+        lambda: writer.save_cursor(600),
+        lambda: writer.bump_number(7),
+        lambda: writer.save_status(status="ready", stage="ready", report=None, error=None),
+        lambda: writer.save_proposals([], urgent_number=0),
+    ):
+        with pytest.raises(StateMissing):
+            save()
+
+
+def test_a_day_the_process_still_holds_is_not_pushed_out_of_the_base(repo):
+    """Вытеснение по MAX_DAYS не трогает дни, которые процесс держит в памяти: писать в них ещё будут."""
+    from app.state.postgres import MAX_DAYS
+
+    saved_day(repo, "d_held")
+    for number in range(MAX_DAYS + 1):
+        repo.create(f"d_new_{number}", keep=["d_held"])
+
+    assert repo.load("d_held") is not None
+    # А тот, кого никто не держит, честно уезжает: база не копит дни без счёта.
+    assert repo.load("d_new_0") is None

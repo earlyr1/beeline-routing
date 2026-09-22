@@ -4,7 +4,7 @@ import threading
 from app.api.registry import DatasetRecord
 from app.domain.models import Bundle
 from app.ingest.geocode import GeoHit
-from tests.api_helpers import csv_bytes, make_client, sample_bundle, upload
+from tests.api_helpers import csv_bytes, sample_bundle, upload
 from tests.planning_helpers import EXACT_TRAVEL_LEVEL, OFFICE, day_engineers, transit_requests
 
 
@@ -15,8 +15,8 @@ def _ready_dataset(client):
     return dataset_id
 
 
-def test_health_and_config(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_health_and_config(api):
+    client, _ = api()
     assert client.get("/api/health").json() == {"status": "ok"}
     config = client.get("/api/config").json()
     # Типы работ срочной заявки с нормативами проверяет tests/test_work_types.py.
@@ -44,8 +44,8 @@ def test_health_and_config(tmp_path):
     assert client.get("/api/docs").status_code == 200
 
 
-def test_upload_bundle_then_plan(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_upload_bundle_then_plan(api):
+    client, _ = api()
     response = client.post(
         "/api/upload",
         files={"file": ("bundle.json", sample_bundle().model_dump_json().encode(), "application/json")},
@@ -67,12 +67,12 @@ def test_upload_bundle_then_plan(tmp_path):
     assert client.get(f"/api/datasets/{dataset_id}/state").json()["version"] == 1
 
 
-def test_equipment_flag_from_the_bundle_reaches_the_state(tmp_path):
+def test_equipment_flag_from_the_bundle_reaches_the_state(api):
     bundle = sample_bundle()
     bundle = bundle.model_copy(
         update={"requests": [r.model_copy(update={"needs_equipment": r.id == "R2"}) for r in bundle.requests]}
     )
-    client, _ = make_client(tmp_path, bundle=bundle)
+    client, _ = api(bundle=bundle)
     dataset_id = upload(client, "bundle.json", bundle.model_dump_json().encode())
     assert client.get(f"/api/datasets/{dataset_id}").json()["status"] == "ready"
 
@@ -85,8 +85,8 @@ def test_equipment_flag_from_the_bundle_reaches_the_state(tmp_path):
     }
 
 
-def test_events_explain_geometry_and_replan(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_events_explain_geometry_and_replan(api, restarted):
+    client, _ = api()
     dataset_id = _ready_dataset(client)
     base = f"/api/datasets/{dataset_id}"
 
@@ -119,9 +119,12 @@ def test_events_explain_geometry_and_replan(tmp_path):
     replanned = client.post(f"{base}/plan").json()
     assert replanned["version"] == 3 and replanned["events"] == [] and replanned["now"] == "00:00"
 
+    # День, пересобранный заново поверх прежнего: новый процесс должен увидеть именно его.
+    restarted(client, f"{base}/state")
 
-def test_event_errors_are_russian_422(tmp_path):
-    client, _ = make_client(tmp_path)
+
+def test_event_errors_are_russian_422(api):
+    client, _ = api()
     dataset_id = _ready_dataset(client)
     base = f"/api/datasets/{dataset_id}/events"
 
@@ -133,8 +136,8 @@ def test_event_errors_are_russian_422(tmp_path):
     assert rejected.status_code == 422 and rejected.json()["detail"] == "Заявка NOPE не найдена."
 
 
-def test_transport_change_event_updates_engineer_transport(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_transport_change_event_updates_engineer_transport(api):
+    client, _ = api()
     base = f"/api/datasets/{_ready_dataset(client)}"
     event = {"type": "engineer_transport_changed", "time": "13:00", "engineer_id": "E1", "transport": "bike"}
 
@@ -168,8 +171,8 @@ def test_transport_change_event_updates_engineer_transport(tmp_path):
     )
 
 
-def test_delay_event_returns_forecast_and_russian_422(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_delay_event_returns_forecast_and_russian_422(api):
+    client, _ = api()
     base = f"/api/datasets/{_ready_dataset(client)}"
     plan = client.get(f"{base}/state").json()["plan"]
     busy = next(route for route in plan["routes"] if route["visits"])
@@ -234,8 +237,8 @@ def test_delay_event_returns_forecast_and_russian_422(tmp_path):
     assert cancel.json()["last_diff"]["delay_forecast"] is None
 
 
-def test_upload_csv_with_known_ids_reuses_region_bundle(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_upload_csv_with_known_ids_reuses_region_bundle(api):
+    client, _ = api()
     rows = [(r.id, "10:00", "12:00", r.address) for r in sample_bundle().requests]
     dataset_id = upload(client, "east.csv", csv_bytes(rows))
     status = client.get(f"/api/datasets/{dataset_id}").json()
@@ -244,8 +247,8 @@ def test_upload_csv_with_known_ids_reuses_region_bundle(tmp_path):
     assert status["report"]["skipped_rows"] == []
 
 
-def test_upload_csv_with_new_ids_geocodes_and_detects_region_by_district(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_upload_csv_with_new_ids_geocodes_and_detects_region_by_district(api):
+    client, _ = api()
     rows = [
         ("N1", "10:00", "12:00", "Город Москва, ул.Таганская, д. 1"),
         ("N2", "14:00", "16:00", "Город Москва, ул.Марксистская, д. 5"),
@@ -259,8 +262,25 @@ def test_upload_csv_with_new_ids_geocodes_and_detects_region_by_district(tmp_pat
     assert {r["id"] for r in state["requests"]} == {"N1", "N2"} and state["control"] is None
 
 
-def test_upload_errors(tmp_path):
-    client, deps = make_client(tmp_path)
+def test_a_zero_byte_in_an_address_does_not_lose_the_day(api):
+    """\x00 приезжает в выгрузке мусором кодировки, а текста с ним Postgres не принимает вовсе.
+
+    В памяти день собирался и с байтом, а в базе терялся целиком — и отвечал «база недоступна» на
+    совершенно здоровой базе. Байт убирается на разборе файла, поэтому оба хранилища видят один адрес.
+    """
+    client, _ = api()
+    rows = [("N1", "10:00", "12:00", "Город Москва, ул.\x00Таганская, д. 1")]
+
+    dataset_id = upload(client, "zero.csv", csv_bytes(rows, office=None))
+
+    status = client.get(f"/api/datasets/{dataset_id}").json()
+    assert status["status"] == "ready", status
+    state = client.post(f"/api/datasets/{dataset_id}/plan").json()
+    assert [r["address"] for r in state["requests"]] == ["Город Москва, ул.Таганская, д. 1"]
+
+
+def test_upload_errors(api):
+    client, deps = api()
     assert client.post("/api/upload", files={"file": ("x.txt", b"abc", "text/plain")}).status_code == 400
     assert client.post("/api/upload", files={"file": ("x.csv", b"", "text/csv")}).status_code == 400
     control = (
@@ -278,8 +298,8 @@ def test_upload_errors(tmp_path):
     assert client.get(f"/api/datasets/{pending.dataset_id}/state").status_code == 409
 
 
-def test_bundle_with_repeated_request_ids_is_rejected(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_bundle_with_repeated_request_ids_is_rejected(api):
+    client, _ = api()
     data = sample_bundle().model_dump(mode="json")
     data["requests"].append(dict(data["requests"][0], lat=55.8))
     dataset_id = upload(client, "bundle.json", json.dumps(data).encode())
@@ -288,8 +308,8 @@ def test_bundle_with_repeated_request_ids_is_rejected(tmp_path):
     assert status["error"] == "JSON не соответствует схеме бандла: повторяются номера заявок: R1"
 
 
-def test_csv_with_repeated_request_ids_keeps_first_row_and_reports_the_rest(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_csv_with_repeated_request_ids_keeps_first_row_and_reports_the_rest(api):
+    client, _ = api()
     rows = [
         ("N1", "10:00", "12:00", "Город Москва, ул.Таганская, д. 1"),
         ("N1", "14:00", "16:00", "Город Москва, ул.Таганская, д. 3"),
@@ -307,7 +327,11 @@ def test_csv_with_repeated_request_ids_keeps_first_row_and_reports_the_rest(tmp_
 
 
 class LockProbeGeocoder:
-    """Проверяет из другого потока, свободна ли блокировка датасета во время геокодирования."""
+    """Проверяет из другого потока, свободна ли блокировка датасета во время геокодирования.
+
+    Запись реестра тесты дают ему только ради самой блокировки: всё, что геокодер записал в день, они
+    потом читают через API, как это делает браузер.
+    """
 
     def __init__(self, category="building"):
         self.category = category
@@ -328,9 +352,9 @@ class LockProbeGeocoder:
         return GeoHit(55.75, 37.61, self.category)
 
 
-def test_urgent_address_is_geocoded_before_taking_dataset_lock(tmp_path):
+def test_urgent_address_is_geocoded_before_taking_dataset_lock(api):
     geocoder = LockProbeGeocoder()
-    client, deps = make_client(tmp_path, geocoder=geocoder)
+    client, deps = api(geocoder=geocoder)
     dataset_id = _ready_dataset(client)
     geocoder.record = deps.registry.get(dataset_id)
     request = {
@@ -347,16 +371,16 @@ def test_urgent_address_is_geocoded_before_taking_dataset_lock(tmp_path):
     )
     assert response.status_code == 200, response.text
     assert geocoder.lock_free == [True]
-    stored = geocoder.record.session.events[0].event.request
-    assert (stored.lat, stored.lon, stored.geocode_precision) == (55.75, 37.61, "house")
+    stored = response.json()["events"][0]["event"]["request"]
+    assert (stored["lat"], stored["lon"], stored["geocode_precision"]) == (55.75, 37.61, "house")
 
 
 def _request_of(state, request_id):
     return next(request for request in state["requests"] if request["id"] == request_id)
 
 
-def test_request_update_event_replaces_request_and_explanation(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_request_update_event_replaces_request_and_explanation(api, restarted):
+    client, _ = api()
     base = f"/api/datasets/{_ready_dataset(client)}"
     before = _request_of(client.get(f"{base}/state").json(), "R2")
     event = {"type": "request_updated", "time": "13:00", "request_id": "R2"}
@@ -408,11 +432,13 @@ def test_request_update_event_replaces_request_and_explanation(tmp_path):
         incomplete.json()["detail"] == "Некорректный запрос: для изменения заявки нужны request_id и request"
     )
     assert client.get(f"{base}/state").json()["version"] == 2
+    # Изменённая заявка лежит и в событии шкалы, и в плане: после перезапуска они должны совпасть с обоими.
+    restarted(client, f"{base}/state")
 
 
-def test_new_request_address_is_geocoded_before_taking_dataset_lock(tmp_path):
+def test_new_request_address_is_geocoded_before_taking_dataset_lock(api):
     geocoder = LockProbeGeocoder(category="highway")
-    client, deps = make_client(tmp_path, geocoder=geocoder)
+    client, deps = api(geocoder=geocoder)
     dataset_id = _ready_dataset(client)
     geocoder.record = deps.registry.get(dataset_id)
     before = _request_of(client.get(f"/api/datasets/{dataset_id}/state").json(), "R2")
@@ -425,14 +451,14 @@ def test_new_request_address_is_geocoded_before_taking_dataset_lock(tmp_path):
 
     assert response.status_code == 200, response.text
     assert geocoder.lock_free == [True]
-    stored = geocoder.record.session.request("R2")
-    assert (stored.address, stored.lat, stored.lon, stored.geocode_precision) == (
+    stored = _request_of(response.json(), "R2")
+    assert (stored["address"], stored["lat"], stored["lon"], stored["geocode_precision"]) == (
         "Город Москва, ул.Таганская, д. 7",
         55.75,
         37.61,
         "street",
     )
-    assert geocoder.record.session.events[0].event.request == stored
+    assert response.json()["events"][0]["event"]["request"] == stored
 
     point = {**request, "address": "Точка на карте", "lat": 55.7601, "lon": 37.6202}
     moved = client.post(
@@ -445,11 +471,11 @@ def test_new_request_address_is_geocoded_before_taking_dataset_lock(tmp_path):
     assert (placed["lat"], placed["lon"], placed["geocode_precision"]) == (55.7601, 37.6202, "house")
 
 
-def test_visit_on_the_way_is_not_shown_as_started_and_can_be_cancelled(tmp_path):
+def test_visit_on_the_way_is_not_shown_as_started_and_can_be_cancelled(api):
     """В 09:10 инженеры уже выехали к первым заявкам, но работа ещё не началась."""
     requests = [r.model_copy(update={"district": "Таганский"}) for r in transit_requests()]
     bundle = Bundle(region="t", office=OFFICE, requests=requests, engineers=day_engineers())
-    client, _ = make_client(tmp_path, bundle=bundle)
+    client, _ = api(bundle=bundle)
     base = f"/api/datasets/{upload(client, 'bundle.json', bundle.model_dump_json().encode())}"
     # Время выездов в сценарии считается по дороге без запаса.
     plan = client.post(f"{base}/plan", json={"workload_level": EXACT_TRAVEL_LEVEL}).json()["plan"]

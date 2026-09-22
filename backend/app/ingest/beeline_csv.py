@@ -50,7 +50,9 @@ def decode_bytes(data: bytes) -> str:
 
 
 def _cell(record: dict[str, str | None], column: str) -> str:
-    return (record.get(column) or "").strip()
+    # \x00 в ячейке выгрузки — мусор кодировки, но Postgres такой текст не принимает вовсе, и день с ним
+    # не сохранился бы целиком. Убираем на входе, чтобы день в памяти и день в базе были одним и тем же.
+    return (record.get(column) or "").replace("\x00", "").strip()
 
 
 def parse_beeline_csv(data: bytes) -> RawFile:

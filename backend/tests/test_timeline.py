@@ -397,3 +397,22 @@ def test_prune_keeps_the_counted_give_it_to_a_brigade_step(solves):
 def test_entry_can_be_created_with_a_variant():
     entry = Timeline().create(unavailable("E1", "13:00"), variant="optimal")
     assert entry.variant == "optimal" and entry_token(entry) == "tl_1@optimal"
+
+
+def test_a_step_counted_again_keeps_the_plan_the_dispatcher_saw(solves):
+    """Кэш шагов в памяти живёт тем же правилом, что и база: выигрывает первый писатель.
+
+    Солвер ограничен по времени и недетерминирован, повтор того же ключа нашёл бы другие маршруты. Если
+    память оставляла бы последний план, а база (ON CONFLICT DO NOTHING) — первый, то перезапуск показал
+    бы диспетчеру не тот план, что минуту назад.
+    """
+    timeline = Timeline()
+    session = new_session()
+    [entry] = _added(timeline, cancel("R2", "09:00"))
+    walk = timeline.walk(session)
+    shown = replay_step(session, entry, context(), 2)
+    timeline.store(walk, entry, shown)
+
+    timeline.store(walk, entry, replay_step(session, entry, context(), 3))
+
+    assert timeline.steps[(walk.prefix, entry_token(entry))] is shown

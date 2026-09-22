@@ -1,6 +1,6 @@
 """POST /plan с уровнем нагрузки инженеров."""
 
-from tests.api_helpers import make_client, sample_bundle, upload
+from tests.api_helpers import sample_bundle, upload
 
 LEVEL_TEXT = "Некорректный запрос: уровень нагрузки должен быть от 0 до 2"
 
@@ -11,8 +11,8 @@ def _ready_dataset(client):
     return f"/api/datasets/{dataset_id}"
 
 
-def test_plan_with_workload_level_rebuilds_day_and_keeps_level(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_plan_with_workload_level_rebuilds_day_and_keeps_level(api):
+    client, _ = api()
     base = _ready_dataset(client)
 
     precomputed = client.post(f"{base}/plan").json()
@@ -39,8 +39,8 @@ def test_plan_with_workload_level_rebuilds_day_and_keeps_level(tmp_path):
     assert (limit["version"], limit["workload_level"]) == (5, 2)
 
 
-def test_plan_rejects_workload_level_out_of_range(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_plan_rejects_workload_level_out_of_range(api):
+    client, _ = api()
     base = _ready_dataset(client)
     for level in (-1, 3, 4):
         response = client.post(f"{base}/plan", json={"workload_level": level})

@@ -55,3 +55,10 @@ def test_file_without_connection_column_leaves_it_empty():
 def test_rejects_file_without_required_columns():
     with pytest.raises(ValueError, match="нет колонок"):
         parse_beeline_csv(b"a;b\r\n1;2\r\n")
+
+
+def test_a_zero_byte_in_a_cell_is_thrown_away():
+    """\x00 в ячейке — мусор кодировки, а Postgres такого текста не держит: день с ним не сохранился бы."""
+    raw = parse_beeline_csv(WITHOUT_CONNECTION.replace("ул.Тестовая", "ул.\x00Тестовая").encode("cp1251"))
+
+    assert raw.rows[0].address == "Город Москва, ул.Тестовая, д. 1"

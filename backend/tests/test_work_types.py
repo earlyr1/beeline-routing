@@ -129,6 +129,7 @@ def test_a_config_without_a_work_type_leaves_it_out(cfg):
 
 
 def test_config_endpoint_serves_the_work_types_of_the_shared_golden(tmp_path, golden):
+    # Дня этот тест не заводит: хранилищу тут нечего хранить, поэтому клиент один и на памяти.
     client, deps = make_client(tmp_path)
     served = client.get("/api/config").json()["work_types"]
     assert served == [t.model_dump(mode="json") for t in urgent_work_types(deps.ingest.synth_config)]
@@ -136,12 +137,10 @@ def test_config_endpoint_serves_the_work_types_of_the_shared_golden(tmp_path, go
 
 
 @pytest.mark.parametrize("index", range(len(URGENT_WORK_TYPES)))
-def test_urgent_request_built_by_the_dialog_is_accepted_for_every_work_type(
-    tmp_path, monkeypatch, golden, index
-):
+def test_urgent_request_built_by_the_dialog_is_accepted_for_every_work_type(api, monkeypatch, golden, index):
     """Событие диалога уходит на шкалу, как это делает фронтенд: часы на времени события, затем выбор варианта."""
     fcfs_solves(monkeypatch)
-    client, deps = make_client(tmp_path)
+    client, deps = api()
     deps.run_background = lambda task: None
     base = f"/api/datasets/{upload(client, 'bundle.json', sample_bundle().model_dump_json().encode())}"
     assert client.get(base).json()["status"] == "ready"
@@ -183,11 +182,11 @@ def test_urgent_request_built_by_the_dialog_is_accepted_for_every_work_type(
 
 
 def test_server_sets_the_tier_of_an_urgent_request_by_its_bk_type_whatever_the_client_sends(
-    tmp_path, monkeypatch, golden
+    api, monkeypatch, golden
 ):
     """Уровень срочной заявки ставит сервер по типу BK; заявка без типа из таблицы нормативов (старый диалог, чат) — авария."""
     fcfs_solves(monkeypatch)
-    client, deps = make_client(tmp_path)
+    client, deps = api()
     deps.run_background = lambda task: None
     base = f"/api/datasets/{upload(client, 'bundle.json', sample_bundle().model_dump_json().encode())}"
     assert client.post(f"{base}/cursor", json={"time": "13:00"}).status_code == 200

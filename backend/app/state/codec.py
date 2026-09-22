@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
@@ -29,6 +30,47 @@ from app.planning.timeline import TimelineEntry, TimelineStep
 from app.solvers.problem import EngineerState
 
 logger = logging.getLogger(__name__)
+
+
+def _without_nulls(value: object) -> object:
+    """Тот же разобранный JSON, но без байтов \\x00 в строках — и в ключах объектов тоже."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_without_nulls(item) for item in value]
+    if isinstance(value, dict):
+        return {_without_nulls(key): _without_nulls(item) for key, item in value.items()}
+    return value
+
+
+def clean_json(raw: str) -> str:
+    """JSON, который примет jsonb: из строк убран \\x00.
+
+    Постгресовый text (а jsonb — это text внутри) нулевого байта не держит вовсе, и день с таким байтом
+    в адресе не сохранился бы целиком — а байт этот приезжает из настоящей выгрузки, через parse_beeline_csv.
+    Убираем на выходе кодека: одно место вместо валидатора на каждом текстовом поле десятка моделей.
+
+    Искать нужно не сам байт, а его запись в JSON: model_dump_json отдаёт его как escape-последовательность
+    \\u0000, и наивный replace по строке JSON не нашёл бы ничего. Поэтому редкий случай разбирается и
+    собирается заново, а обычный — проверка подстроки и возврат как есть.
+
+    День в памяти процесса байт при этом сохраняет: убрать его и оттуда значило бы чинить текст в десятке
+    точек входа (выгрузка, бандл, адрес срочной заявки, ответ помощника). Разница видна только после
+    перезапуска и только в тексте, который Postgres и так хранить не умеет.
+    """
+    if "\\u0000" not in raw:
+        return raw
+    return json.dumps(_without_nulls(json.loads(raw)), ensure_ascii=False)
+
+
+def clean_text(value: str | None) -> str | None:
+    """То же для обычной text-колонки, где escape-последовательности нет и байт лежит как есть."""
+    return None if value is None else value.replace("\x00", "")
+
+
+def dump_model(model: BaseModel) -> str:
+    """Модель pydantic в jsonb: то же самое, что model_dump_json, только пригодное для записи."""
+    return clean_json(model.model_dump_json())
 
 
 class GeoSnapshot(BaseModel):
@@ -129,15 +171,17 @@ def _points_key(
 
 
 def dump_prepared(prepared: PreparedDay) -> str:
-    return PreparedSnapshot(
-        region=prepared.region,
-        region_title=prepared.region_title,
-        office=prepared.office,
-        requests=prepared.requests,
-        engineers=prepared.engineers,
-        control=prepared.control,
-        generated=prepared.generated,
-    ).model_dump_json()
+    return dump_model(
+        PreparedSnapshot(
+            region=prepared.region,
+            region_title=prepared.region_title,
+            office=prepared.office,
+            requests=prepared.requests,
+            engineers=prepared.engineers,
+            control=prepared.control,
+            generated=prepared.generated,
+        )
+    )
 
 
 def load_prepared(raw: str) -> PreparedDay:
@@ -155,42 +199,44 @@ def load_prepared(raw: str) -> PreparedDay:
 
 def dump_session(session: PlanningSession) -> str:
     problem = session.problem
-    return SessionSnapshot(
-        requests=session.requests,
-        engineers=session.engineers,
-        plan=session.plan,
-        baseline=session.baseline,
-        previous_plan=session.previous_plan,
-        last_diff=session.last_diff,
-        events=session.events,
-        now=session.now,
-        version=session.version,
-        workload_level=session.workload_level,
-        lunch_enabled=session.lunch_enabled,
-        precomputed=session.precomputed,
-        problem=ProblemSnapshot(
-            states=[
-                EngineerStateSnapshot(
-                    engineer_id=state.engineer.id,
-                    start_node=state.start_node,
-                    available_from=state.available_from,
-                    available_until=state.available_until,
-                    equipment_left=state.equipment_left,
-                )
-                for state in problem.states
-            ],
-            open_request_ids=problem.open_request_ids,
-            unplannable=problem.unplannable,
-            pinned=problem.pinned,
-            previous_assignment=problem.previous_assignment,
-            previous_order=problem.previous_order,
-            previous_start=problem.previous_start,
-            pinned_lunch=problem.pinned_lunch,
-            now=problem.now,
-            lunch=problem.lunch,
-        ),
-        matrix_source=problem.travel.base.source,
-    ).model_dump_json()
+    return dump_model(
+        SessionSnapshot(
+            requests=session.requests,
+            engineers=session.engineers,
+            plan=session.plan,
+            baseline=session.baseline,
+            previous_plan=session.previous_plan,
+            last_diff=session.last_diff,
+            events=session.events,
+            now=session.now,
+            version=session.version,
+            workload_level=session.workload_level,
+            lunch_enabled=session.lunch_enabled,
+            precomputed=session.precomputed,
+            problem=ProblemSnapshot(
+                states=[
+                    EngineerStateSnapshot(
+                        engineer_id=state.engineer.id,
+                        start_node=state.start_node,
+                        available_from=state.available_from,
+                        available_until=state.available_until,
+                        equipment_left=state.equipment_left,
+                    )
+                    for state in problem.states
+                ],
+                open_request_ids=problem.open_request_ids,
+                unplannable=problem.unplannable,
+                pinned=problem.pinned,
+                previous_assignment=problem.previous_assignment,
+                previous_order=problem.previous_order,
+                previous_start=problem.previous_start,
+                pinned_lunch=problem.pinned_lunch,
+                now=problem.now,
+                lunch=problem.lunch,
+            ),
+            matrix_source=problem.travel.base.source,
+        )
+    )
 
 
 def load_session(
@@ -274,7 +320,7 @@ def load_session(
 
 
 def dump_event(event: Event) -> str:
-    return event.model_dump_json()
+    return dump_model(event)
 
 
 def load_event(raw: str) -> Event:
@@ -292,7 +338,7 @@ def dump_geo(geo: Mapping[str, GeoResult]) -> str:
         address: GeoSnapshot(lat=item.lat, lon=item.lon, precision=item.precision, query=item.query)
         for address, item in geo.items()
     }
-    return GeoAnswers(answers=answers).model_dump_json()
+    return dump_model(GeoAnswers(answers=answers))
 
 
 def load_geo(raw: str) -> dict[str, GeoResult]:
@@ -320,4 +366,4 @@ def step_from_row(session: PlanningSession, applied: str | None, reason: str | N
 
 
 def dump_applied(applied: AppliedEvent | None) -> str | None:
-    return None if applied is None else applied.model_dump_json()
+    return None if applied is None else dump_model(applied)

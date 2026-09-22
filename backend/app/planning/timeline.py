@@ -311,8 +311,14 @@ class Timeline:
     def store(
         self, walk: Walk, entry: TimelineEntry, step: TimelineStep, variant: EventVariant | None = None
     ) -> None:
-        """Сохраняет шаг события entry, следующего за проходом walk, со стратегией variant или выбранной."""
-        self.steps[(walk.prefix, entry_token(entry, variant))] = step
+        """Сохраняет шаг события entry, следующего за проходом walk, со стратегией variant или выбранной.
+
+        Посчитанный заново тот же ключ прежний план не затирает: остаётся первый — тот, который видел
+        диспетчер. Солвер ограничен по времени и недетерминирован, второй расчёт нашёл бы другие маршруты.
+        Такое же правило у базы (ON CONFLICT DO NOTHING в app/state/postgres.py), и разойтись им нельзя:
+        иначе после перезапуска на экране оказался бы не тот план, что минуту назад.
+        """
+        self.steps.setdefault((walk.prefix, entry_token(entry, variant)), step)
 
     def prune(self, walk: Walk) -> None:
         """Оставляет в кэше шаги полного прохода и другие стратегии его событий: выбор можно поменять без пересчёта.

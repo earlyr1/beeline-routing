@@ -29,6 +29,8 @@ package = false
 testpaths = ["tests"]
 pythonpath = ["."]
 addopts = "-q"
+# db — тест идёт на настоящем Postgres; маркер ставит tests/conftest.py, отбирает его `make test-db`.
+markers = ["db: прогон на настоящей базе (нужен TEST_DATABASE_URL)"]
 
 [tool.ruff]
 line-length = 110

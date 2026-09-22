@@ -7,7 +7,7 @@ import pytest
 
 from app.domain.enums import EventType
 from app.domain.models import Event
-from tests.api_helpers import HashGeocoder, make_client, sample_bundle, upload
+from tests.api_helpers import HashGeocoder, sample_bundle, upload
 from tests.helpers import req
 from tests.llm_helpers import ScriptedProvider, completion, tool_call
 from tests.timeline_helpers import cancel, fcfs_solves, restore
@@ -37,8 +37,8 @@ def ready(client, deps, solves):
     return base, background
 
 
-def dataset(tmp_path, solves, **options):
-    client, deps = make_client(tmp_path, **options)
+def dataset(api, solves, **options):
+    client, deps = api(**options)
     base, background = ready(client, deps, solves)
     return client, deps, base, background
 
@@ -86,11 +86,11 @@ def planned(state):
     return sorted(visit["request_id"] for route in state["plan"]["routes"] for visit in route["visits"])
 
 
-def test_old_bundle_day_cancellations_are_not_put_on_the_timeline(tmp_path, solves):
+def test_old_bundle_day_cancellations_are_not_put_on_the_timeline(api, solves):
     """Отмены дня из контрольного файла больше не встают на шкалу: клиент отменял уже после приезда инженера."""
     bundle = json.loads(sample_bundle().model_dump_json())
     bundle["cancellations"] = [{"request_id": "R2", "time": "09:30"}, {"request_id": "R3", "time": "11:00"}]
-    client, deps = make_client(tmp_path, bundle=sample_bundle())
+    client, deps = api(bundle=sample_bundle())
     background = Background()
     deps.run_background = background.append
     base = f"/api/datasets/{upload(client, 'bundle.json', json.dumps(bundle).encode())}"
@@ -113,15 +113,15 @@ def test_old_bundle_day_cancellations_are_not_put_on_the_timeline(tmp_path, solv
     assert request_status(at(client, base, "14:00"), "R2") == "cancelled"
 
 
-def test_state_after_upload_has_cursor_at_midnight_and_empty_timeline(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_state_after_upload_has_cursor_at_midnight_and_empty_timeline(api, solves):
+    client, _, base, _ = dataset(api, solves)
     state = state_of(client, base)
     assert (state["cursor"], state["timeline"], state["timeline_ready"]) == ("00:00", [], True)
     assert client.post(f"{base}/plan").json() == state
 
 
-def test_future_event_is_pending_and_computed_in_background(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_future_event_is_pending_and_computed_in_background(api, solves):
+    client, _, base, background = dataset(api, solves)
     initial = state_of(client, base)
 
     state = added(client, base, cancel("R2", "13:00"))
@@ -148,8 +148,8 @@ def test_future_event_is_pending_and_computed_in_background(tmp_path, solves):
     assert plan_part(after) == plan_part(initial)
 
 
-def test_cursor_before_and_after_events_recomputes_only_when_the_applied_set_changes(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_cursor_before_and_after_events_recomputes_only_when_the_applied_set_changes(api, solves):
+    client, _, base, _ = dataset(api, solves)
     initial = state_of(client, base)
     added(client, base, cancel("R2", "13:00"))
     added(client, base, cancel("R3", "13:00"))
@@ -175,8 +175,8 @@ def test_cursor_before_and_after_events_recomputes_only_when_the_applied_set_cha
     assert solves == []
 
 
-def test_timeline_replay_equals_sequential_events(tmp_path, solves):
-    client, deps, legacy, _ = dataset(tmp_path, solves)
+def test_timeline_replay_equals_sequential_events(api, solves):
+    client, deps, legacy, _ = dataset(api, solves)
     replayed, _ = ready(client, deps, solves)
     events = [cancel("R3", "11:00"), cancel("R2", "14:00")]
     for event in events:
@@ -193,8 +193,8 @@ def test_timeline_replay_equals_sequential_events(tmp_path, solves):
     assert statuses(state) == [("tl_2", "applied"), ("tl_1", "applied")]
 
 
-def test_event_added_before_the_cursor_recomputes_only_later_snapshots(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_event_added_before_the_cursor_recomputes_only_later_snapshots(api, solves):
+    client, _, base, _ = dataset(api, solves)
     added(client, base, cancel("R3", "11:00"))
     added(client, base, cancel("R2", "14:00"))
     at(client, base, "15:00")
@@ -213,8 +213,8 @@ def test_event_added_before_the_cursor_recomputes_only_later_snapshots(tmp_path,
     assert (early["version"], request_status(early, "R3")) == (2, "cancelled") and solves == []
 
 
-def test_delete_pending_and_applied_events(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_delete_pending_and_applied_events(api, solves):
+    client, _, base, background = dataset(api, solves)
     initial = state_of(client, base)
     added(client, base, cancel("R3", "11:00"))
     added(client, base, cancel("R2", "14:00"))
@@ -236,8 +236,8 @@ def test_delete_pending_and_applied_events(tmp_path, solves):
     assert solves == []
 
 
-def test_deleting_an_applied_event_recomputes_later_applied_events(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_deleting_an_applied_event_recomputes_later_applied_events(api, solves):
+    client, _, base, _ = dataset(api, solves)
     added(client, base, cancel("R3", "11:00"))
     added(client, base, cancel("R2", "14:00"))
     at(client, base, "15:00")
@@ -253,8 +253,8 @@ def test_deleting_an_applied_event_recomputes_later_applied_events(tmp_path, sol
     assert [applied["id"] for applied in state["events"]] == ["ev_1"] and state["version"] == 4
 
 
-def test_rejected_event_gets_status_and_reason_and_is_skipped(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_rejected_event_gets_status_and_reason_and_is_skipped(api, solves):
+    client, _, base, background = dataset(api, solves)
     added(client, base, cancel("R2", "11:00"))
     added(client, base, cancel("R2", "12:00"))
     background.run()
@@ -277,8 +277,8 @@ def test_rejected_event_gets_status_and_reason_and_is_skipped(tmp_path, solves):
     assert plan_part(deleted) == plan_part(applied)
 
 
-def test_event_rejected_at_or_before_the_cursor_is_removed_with_422(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_event_rejected_at_or_before_the_cursor_is_removed_with_422(api, solves):
+    client, _, base, _ = dataset(api, solves)
     at(client, base, "13:00")
     added(client, base, cancel("R2", "12:00"))
     before = state_of(client, base)
@@ -299,8 +299,8 @@ def test_event_rejected_at_or_before_the_cursor_is_removed_with_422(tmp_path, so
     assert [applied["event"]["time"] for applied in earlier["events"]] == ["11:00"]
 
 
-def test_timeline_event_checks_ids_and_time_range(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_timeline_event_checks_ids_and_time_range(api, solves):
+    client, _, base, _ = dataset(api, solves)
     urgent = {
         "type": "urgent",
         "time": "15:00",
@@ -353,8 +353,8 @@ def test_timeline_event_checks_ids_and_time_range(tmp_path, solves):
     assert request_status(evening, "URG-1") == "cancelled"
 
 
-def test_cursor_validation_and_missing_datasets(tmp_path, solves):
-    client, deps, base, _ = dataset(tmp_path, solves)
+def test_cursor_validation_and_missing_datasets(api, solves):
+    client, deps, base, _ = dataset(api, solves)
     cases = [
         ({"time": "24:00"}, "Некорректный запрос: время должно быть от 00:00 до 23:59"),
         ({"time": "99:59"}, "Некорректный запрос: время должно быть от 00:00 до 23:59"),
@@ -377,8 +377,8 @@ def test_cursor_validation_and_missing_datasets(tmp_path, solves):
         assert [response.status_code for response in responses] == [code, code, code]
 
 
-def test_legacy_events_use_the_cursor_and_keep_their_texts(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_legacy_events_use_the_cursor_and_keep_their_texts(api, solves):
+    client, _, base, _ = dataset(api, solves)
     at(client, base, "13:30")
 
     early = client.post(f"{base}/events", json=body(cancel("R2", "13:00")))
@@ -407,17 +407,17 @@ def test_legacy_events_use_the_cursor_and_keep_their_texts(tmp_path, solves):
     assert request_status(later, "R3") == "cancelled" and solves == []
 
 
-def with_llm(tmp_path, solves, *responses):
-    client, deps = make_client(tmp_path)
+def with_llm(api, solves, *responses):
+    client, deps = api()
     provider = ScriptedProvider(*responses)
     deps.llm = provider.client()
     base, background = ready(client, deps, solves)
     return client, base, provider
 
 
-def test_proposal_is_proposed_and_approved_at_the_cursor(tmp_path, solves):
+def test_proposal_is_proposed_and_approved_at_the_cursor(api, solves):
     call = tool_call("propose_cancel", {"request_id": "R2", "rationale": "Клиент отменил визит"})
-    client, base, provider = with_llm(tmp_path, solves, completion(tool_calls=[call]))
+    client, base, provider = with_llm(api, solves, completion(tool_calls=[call]))
     at(client, base, "13:00")
     added(client, base, cancel("R3", "14:00"))
 
@@ -439,9 +439,9 @@ def test_proposal_is_proposed_and_approved_at_the_cursor(tmp_path, solves):
     assert (request_status(evening, "R2"), request_status(evening, "R3")) == ("cancelled", "cancelled")
 
 
-def test_proposal_made_before_the_cursor_moved_is_applied_at_the_cursor(tmp_path, solves):
+def test_proposal_made_before_the_cursor_moved_is_applied_at_the_cursor(api, solves):
     call = tool_call("propose_cancel", {"request_id": "R2", "time": "13:00", "rationale": "Отказ клиента"})
-    client, base, _ = with_llm(tmp_path, solves, completion(tool_calls=[call]))
+    client, base, _ = with_llm(api, solves, completion(tool_calls=[call]))
     [proposal] = client.post(f"{base}/chat", json={"text": "R2 отменена"}).json()["proposals"]
     # Время сдвинули, но работы по R2 (окно с 14:00) ещё не начаты.
     at(client, base, "13:30")
@@ -453,8 +453,8 @@ def test_proposal_made_before_the_cursor_moved_is_applied_at_the_cursor(tmp_path
     assert statuses(result["state"]) == [("tl_1", "applied")]
 
 
-def test_plan_rebuild_clears_the_timeline_and_keeps_it_without_rebuild(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_plan_rebuild_clears_the_timeline_and_keeps_it_without_rebuild(api, solves):
+    client, _, base, background = dataset(api, solves)
     moved = at(client, base, "13:00")
     assert client.post(f"{base}/plan").json() == moved
 
@@ -468,8 +468,8 @@ def test_plan_rebuild_clears_the_timeline_and_keeps_it_without_rebuild(tmp_path,
     assert statuses(added(client, base, cancel("R2", "14:00"))) == [("tl_2", "pending")]
 
 
-def test_clearing_the_timeline_returns_to_the_morning_plan_without_solving(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_clearing_the_timeline_returns_to_the_morning_plan_without_solving(api, solves):
+    client, _, base, background = dataset(api, solves)
     morning = state_of(client, base)
     added(client, base, cancel("R2", "14:00"))
     at(client, base, "15:00")
@@ -494,8 +494,8 @@ def test_clearing_the_timeline_returns_to_the_morning_plan_without_solving(tmp_p
     assert client.delete("/api/datasets/d_missing/timeline").status_code == 404
 
 
-def test_versions_stay_unique_when_events_are_removed_and_added_again(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_versions_stay_unique_when_events_are_removed_and_added_again(api, solves):
+    client, _, base, _ = dataset(api, solves)
     at(client, base, "15:00")
 
     first = added(client, base, cancel("R2", "14:00"))
@@ -510,8 +510,8 @@ def test_versions_stay_unique_when_events_are_removed_and_added_again(tmp_path, 
     assert (again["version"], client.get(geometry).json()["version"]) == (3, 3)
 
 
-def test_background_precompute_stops_when_the_timeline_changes(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_background_precompute_stops_when_the_timeline_changes(api, solves):
+    client, _, base, background = dataset(api, solves)
     added(client, base, cancel("R3", "11:00"))
     added(client, base, cancel("R2", "14:00"))
     assert len(background) == 2
@@ -527,8 +527,8 @@ def test_background_precompute_stops_when_the_timeline_changes(tmp_path, solves)
     assert solves == ["11:00", "14:00"] and background == []
 
 
-def test_cursor_request_during_precompute_waits_for_the_step_and_reuses_it(tmp_path, solves):
-    client, deps = make_client(tmp_path)
+def test_cursor_request_during_precompute_waits_for_the_step_and_reuses_it(api, solves):
+    client, deps = api()
     base, _ = ready(client, deps, solves)
     workers = []
 
@@ -578,9 +578,9 @@ class CountingGeocoder(HashGeocoder):
         return super().lookup(query)
 
 
-def test_timeline_edit_is_geocoded_once_when_added(tmp_path, solves):
+def test_timeline_edit_is_geocoded_once_when_added(api, solves):
     geocoder = CountingGeocoder(category="highway")
-    client, _, base, _ = dataset(tmp_path, solves, geocoder=geocoder)
+    client, _, base, _ = dataset(api, solves, geocoder=geocoder)
     before = next(request for request in state_of(client, base)["requests"] if request["id"] == "R2")
     moved = {**before, "address": "Город Москва, ул.Таганская, д. 7", "lat": None, "lon": None}
     edit = {"type": "request_updated", "time": "12:00", "request_id": "R2", "request": moved}
@@ -613,8 +613,8 @@ def cursor_to(client, base, time):
     return response.json()
 
 
-def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(api, solves, restarted):
+    client, _, base, background = dataset(api, solves)
     busy = busy_of(client, base)
     added(client, base, unavailable(busy, "13:00"))
     added(client, base, cancel("R3", "14:30"))
@@ -665,9 +665,13 @@ def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(tmp_path, solv
     again = client.get(f"{base}/timeline/events/tl_1/variants")
     assert again.status_code == 200 and again.json()["current"] == "optimal"
 
+    # Шкала с посчитанными шагами и выбранной стратегией — самое содержательное, что кладётся в базу:
+    # новый процесс должен показать ровно то же, а не пересчитанное и не растерявшее половину полей.
+    restarted(client, f"{base}/state", f"{base}/timeline/events/tl_1/variants")
 
-def test_with_a_solver_pool_both_variants_of_an_event_are_solved_at_once(tmp_path, solves, monkeypatch):
-    client, deps, base, background = dataset(tmp_path, solves)
+
+def test_with_a_solver_pool_both_variants_of_an_event_are_solved_at_once(api, solves, monkeypatch):
+    client, deps, base, background = dataset(api, solves)
     busy = busy_of(client, base)
     deps.ingest.planning.solver_pool = object()
     # Обе стратегии должны дойти до барьера одновременно, иначе через 10 секунд он ломается.
@@ -687,8 +691,8 @@ def test_with_a_solver_pool_both_variants_of_an_event_are_solved_at_once(tmp_pat
     assert len(stopped["pending_choice"]["variants"]) == 3
 
 
-def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(api, solves):
+    client, _, base, _ = dataset(api, solves)
     busy = busy_of(client, base)
     cursor_to(client, base, "12:00")
     state = added(client, base, unavailable(busy, "12:00"))
@@ -697,8 +701,8 @@ def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(tmp_path, solve
     assert state["pending_choice"]["entry_id"] == "tl_1"
 
 
-def test_variant_errors(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_variant_errors(api, solves):
+    client, _, base, background = dataset(api, solves)
     added(client, base, cancel("R1", "16:00"))
     added(client, base, restore("R1", "16:30"))
     background.run()
@@ -719,9 +723,9 @@ def test_variant_errors(tmp_path, solves):
     )
 
 
-def test_a_cancelled_request_can_be_added_with_its_own_strategy(tmp_path, solves):
+def test_a_cancelled_request_can_be_added_with_its_own_strategy(api, solves):
     """Клиент отказался: диспетчер сам говорит, трогать ли маршруты. Часы на отмене не встают, окна выбора нет."""
-    client, _, base, _ = dataset(tmp_path, solves)
+    client, _, base, _ = dataset(api, solves)
     before = at(client, base, "13:00")
     owner = next(route["engineer_id"] for route in before["plan"]["routes"] if route["visits"])
     request_id = route_ids(before, owner)[-1]
@@ -742,8 +746,8 @@ def test_a_cancelled_request_can_be_added_with_its_own_strategy(tmp_path, solves
     assert solves == []
 
 
-def test_a_strategy_for_an_event_without_strategies_is_409_and_the_event_is_not_added(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_a_strategy_for_an_event_without_strategies_is_409_and_the_event_is_not_added(api, solves):
+    client, _, base, _ = dataset(api, solves)
     response = client.post(
         f"{base}/timeline/events", params={"variant": "keep"}, json=body(restore("R1", "12:00"))
     )
@@ -752,9 +756,9 @@ def test_a_strategy_for_an_event_without_strategies_is_409_and_the_event_is_not_
     assert state_of(client, base)["timeline"] == []
 
 
-def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(tmp_path, solves):
+def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(api, solves):
     """Утреннее окно каждой заявки: с ним видно, что клиент знает про свой визит до всех событий дня."""
-    client, _, base, _ = dataset(tmp_path, solves)
+    client, _, base, _ = dataset(api, solves)
     start = state_of(client, base)
     visits = {
         visit["request_id"]: (route["engineer_id"], visit["start"])
@@ -791,8 +795,8 @@ def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(tmp_p
     assert state["morning"] == morning
 
 
-def test_legacy_events_and_proposals_apply_the_optimal_variant_without_asking(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_legacy_events_and_proposals_apply_the_optimal_variant_without_asking(api, solves):
+    client, _, base, _ = dataset(api, solves)
     busy = busy_of(client, base)
     response = client.post(f"{base}/events", json=body(unavailable(busy, "13:00")))
     assert response.status_code == 200, response.text
@@ -801,8 +805,8 @@ def test_legacy_events_and_proposals_apply_the_optimal_variant_without_asking(tm
     assert [(item["status"], item["variant"]) for item in state["timeline"]] == [("applied", "optimal")]
 
 
-def test_legacy_event_after_an_event_without_a_choice_is_409_and_not_kept(tmp_path, solves):
-    client, _, base, _ = dataset(tmp_path, solves)
+def test_legacy_event_after_an_event_without_a_choice_is_409_and_not_kept(api, solves):
+    client, _, base, _ = dataset(api, solves)
     added(client, base, unavailable(busy_of(client, base), "13:00"))
 
     response = client.post(f"{base}/events", json=body(cancel("R3", "14:30")))
@@ -822,8 +826,8 @@ def route_ids(state, engineer_id):
     return [visit["request_id"] for visit in route["visits"]]
 
 
-def test_request_reassignment_waits_for_a_variant_and_pins_the_request(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_request_reassignment_waits_for_a_variant_and_pins_the_request(api, solves):
+    client, _, base, background = dataset(api, solves)
     assert route_ids(state_of(client, base), "E1") == ["R1", "R2", "R3"]
     added(client, base, reassigned("R3", "E2", "12:00"))
     background.run()
@@ -882,8 +886,8 @@ def cached_steps(deps, base):
     return set(deps.registry.get(base.rsplit("/", 1)[1]).timeline.steps)
 
 
-def test_background_precompute_stops_at_the_first_event_without_a_choice(tmp_path, solves):
-    client, deps, base, background = dataset(tmp_path, solves)
+def test_background_precompute_stops_at_the_first_event_without_a_choice(api, solves):
+    client, deps, base, background = dataset(api, solves)
     added(client, base, unavailable(busy_of(client, base), "13:00"))
     added(client, base, cancel("R3", "14:30"))
 
@@ -894,8 +898,8 @@ def test_background_precompute_stops_at_the_first_event_without_a_choice(tmp_pat
     assert (solves, solves.variants) == (["13:00", "13:00"], ["optimal", "stable"])
 
 
-def test_changing_an_earlier_choice_replays_a_later_breaking_event_with_its_own_choice(tmp_path, solves):
-    client, deps, base, background = dataset(tmp_path, solves)
+def test_changing_an_earlier_choice_replays_a_later_breaking_event_with_its_own_choice(api, solves):
+    client, deps, base, background = dataset(api, solves)
     busy = busy_of(client, base)
     other = next(
         route["engineer_id"]
@@ -929,8 +933,8 @@ def urgent(time="12:00", request_id="U1"):
     return Event(type=EventType.URGENT, time=time, request=req(request_id, 0, 0, "14:00", "16:00"))
 
 
-def test_urgent_request_can_be_given_to_a_named_brigade_and_that_plan_is_counted_on_demand(tmp_path, solves):
-    client, deps, base, background = dataset(tmp_path, solves)
+def test_urgent_request_can_be_given_to_a_named_brigade_and_that_plan_is_counted_on_demand(api, solves):
+    client, deps, base, background = dataset(api, solves)
     added(client, base, urgent())
 
     background.run()
@@ -967,8 +971,8 @@ def test_urgent_request_can_be_given_to_a_named_brigade_and_that_plan_is_counted
     assert "U1" in route_ids(chosen, "E2")
 
 
-def test_a_brigade_can_be_named_only_for_an_urgent_request_and_only_from_this_day(tmp_path, solves):
-    client, _, base, background = dataset(tmp_path, solves)
+def test_a_brigade_can_be_named_only_for_an_urgent_request_and_only_from_this_day(api, solves):
+    client, _, base, background = dataset(api, solves)
     added(client, base, unavailable(busy_of(client, base), "13:00"))
     added(client, base, urgent("14:00"))
     background.run()

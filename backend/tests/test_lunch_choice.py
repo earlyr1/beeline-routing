@@ -12,7 +12,7 @@ from app.settings import DEFAULT_SOLVER_TIME_LIMIT_S
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import OrToolsSolver
 from app.solvers.problem import make_problem
-from tests.api_helpers import make_client, sample_bundle, upload
+from tests.api_helpers import sample_bundle, upload
 from tests.helpers import eng, req
 from tests.planning_helpers import EXACT_TRAVEL_LEVEL, context, new_session, routes
 
@@ -190,8 +190,8 @@ def test_time_limits_come_from_planning_context(solver_limits):
     assert solver_limits == [7, 2, 2, 2]
 
 
-def test_api_full_day_solves_use_lunch_limit_and_events_use_replan_limit(tmp_path, solver_limits):
-    client, _ = make_client(tmp_path, solver_time_limit_s=5, solver_time_limit_lunch_s=15)
+def test_api_full_day_solves_use_lunch_limit_and_events_use_replan_limit(api, solver_limits):
+    client, _ = api(solver_time_limit_s=5, solver_time_limit_lunch_s=15)
     base = f"/api/datasets/{upload(client, 'bundle.json', sample_bundle().model_dump_json().encode())}"
     cancel = {"type": "cancel", "time": "13:00", "request_id": "R2"}
 
@@ -223,8 +223,8 @@ def _choice(state):
     return state["version"], state["workload_level"], state["lunch_enabled"]
 
 
-def test_plan_lunch_choice_rebuilds_day_and_omitted_fields_keep_session_values(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_plan_lunch_choice_rebuilds_day_and_omitted_fields_keep_session_values(api):
+    client, _ = api()
     base = _ready_dataset(client)
 
     precomputed = client.post(f"{base}/plan").json()
@@ -263,8 +263,8 @@ def test_plan_lunch_choice_rebuilds_day_and_omitted_fields_keep_session_values(t
     assert any(lunch is not None for lunch in _json_lunches(both))
 
 
-def test_plan_rejects_non_boolean_lunch(tmp_path):
-    client, _ = make_client(tmp_path)
+def test_plan_rejects_non_boolean_lunch(api):
+    client, _ = api()
     base = _ready_dataset(client)
     for value in ("нет", 0, 1, "false"):
         response = client.post(f"{base}/plan", json={"lunch": value})

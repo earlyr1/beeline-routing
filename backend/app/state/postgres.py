@@ -40,9 +40,11 @@ from app.planning.timeline import StepKey, TimelineEntry, TimelineStep
 from app.state.codec import (
     MatrixCache,
     PreparedDay,
+    clean_text,
     dump_applied,
     dump_event,
     dump_geo,
+    dump_model,
     dump_prepared,
     dump_session,
     entry_from_row,
@@ -50,21 +52,34 @@ from app.state.codec import (
     load_session,
     step_from_row,
 )
-from app.state.repo import DayState, DayWriter, StateConflict, StateUnavailable
+from app.state.repo import (
+    DayState,
+    DayWriter,
+    StateBroken,
+    StateConflict,
+    StateMissing,
+    StateUnavailable,
+)
 
 logger = logging.getLogger(__name__)
 
 # Сколько последних дней держит база. Лишние уносит создание нового дня, вместе со шкалой, планами,
-# окнами и предложениями (ON DELETE CASCADE).
+# окнами и предложениями (ON DELETE CASCADE). День, который процесс ещё держит в памяти, из этого счёта
+# исключается (аргумент keep у create): писать в вытесненный день было бы некуда.
 MAX_DAYS = 20
 SAVE_FAILED_TEXT = "Не удалось сохранить: база недоступна."
+# База ответила, но правку не приняла: битые данные, нарушенное ограничение, опечатка в SQL. Повтор запроса
+# не поможет, и врать про недоступность на живой базе незачем.
+SAVE_BROKEN_TEXT = "Не удалось сохранить: база не приняла данные дня."
+# Дня в базе уже нет: его вытеснили новые загрузки, пока процесс держал его в памяти (см. MAX_DAYS).
+MISSING_TEXT = "День больше не хранится в базе: загрузите файл заново."
 CONFLICT_TEXT = "Данные изменились в другой вкладке, обновите страницу."
 # День, пойманный перезапуском на предподсчёте, не возобновляется: честный экран вместо вечного спиннера.
 INTERRUPTED_TEXT = "Предподсчёт прервал перезапуск сервиса: загрузите файл заново."
 
 
 def _window(window: TimeWindow | None) -> str | None:
-    return None if window is None else window.model_dump_json()
+    return None if window is None else dump_model(window)
 
 
 def _parse_window(raw: str | None) -> TimeWindow | None:
@@ -83,8 +98,9 @@ class PostgresDayWriter:
             cur.execute(
                 "UPDATE days SET status = %s, stage = %s, report = %s::jsonb, error = %s, "
                 "updated_at = now() WHERE dataset_id = %s",
-                (status, stage, None if report is None else report.model_dump_json(), error, self._id),
+                (status, stage, None if report is None else dump_model(report), clean_text(error), self._id),
             )
+            _found_day(cur, self._id)
 
     def save_day(
         self,
@@ -104,6 +120,7 @@ class PostgresDayWriter:
                 "last_number = %s, last_version = %s, updated_at = now() WHERE dataset_id = %s",
                 (payload, revision, day_revision, last_number, last_version, self._id),
             )
+            _found_day(cur, self._id)
             # День собран заново: прежние события, планы и договорённости к нему не относятся.
             cur.execute("DELETE FROM timeline_entries WHERE dataset_id = %s", (self._id,))
             cur.execute("DELETE FROM plans WHERE dataset_id = %s", (self._id,))
@@ -119,6 +136,7 @@ class PostgresDayWriter:
                 "UPDATE days SET cursor_min = %s, updated_at = now() WHERE dataset_id = %s",
                 (cursor, self._id),
             )
+            _found_day(cur, self._id)
 
     def add_entry(self, entry: TimelineEntry, *, revision: int, expect: int) -> None:
         with self._repo.cursor() as cur:
@@ -162,6 +180,7 @@ class PostgresDayWriter:
                 "WHERE dataset_id = %s",
                 (last_number, self._id),
             )
+            _found_day(cur, self._id)
 
     def add_step(self, key: StepKey, step: TimelineStep, *, last_version: int) -> None:
         prefix, token = key
@@ -171,7 +190,7 @@ class PostgresDayWriter:
             cur.execute(
                 "INSERT INTO plans (dataset_id, prefix, token, applied, session, reason) "
                 "VALUES (%s, %s, %s, %s::jsonb, %s::jsonb, %s) ON CONFLICT DO NOTHING",
-                (self._id, list(prefix), token, dump_applied(step.applied), session, step.reason),
+                (self._id, list(prefix), token, dump_applied(step.applied), session, clean_text(step.reason)),
             )
             if cur.rowcount:
                 # Шага в базе не было, а продолжения от него могли остаться: так бывает, если его запись
@@ -189,6 +208,7 @@ class PostgresDayWriter:
                 "WHERE dataset_id = %s",
                 (last_version, self._id),
             )
+            _found_day(cur, self._id)
 
     def keep_steps(self, keys: Collection[StepKey]) -> None:
         with self._repo.cursor() as cur:
@@ -221,7 +241,7 @@ class PostgresDayWriter:
 
     def save_proposals(self, proposals: Collection[Proposal], *, urgent_number: int) -> None:
         rows = [
-            (self._id, proposal.id, seq, proposal.status, proposal.model_dump_json())
+            (self._id, proposal.id, seq, proposal.status, dump_model(proposal))
             for seq, proposal in enumerate(proposals)
         ]
         with self._repo.cursor() as cur:
@@ -237,6 +257,18 @@ class PostgresDayWriter:
                 "WHERE dataset_id = %s",
                 (urgent_number, self._id),
             )
+            _found_day(cur, self._id)
+
+
+def _found_day(cur: psycopg.Cursor, dataset_id: str) -> None:
+    """Правка не нашла своего дня: его вытеснили из базы новые загрузки.
+
+    UPDATE по несуществующему дню задевает ноль строк и молча возвращается успехом, так что день, вынесенный
+    вытеснением, принимал бы половину правок в никуда и отказывал по второй половине с чужой причиной
+    (нарушенный внешний ключ, «данные изменились в другой вкладке»). Лучше один честный отказ на всё.
+    """
+    if cur.rowcount == 0:
+        raise StateMissing(MISSING_TEXT)
 
 
 def _bump_revision(cur: psycopg.Cursor, dataset_id: str, revision: int, expect: int) -> None:
@@ -250,6 +282,10 @@ def _bump_revision(cur: psycopg.Cursor, dataset_id: str, revision: int, expect: 
         (revision, dataset_id, expect),
     )
     if cur.rowcount == 0:
+        # Ноль строк — либо ревизия ушла вперёд, либо дня в базе уже нет: причины разные, и путать их нельзя.
+        cur.execute("SELECT 1 FROM days WHERE dataset_id = %s", (dataset_id,))
+        if cur.fetchone() is None:
+            raise StateMissing(MISSING_TEXT)
         raise StateConflict(CONFLICT_TEXT)
 
 
@@ -304,21 +340,39 @@ class PostgresStateRepo:
 
     @contextmanager
     def cursor(self) -> Iterator[psycopg.Cursor]:
-        """Курсор в своей транзакции: выход без ошибки её фиксирует, ошибка откатывает."""
+        """Курсор в своей транзакции: выход без ошибки её фиксирует, ошибка откатывает.
+
+        Отказ базы переводится в три разные причины, потому что диспетчеру они говорят разное: связи нет
+        (повторить), дня нет (загрузить файл заново), данные не приняты (звать нас). Прежде всё это было
+        одним «база недоступна» — в том числе на совершенно здоровой базе.
+        """
         try:
             with self._pool.connection() as conn, conn.cursor() as cur:
                 yield cur
-        except (psycopg.Error, PoolTimeout) as error:
-            logger.warning("Запись дня в базу не удалась: %s", error)
+        except (psycopg.OperationalError, PoolTimeout) as error:
+            logger.warning("База недоступна: %s", error)
             raise StateUnavailable(SAVE_FAILED_TEXT) from error
+        except psycopg.errors.ForeignKeyViolation as error:
+            # Единственный внешний ключ схемы — dataset_id → days: строку писали дню, которого уже нет.
+            logger.warning("Дня, которому шла правка, в базе больше нет: %s", error)
+            raise StateMissing(MISSING_TEXT) from error
+        except psycopg.Error as error:
+            logger.exception("База не приняла правку дня: %s", error)
+            raise StateBroken(SAVE_BROKEN_TEXT) from error
 
-    def create(self, dataset_id: str) -> DayWriter:
+    def create(self, dataset_id: str, *, keep: Collection[str] = ()) -> DayWriter:
+        """Новый день; самые давние сверх MAX_DAYS уносит он же.
+
+        keep — дни, которые процесс держит в памяти: их вытеснять нельзя, иначе писать стало бы некуда.
+        Порядок вытеснения задан до последнего поля: у дней, созданных в одну миллисекунду, created_at
+        совпадает, и без второго ключа база выбирала бы жертву сама.
+        """
         with self.cursor() as cur:
             cur.execute("INSERT INTO days (dataset_id) VALUES (%s)", (dataset_id,))
             cur.execute(
-                "DELETE FROM days WHERE dataset_id IN "
-                "(SELECT dataset_id FROM days ORDER BY created_at DESC OFFSET %s)",
-                (MAX_DAYS,),
+                "DELETE FROM days WHERE dataset_id <> ALL(%s) AND dataset_id IN "
+                "(SELECT dataset_id FROM days ORDER BY created_at DESC, dataset_id DESC OFFSET %s)",
+                (list(keep), MAX_DAYS),
             )
         return PostgresDayWriter(self, dataset_id)
 

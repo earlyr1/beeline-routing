@@ -14,7 +14,7 @@ from app.solvers.assemble import build_plan
 from app.solvers.ortools_solver import ObjectiveWeights, OrToolsSolver
 from app.solvers.reasons import unassigned_reason
 from app.solvers.simulate import simulate_route
-from tests.api_helpers import make_client, sample_bundle, upload
+from tests.api_helpers import sample_bundle, upload
 from tests.helpers import at, eng, problem_of, req
 from tests.planning_helpers import OFFICE, context, new_session, routes
 
@@ -59,14 +59,14 @@ def window_of(request):
 # Модель и API
 
 
-def test_request_asap_defaults_to_false_and_round_trips_through_state_json(tmp_path):
+def test_request_asap_defaults_to_false_and_round_trips_through_state_json(api):
     assert req("R1", 1, 0, "10:00", "12:00").asap is False
     assert (
         Request.model_validate(req("R1", 1, 0, "10:00", "12:00").model_dump(exclude={"asap"})).asap is False
     )
     bundle = sample_bundle()
     bundle.requests[2] = bundle.requests[2].model_copy(update={"asap": True, "priority": Priority.URGENT})
-    client, _ = make_client(tmp_path, bundle=bundle)
+    client, _ = api(bundle=bundle)
     base = f"/api/datasets/{upload(client, 'bundle.json', bundle.model_dump_json().encode())}"
 
     state = client.get(f"{base}/state").json()

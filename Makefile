@@ -9,7 +9,7 @@ OSRM_URL ?= http://localhost:5050
 # Учётные данные базы дня: те же значения по умолчанию, что подставляет docker-compose.yml.
 POSTGRES_USER ?= routing
 POSTGRES_DB ?= routing
-# Отдельная база для тестов хранилища: поднимается на время прогона и убирается за собой.
+# Отдельная база для тестов, которые ходят в Postgres: поднимается на время прогона и убирается за собой.
 PG_TEST_PORT ?= 55432
 TEST_DATABASE_URL ?= postgresql://routing:routing@localhost:$(PG_TEST_PORT)/routing
 PG_TEST_NAME ?= routing-test-db
@@ -61,19 +61,19 @@ smoke:  ## проверить живой сервис: регионы, план 
 
 ## --- проверки ---
 
-test:  ## полный прогон бэкенда (~6.5 мин)
+test:  ## полный прогон бэкенда без базы (~6.5 мин): половины [postgres] уходят в skipped
 	cd backend && $(UV) run pytest -o addopts= -q
+	@echo "Тесты базы (маркер db) пропущены — зелёный прогон тут не полный. Прогнать их: make test-db"
 
 test-fast:  ## бэкенд без тестов солвера и API (быстрая обратная связь)
 	cd backend && $(UV) run pytest -o addopts= -q --ignore=tests/test_api.py --ignore=tests/test_timeline_api.py
 
-test-db:  ## тесты хранилища на настоящем Postgres: своя база на PG_TEST_PORT, убирается за собой
+test-db:  ## всё, что ходит в Postgres (маркер db): своя база на PG_TEST_PORT, убирается за собой
 	@docker rm -f $(PG_TEST_NAME) >/dev/null 2>&1 || true
 	@docker run -d --name $(PG_TEST_NAME) -e POSTGRES_DB=routing -e POSTGRES_USER=routing \
 		-e POSTGRES_PASSWORD=routing -p $(PG_TEST_PORT):5432 postgres:17-alpine >/dev/null
 	@until docker exec $(PG_TEST_NAME) pg_isready -U routing -d routing >/dev/null 2>&1; do sleep 1; done
-	@cd backend && TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(UV) run pytest -o addopts= -q \
-		tests/test_state_repo.py tests/test_state_api.py; status=$$?; \
+	@cd backend && TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(UV) run pytest -o addopts= -q -m db; status=$$?; \
 		docker rm -f $(PG_TEST_NAME) >/dev/null; exit $$status
 
 lint:  ## ruff: проверка стиля и форматирования

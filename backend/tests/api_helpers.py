@@ -1,5 +1,6 @@
 import hashlib
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.api.app import create_app
@@ -11,6 +12,11 @@ from app.settings import Settings
 from tests.planning_helpers import OFFICE, day_engineers, day_requests
 
 HEADER = "Заявка;Тип заявки BK;Тип заявки HD;Начало;Окончание;Район;Адрес;Гигабитное подключение\r\n"
+
+# Тест уровня API, которому база не нужна: дня он не заводит и в days не оставляет ни строки. Параметризация
+# перекрывает фикстуру state_backend (tests/conftest.py) — тест идёт один раз, без половины [postgres],
+# которая оплачивала бы пул соединений и миграцию ради ровно нуля запросов.
+memory_only = pytest.mark.parametrize("state_backend", [None], ids=["memory"])
 
 
 class HashGeocoder:
@@ -35,7 +41,11 @@ def prepared_bundle(region, title):
 
 
 def make_client(tmp_path, bundle=None, geocoder=None, **limits):
-    """limits переопределяет лимиты OR-Tools (solver_time_limit_s, solver_time_limit_lunch_s): по умолчанию 1 секунда."""
+    """limits переопределяет лимиты OR-Tools (solver_time_limit_s, solver_time_limit_lunch_s): по умолчанию
+    1 секунда. Туда же идёт database_url — где живёт день; без него день живёт в памяти процесса.
+
+    Тесты уровня API зовут эту функцию не сами, а через фикстуру `api` (tests/conftest.py): она подставляет
+    хранилище и закрывает соединения после теста."""
     bundle = bundle or sample_bundle()
     save_bundle(bundle, tmp_path / "bundles" / bundle.region / "bundle.json")
     settings = Settings(

@@ -66,7 +66,7 @@ class MemoryStateRepo:
     def __init__(self) -> None:
         self._writer = NullDayWriter()
 
-    def create(self, dataset_id: str) -> DayWriter:
+    def create(self, dataset_id: str, *, keep: Collection[str] = ()) -> DayWriter:
         return self._writer
 
     def writer(self, dataset_id: str) -> DayWriter:

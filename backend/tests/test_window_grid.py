@@ -15,7 +15,7 @@ from app.llm.interpret import interpret
 from app.llm.prompt import system_rules
 from app.settings import BACKEND_DIR
 from app.synth.config import SynthConfig
-from tests.api_helpers import make_client, sample_bundle, upload
+from tests.api_helpers import sample_bundle, upload
 from tests.helpers import req
 from tests.llm_helpers import ScriptedProvider, completion, ids, named_session, tool_call
 from tests.planning_helpers import context, day_engineers, day_requests, new_session
@@ -118,10 +118,10 @@ OFF_GRID_TEXT = (
 
 
 @pytest.mark.parametrize("path", ["/events", "/timeline/events"])
-def test_the_server_refuses_an_urgent_request_with_a_window_outside_the_grid(tmp_path, monkeypatch, path):
+def test_the_server_refuses_an_urgent_request_with_a_window_outside_the_grid(api, monkeypatch, path):
     """Что бы ни прислал клиент, произвольный интервал сервер не принимает: диспетчер называет клиенту слот."""
     fcfs_solves(monkeypatch)
-    client, deps = make_client(tmp_path)
+    client, deps = api()
     deps.run_background = lambda task: None
     base = _ready(client)
 
@@ -136,10 +136,10 @@ def test_the_server_refuses_an_urgent_request_with_a_window_outside_the_grid(tmp
     assert accepted.status_code == 200, accepted.text
 
 
-def test_an_urgent_request_as_soon_as_possible_is_not_a_slot_and_goes_through(tmp_path, monkeypatch):
+def test_an_urgent_request_as_soon_as_possible_is_not_a_slot_and_goes_through(api, monkeypatch, restarted):
     """«Как можно скорее» — не слот: окно задаёт сервер, от времени события до конца смен, и сетка его не трогает."""
     fcfs_solves(monkeypatch)
-    client, deps = make_client(tmp_path)
+    client, deps = api()
     deps.run_background = lambda task: None
     base = _ready(client)
 
@@ -149,8 +149,12 @@ def test_an_urgent_request_as_soon_as_possible_is_not_a_slot_and_goes_through(tm
     stored = next(item for item in response.json()["requests"] if item["id"] == "U1")
     assert (stored["asap"], stored["window_start"], stored["window_end"]) == (True, "13:00", "18:00")
 
+    # Окно «как можно скорее» посчитал сервер: после перезапуска оно должно остаться посчитанным, а не
+    # собраться заново из события.
+    restarted(client, f"{base}/state")
 
-def test_a_request_of_the_data_keeps_its_window_and_stays_editable(tmp_path, monkeypatch):
+
+def test_a_request_of_the_data_keeps_its_window_and_stays_editable(api, monkeypatch):
     """Заявка ДАННЫХ сеткой не проверяется: окно на весь день грузится, планируется и правится дальше.
 
     Так живут аварии выгрузки (00:01–23:59): их окно — источник правды, а не выбор диспетчера. Сетка вступает
@@ -160,7 +164,7 @@ def test_a_request_of_the_data_keeps_its_window_and_stays_editable(tmp_path, mon
     emergency = req("R4", 1, 1, "00:01", "23:59")
     base_bundle = sample_bundle()
     whole_day = base_bundle.model_copy(update={"requests": [*base_bundle.requests, emergency]})
-    client, deps = make_client(tmp_path, bundle=whole_day)
+    client, deps = api(bundle=whole_day)
     deps.run_background = lambda task: None
     base = _ready(client, whole_day)
     stored = next(item for item in client.get(f"{base}/state").json()["requests"] if item["id"] == "R4")
@@ -192,14 +196,14 @@ def test_a_request_of_the_data_keeps_its_window_and_stays_editable(tmp_path, mon
     assert "не из сетки окон" in refused.json()["detail"]
 
 
-def test_turning_off_as_soon_as_possible_asks_the_dispatcher_for_a_slot(tmp_path, monkeypatch):
+def test_turning_off_as_soon_as_possible_asks_the_dispatcher_for_a_slot(api, monkeypatch):
     """Снять «как можно скорее» можно только слотом: окно такой заявки задал сервер, и клиенту его не называли.
 
     Диалог правки показывает окно самой заявки, а у «как можно скорее» это 13:00–18:00 от сервера. Сохранить его
     как обычное окно значит пообещать клиенту интервал, которого в сетке нет, поэтому одного снятия галочки мало.
     """
     fcfs_solves(monkeypatch)
-    client, deps = make_client(tmp_path)
+    client, deps = api()
     deps.run_background = lambda task: None
     base = _ready(client)
 
@@ -224,14 +228,14 @@ def test_turning_off_as_soon_as_possible_asks_the_dispatcher_for_a_slot(tmp_path
     assert (now["asap"], now["window_start"], now["window_end"]) == (False, "14:00", "16:00")
 
 
-def test_approving_a_proposal_is_checked_by_the_grid_too(tmp_path, monkeypatch):
+def test_approving_a_proposal_is_checked_by_the_grid_too(api, monkeypatch):
     """Подтверждение предложения — такой же выбор окна: мимо сетки план не меняется и через чат.
 
     Черновик здесь собран без сетки в контексте помощника, поэтому окно доходит до подтверждения как названо:
     так видно, что за правило отвечает не только снапинг в interpret, но и сам шаг применения.
     """
     fcfs_solves(monkeypatch)
-    client, deps = make_client(tmp_path)
+    client, deps = api()
     deps.run_background = lambda task: None
     deps.ingest.planning.window_grid = ()
     call = tool_call(
