@@ -23,10 +23,12 @@ services:
       CACHE_PATH: /cache/cache.sqlite
       OSRM_URL: http://osrm:5000
     volumes:
+      # Матрицы общественного транспорта от 2ГИС лежат в репозитории (data/transit) и копируются в образ
+      # вместе с бандлами и ночными планами, поэтому каталог сюда не монтируется: иначе у того, кто его у себя
+      # удалил, пустой каталог с хоста заслонил бы копию из образа и сервис молча считал бы по формуле.
+      # Пересчитали матрицы на хосте (backend/scripts/transit_matrix.py) — пересоберите образ:
+      # docker compose up -d --build backend.
       - backend-cache:/cache
-      # Матрицы общественного транспорта от 2ГИС: считаются на хосте (backend/scripts/transit_matrix.py),
-      # в образ и в репозиторий не попадают, сервис только читает их при старте.
-      - ./data/transit:/app/data/transit:ro
     expose:
       - "8001"
     healthcheck:

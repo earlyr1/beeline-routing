@@ -146,7 +146,7 @@ def test_run_writes_the_matrix_of_the_region_and_compares_it_with_the_built_in_m
     assert "пар: 20" in out and "без маршрута: 1" in out
     assert "встроенная модель" in out
     assert "посчитано регионов: 1" in out
-    assert "коммит" in out and ".gitignore" in out
+    assert "data/transit/" in out and "--build backend" in out
     assert "ключ-из-кабинета" not in out
 
 
@@ -206,7 +206,7 @@ def test_all_regions_are_computed_in_one_run(tmp_path, monkeypatch, capsys):
         saved = load_transit_matrix(matrix_path(tmp_path, region))
         assert saved.region == region and len(saved.points) == size
     assert "посчитано регионов: 3" in out and "пропущено: 0" in out and "с ошибкой: 0" in out
-    assert "запросов" in out and "коммит" in out
+    assert "запросов" in out and "data/transit/" in out
 
 
 def test_a_region_that_is_already_computed_is_skipped_unless_force(tmp_path, monkeypatch, capsys):

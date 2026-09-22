@@ -20,7 +20,7 @@
 - Старый `POST /datasets/{id}/events` и одобрение предложений помощника (`app/api/proposals.py`) создают событие сразу со стратегией `optimal` и не останавливаются на выборе.
 - Бэкенд-тесты: `cd backend && ~/.local/bin/uv run pytest -q -o addopts= <files>`; линт: `~/.local/bin/uv run ruff check app tests scripts && ~/.local/bin/uv run ruff format app tests scripts`.
 - Фронтенд: `cd frontend && npx vitest run <files>`, `npx tsc --noEmit`, `npm run build`.
-- Никогда не коммитить `data/transit/*`, `.env`, PDF/zip/xlsx из корня репозитория.
+- Никогда не коммитить `data/transit/*`, `.env`, PDF/zip/xlsx из корня репозитория. (Примечание от 22.09.2026: про `data/transit/*` правило отменено — матрицы переехали в репозиторий и в образ backend, коммит 5222fca. Остальное в силе.)
 - Каждое сообщение коммита заканчивается строкой `Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>`.
 
 ---
