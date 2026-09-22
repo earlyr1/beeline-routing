@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,9 @@ from app.planning.variants import (
     is_choosable,
     takes_variant,
 )
+from app.state.repo import StateConflict, StateUnavailable
+
+logger = logging.getLogger(__name__)
 
 RunBackground = Callable[[Callable[[], None]], None]
 
@@ -108,6 +112,8 @@ def planning_state(record: DatasetRecord) -> PlanningState:
             morning=record.base,
             # Регион дня сгенерирован нами: вкладка «Сравнение» так и подписывает колонку «Диспетчеры».
             generated=record.prepared is not None and record.prepared.generated,
+            # Что клиентам уже сказали по телефону: отметки вкладки «Коммуникации» живут на сервере.
+            agreed=record.agreed,
         )
 
 
@@ -115,10 +121,7 @@ def _replay_next(record: DatasetRecord, ctx: PlanningContext, walk: Walk, entry:
     """Под record.timeline_lock: считает шаг события entry после прохода walk без record.lock и сохраняет его."""
     version = record.next_version()
     step = replay_step(walk.session, entry, ctx, version)
-    with record.lock:
-        record.timeline.store(walk, entry, step)
-        if step.applied is not None:
-            record.use_version(version)
+    record.store_step(walk, entry, step, version=version)
 
 
 def _replay_variants(record: DatasetRecord, ctx: PlanningContext, walk: Walk, entry: TimelineEntry) -> None:
@@ -152,9 +155,7 @@ def _replay_variants(record: DatasetRecord, ctx: PlanningContext, walk: Walk, en
                 break
     with record.lock:
         for variant, step in fresh.items():
-            record.timeline.store(walk, entry, step, variant)
-        if any(step.applied is not None for step in fresh.values()):
-            record.use_version(version)
+            record.store_step(walk, entry, step, variant, version=version)
 
 
 def _replay_assign(
@@ -170,10 +171,7 @@ def _replay_assign(
             return
     version = record.next_version()
     step = replay_step(walk.session, entry, ctx, version, variant)
-    with record.lock:
-        record.timeline.store(walk, entry, step, variant)
-        if step.applied is not None:
-            record.use_version(version)
+    record.store_step(walk, entry, step, variant, version=version)
 
 
 def compute_steps(record: DatasetRecord, ctx: PlanningContext, count: int) -> Walk:
@@ -201,13 +199,11 @@ def move_cached(record: DatasetRecord, cursor: int) -> bool:
     count = record.timeline.applied_count(cursor)
     walk = record.timeline.walk(record.base, count)
     if walk.awaiting is not None:
-        record.cursor = walk.awaiting.event.time
-        record.session = walk.session
+        record.move_to(walk.awaiting.event.time, walk.session)
         return True
     if walk.done < count:
         return False
-    record.cursor = cursor
-    record.session = walk.session
+    record.move_to(cursor, walk.session)
     return True
 
 
@@ -230,13 +226,11 @@ def insert_and_replay(
     Отклонённое событие убирается со шкалы, а шаги событий перед ним остаются в кэше. Текущее время не меняется.
     None — шага нет: событие ждёт выбора варианта или выбора ждёт событие раньше него.
     """
-    with record.lock:
-        position = record.timeline.insert(entry)
+    position = record.add_entry(entry)
     walk = compute_steps(record, ctx, position + 1)
     step = walk.steps[position] if walk.done > position else None
     if step is not None and step.reason is not None:
-        with record.lock:
-            record.timeline.remove(entry.id)
+        record.drop_entry(entry.id)
     return step
 
 
@@ -293,7 +287,7 @@ def ensure_precompute(record: DatasetRecord, ctx: PlanningContext, run_backgroun
             return
         walk = record.timeline.walk(record.base)
         if walk.done == len(record.timeline.entries):
-            record.timeline.prune(walk)
+            record.prune_steps(walk)
             return
         if walk.awaiting is not None:
             return
@@ -301,7 +295,19 @@ def ensure_precompute(record: DatasetRecord, ctx: PlanningContext, run_backgroun
         if record.precompute_revision == revision:
             return
         record.precompute_revision = revision
-    run_background(lambda: precompute(record, ctx, revision))
+        # Пока фоновый счёт идёт, запись не забывается из памяти реестра: иначе следующее обращение подняло бы
+        # из базы второй экземпляр того же дня. Счётчик, а не флаг: предподсчёт новой ревизии может начаться,
+        # пока прежний ещё не дошёл до проверки ревизии.
+        record.precomputing += 1
+    try:
+        run_background(lambda: precompute(record, ctx, revision))
+    except Exception:
+        # Фоновая задача не запустилась: держать запись в памяти незачем, а ревизию нужно отпустить, иначе
+        # предподсчёт этой ревизии больше никто не начнёт.
+        with record.lock:
+            record.precomputing -= 1
+            record.precompute_revision = None
+        raise
 
 
 def precompute(
@@ -311,21 +317,39 @@ def precompute(
 
     Останавливается, когда посчитаны все шаги или таймлайн сменил ревизию: предподсчёт новой ревизии запускает
     само изменение. Между шагами timeline_lock свободен для запросов.
+
+    Досчитав шаги, доводит план до текущего времени: обычно он там и стоит, но у дня, только что поднятого
+    из базы, шага могло не хватать — его и ждало текущее время.
     """
-    while True:
-        with record.timeline_lock:
-            with record.lock:
-                if record.timeline.revision != revision:
+    try:
+        while True:
+            with record.timeline_lock:
+                with record.lock:
+                    if record.timeline.revision != revision:
+                        return
+                    walk = record.timeline.walk(record.base)
+                    ready = walk.done == len(record.timeline.entries)
+                    if ready:
+                        record.prune_steps(walk)
+                    # Ждёт выбора или считать нечего: следующего шага нет.
+                    entry = None if ready or walk.awaiting is not None else record.timeline.entries[walk.done]
+                if entry is None:
+                    # Часы, отведённые назад при подъёме дня из базы, возвращаются на своё время: шаг, которого
+                    # тогда не хватало, теперь посчитан.
+                    settle(record, ctx, record.take_resume())
                     return
-                walk = record.timeline.walk(record.base)
-                if walk.done == len(record.timeline.entries):
-                    record.timeline.prune(walk)
-                    return
-                if walk.awaiting is not None:
-                    return
-                entry = record.timeline.entries[walk.done]
-            if is_choosable(entry.event) and entry.variant is None:
-                _replay_variants(record, ctx, walk, entry)
-            else:
-                _replay_next(record, ctx, walk, entry)
-        time.sleep(pause_s)
+                if is_choosable(entry.event) and entry.variant is None:
+                    _replay_variants(record, ctx, walk, entry)
+                else:
+                    _replay_next(record, ctx, walk, entry)
+            time.sleep(pause_s)
+    except (StateUnavailable, StateConflict) as error:
+        # База отвалилась посреди счёта: это не поломка сервиса, шаг просто не сохранился. Пишем в лог и
+        # выходим — ревизию отпустит finally, и следующий /state начнёт предподсчёт заново.
+        logger.warning("Фоновый предподсчёт дня %s прерван: %s", record.dataset_id, error)
+    finally:
+        with record.lock:
+            record.precomputing -= 1
+            # Ревизия отпускается в любом случае: упавший счёт должен запускаться заново, а досчитанный
+            # ensure_precompute второй раз не начнёт — у полного прохода считать уже нечего.
+            record.precompute_revision = None

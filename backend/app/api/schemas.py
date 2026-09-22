@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
@@ -139,6 +140,29 @@ class MorningRequest(BaseModel):
     start: HHMM | None = None
 
 
+class TimeWindow(BaseModel):
+    """Окно клиента: с какого и по какое время он ждёт бригаду. Точного времени визита он не знает."""
+
+    start: HHMM
+    end: HHMM
+    # Окно «как можно скорее»: его задаёт сервер от времени события до конца смен, и называют его словами.
+    asap: bool = False
+
+
+class AgreedWindow(BaseModel):
+    """Что клиент знает про заявку после звонка: окно, которое ему назвали, или null — сегодня не приедем.
+
+    Отметку ставит диспетчер на вкладке «Коммуникации», и живёт она на сервере: она приходит с планом в
+    другую вкладку и в другой браузер и переживает перезапуск сервиса.
+    """
+
+    window: TimeWindow | None = None
+    # Окно самой заявки в момент разговора: по нему видно, что диспетчер передвинул его уже после звонка.
+    request_window: TimeWindow | None = None
+    # Номер плана, на котором договорились: с планом старше отметки её не сравнивают (часы отмотали назад).
+    version: int | None = None
+
+
 class PlanningState(BaseModel):
     dataset_id: str
     version: int
@@ -172,6 +196,9 @@ class PlanningState(BaseModel):
     # Откуда утренний план дня: посчитан заранее ночным расчётом (сколько шёл поиск и когда закончился) или null —
     # найден при загрузке дня. События дня пересчитываются от утреннего плана на месте в обоих случаях.
     precomputed: PrecomputedPlan | None = None
+    # Что уже согласовано с клиентами по телефону: номер заявки → окно, которое клиенту назвали.
+    # Пересборка дня и сброс событий очищают отметки: обзвона в новом дне ещё не было.
+    agreed: dict[str, AgreedWindow] = Field(default_factory=dict)
 
 
 class RouteLeg(BaseModel):
@@ -239,11 +266,13 @@ def to_planning_state(
     pending_choice: EventChoice | None = None,
     morning: PlanningSession | None = None,
     generated: bool = False,
+    agreed: Mapping[str, AgreedWindow] | None = None,
 ) -> PlanningState:
     """Состояние на текущее время cursor (по умолчанию время последнего события сессии).
 
     morning — сессия начала дня: из неё в ответ идут окна заявок и визиты утреннего плана, а не она целиком.
     generated — регион сгенерирован нами: об этом говорит вкладка «Сравнение».
+    agreed — согласованные окна дня: что клиентам уже сказали по телефону.
     """
     return PlanningState(
         dataset_id=session.dataset_id,
@@ -269,4 +298,5 @@ def to_planning_state(
         timeline_ready=timeline_ready,
         pending_choice=pending_choice,
         precomputed=session.precomputed,
+        agreed=dict(agreed or {}),
     )

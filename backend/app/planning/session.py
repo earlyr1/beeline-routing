@@ -21,7 +21,7 @@ from app.domain.models import Engineer, Event, Lunch, Office, Plan, Request, Vis
 from app.domain.timeutil import fmt_hhmm
 from app.domain.windows import TimeSlot
 from app.geo.kvcache import KVCache
-from app.geo.matrix import TrafficProfile, TravelModel
+from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes
 from app.geo.osrm import OsrmClient
 from app.geo.transit import TransitLookup, TransitMatrix
 from app.ingest.geocode import GeoResult
@@ -141,10 +141,11 @@ def day_problem(
     ctx: PlanningContext,
     workload_level: int,
     lunch_enabled: bool,
+    travel: TravelTimes | None = None,
 ) -> Problem:
     """Задача на начало дня с запасом на дорогу уровня нагрузки и выбранным обедом.
 
-    Базовая матрица берётся из кэша, если уже была.
+    Базовая матрица берётся из кэша, если уже была; travel — готовая матрица тех же точек (подъём дня из базы).
     """
     return make_problem(
         requests,
@@ -156,6 +157,7 @@ def day_problem(
         buffer=travel_buffer(workload_level),
         lunch=lunch_enabled,
         transit=ctx.transit,
+        travel=travel,
     )
 
 

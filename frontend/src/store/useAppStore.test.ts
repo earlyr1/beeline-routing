@@ -19,6 +19,7 @@ vi.mock('../api/client', async (importOriginal) => {
     setTimelineVariant: vi.fn(),
     getScenarios: vi.fn(),
     startScenario: vi.fn(),
+    setAgreedWindow: vi.fn(),
   };
 });
 
@@ -27,7 +28,7 @@ import type { DatasetStatus, EventChoice, PlanningState, ReverseGeocode, Timelin
 import { cancelEvent, reassignEvent } from '../lib/events';
 import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem, makeUrgentChoice, makeVariantOption } from '../test/fixtures';
 import { resetStore } from '../test/store';
-import { agreedKey, LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
+import { LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
 
 /** План на время дня cursor. */
 const at = (cursor: string, patch: Partial<PlanningState> = {}) => makePlanningState({ cursor, ...patch });
@@ -1059,62 +1060,96 @@ describe('events being prepared on the server', () => {
 });
 
 describe('agreed windows of the calls to clients', () => {
-  it('remembers the window the client now knows and keeps it in localStorage of the dataset', () => {
+  /** Ответ сервера на отметку: он помнит её вместе с днём и возвращает в составе плана. */
+  const answering = () =>
+    vi.mocked(api.setAgreedWindow).mockImplementation(async (_dataset, requestId, window) => {
+      const state = useAppStore.getState().state!;
+      return { ...state, agreed: { ...(state.agreed ?? {}), [requestId]: window } };
+    });
+
+  it('sends the window the client now knows to the server and shows it at once', async () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState() });
-    useAppStore.getState().markAgreed('50104');
+    answering();
     // Вместе с окном запоминается номер плана: с планом постарше отметку не сравнивают.
     const mark = {
       window: { start: '14:00', end: '16:00', asap: false },
-      requestWindow: { start: '14:00', end: '16:00', asap: false },
+      request_window: { start: '14:00', end: '16:00', asap: false },
       version: 4,
     };
+    const sent = useAppStore.getState().markAgreed('50104');
+    // Строка уходит вниз, не дожидаясь ответа: диспетчер уже положил трубку.
     expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
-    expect(JSON.parse(localStorage.getItem(agreedKey('d_test')) ?? '{}')).toEqual({ '50104': mark });
+    await sent;
+    expect(api.setAgreedWindow).toHaveBeenCalledWith('d_test', '50104', mark);
+    expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
 
     // К 18754 сегодня не приедут: отметка значит, что клиенту так и сказали.
-    useAppStore.getState().markAgreed('18754');
+    await useAppStore.getState().markAgreed('18754');
     expect(useAppStore.getState().agreed['18754']).toMatchObject({ window: null, version: 4 });
   });
 
-  it('drops the agreed windows when the day is planned anew', async () => {
+  it('brings the row back to the calls when the server did not take the mark', async () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState() });
-    useAppStore.getState().markAgreed('50104');
-    vi.mocked(api.buildPlan).mockResolvedValue(at('00:00'));
-    vi.mocked(api.moveCursor).mockResolvedValue(at('09:00', { version: 5 }));
+    vi.mocked(api.setAgreedWindow).mockRejectedValue(new api.ApiError(503, 'Не удалось сохранить: база недоступна.'));
 
-    await useAppStore.getState().plan();
+    await useAppStore.getState().markAgreed('50104');
 
-    // Пересчитанный день тоже начинается заново: отметки выброшенного дня в нём не действуют.
     expect(useAppStore.getState().agreed).toEqual({});
-    expect(localStorage.getItem(agreedKey('d_test'))).toBe('{}');
+    expect(useAppStore.getState().error).toBe('Не удалось сохранить: база недоступна.');
   });
 
-  it('drops the agreed windows when the events of the day are reset', async () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState() });
-    useAppStore.getState().markAgreed('50104');
-    vi.mocked(api.clearTimeline).mockResolvedValue(makePlanningState({ version: 1, cursor: '00:00', timeline: [] }));
+  it('shows the marks the server sends with the plan and nothing else', () => {
+    const mark = { window: { start: '14:00', end: '16:00', asap: false }, version: 4 };
+    useAppStore.getState().setPlanningState(makePlanningState({ agreed: { '50104': mark } }));
+    expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
 
-    expect(await useAppStore.getState().resetEvents()).toBe(true);
-
-    // День начинается заново: обзвона ещё не было ни на экране, ни в localStorage.
+    // День пересчитали или сбросили события: отметки снял сервер, и в ответе их больше нет.
+    useAppStore.getState().setPlanningState(at('00:00'));
     expect(useAppStore.getState().agreed).toEqual({});
-    expect(localStorage.getItem(agreedKey('d_test'))).toBe('{}');
-  });
-
-  it('takes the marks of the opened dataset and does not carry them to another one', () => {
-    const known = { '50104': { window: { start: '14:00', end: '16:00' } } };
-    localStorage.setItem(agreedKey('d_test'), JSON.stringify(known));
-    useAppStore.getState().setPlanningState(makePlanningState());
-    expect(useAppStore.getState().agreed).toEqual(known);
-
-    // Тот же набор данных: ответы сервера отметки не сбрасывают.
-    useAppStore.getState().markAgreed('46393');
-    useAppStore.getState().setPlanningState(at('14:00'));
-    expect(Object.keys(useAppStore.getState().agreed).sort()).toEqual(['46393', '50104']);
 
     // Другой набор данных: у него свои отметки, здесь их нет.
     useAppStore.getState().setPlanningState(makePlanningState({ dataset_id: 'd_other' }));
     expect(useAppStore.getState().agreed).toEqual({});
+  });
+
+  it('keeps a mark that is still in flight when an earlier answer arrives without it', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    let answer: (state: PlanningState) => void = () => {};
+    vi.mocked(api.setAgreedWindow).mockReturnValue(new Promise<PlanningState>((resolve) => { answer = resolve; }));
+
+    const sent = useAppStore.getState().markAgreed('50104');
+    expect(useAppStore.getState().agreed['50104']).toBeDefined();
+    // Пока отметка в очереди, приходит ответ запроса, стоявшего раньше неё: отметки в нём ещё нет.
+    useAppStore.getState().setPlanningState(makePlanningState({ version: 5 }));
+    expect(useAppStore.getState().agreed['50104']).toBeDefined();
+
+    answer(makePlanningState({ version: 5, agreed: { '50104': useAppStore.getState().agreed['50104'] } }));
+    await sent;
+    expect(useAppStore.getState().agreed['50104']).toBeDefined();
+  });
+
+  it('takes back only its own mark when the server did not accept it', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    let refuse: (error: unknown) => void = () => {};
+    vi.mocked(api.setAgreedWindow).mockImplementation((_dataset, requestId, window) => {
+      if (requestId === '50104') return new Promise<PlanningState>((_resolve, reject) => { refuse = reject; });
+      const state = useAppStore.getState().state!;
+      return Promise.resolve({ ...state, agreed: { ...(state.agreed ?? {}), [requestId]: window } });
+    });
+
+    const refused = useAppStore.getState().markAgreed('50104');
+    // Пока первая отметка не доехала, диспетчер отмечает соседнюю строку.
+    const kept = useAppStore.getState().markAgreed('18754');
+    // Очередь запросов отпускает первый из них в микрозадаче: до этого отказывать нечему.
+    await Promise.resolve();
+    refuse(new api.ApiError(503, 'Не удалось сохранить: база недоступна.'));
+    await refused;
+
+    // Снята только та отметка, которую сервер не принял: соседняя ещё стоит в очереди и не пропала.
+    expect(Object.keys(useAppStore.getState().agreed)).toEqual(['18754']);
+    expect(useAppStore.getState().error).toBe('Не удалось сохранить: база недоступна.');
+    await kept;
+    expect(Object.keys(useAppStore.getState().agreed)).toEqual(['18754']);
   });
 
   it('sends the cancellation of a client who refused with the chosen strategy', async () => {

@@ -191,7 +191,7 @@ describe('callList', () => {
 
   it('keeps an agreed window out of the calls and brings the row back when the window moves again', () => {
     const agreedOn = (start: HHMM, end: HHMM): AgreedWindows => ({
-      '86160': { window: { start, end }, requestWindow: { start, end }, version: 4 },
+      '86160': { window: { start, end }, request_window: { start, end }, version: 4 },
     });
     const moved = day(withWindow('86160', '16:00', '18:00'), withVisit('86160', '16:30', '17:30'));
     const settled = calls(moved, agreedOn('16:00', '18:00'));
@@ -368,13 +368,13 @@ describe('callList', () => {
   it('takes the window to remember from the current plan', () => {
     expect(agreedWindow(day(), '50104', WINDOW_GRID)).toMatchObject({
       window: { start: '14:00', end: '16:00' },
-      requestWindow: { start: '14:00', end: '16:00' },
+      request_window: { start: '14:00', end: '16:00' },
       version: 4,
     });
     // Визит вне окна заявки: клиенту назвали новое окно, а окно самой заявки отметка помнит отдельно.
     expect(agreedWindow(day(withVisit('86160', '15:10', '16:10')), '86160', WINDOW_GRID)).toMatchObject({
       window: { start: '14:00', end: '16:00' },
-      requestWindow: { start: '12:00', end: '14:00' },
+      request_window: { start: '12:00', end: '14:00' },
     });
     // Визита нет: отметка значит «сказали, что сегодня не приедем».
     expect(agreedWindow(day(), '18754', WINDOW_GRID)).toMatchObject({ window: null, version: 4 });

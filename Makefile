@@ -6,16 +6,23 @@ COMPOSE ?= docker compose
 REGION ?= all
 MINUTES ?= 120
 OSRM_URL ?= http://localhost:5050
+# Учётные данные базы дня: те же значения по умолчанию, что подставляет docker-compose.yml.
+POSTGRES_USER ?= routing
+POSTGRES_DB ?= routing
+# Отдельная база для тестов хранилища: поднимается на время прогона и убирается за собой.
+PG_TEST_PORT ?= 55432
+TEST_DATABASE_URL ?= postgresql://routing:routing@localhost:$(PG_TEST_PORT)/routing
+PG_TEST_NAME ?= routing-test-db
 
 .DEFAULT_GOAL := help
-.PHONY: help up rebuild down logs ps smoke test test-fast lint fmt front check bundles night transit transit-dry transit-error graph
+.PHONY: help up rebuild down logs ps smoke db migrate rollback psql test test-fast test-db lint fmt front check bundles night transit transit-dry transit-error graph
 
 help:  ## показать этот список
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t 16
 
 ## --- сервис ---
 
-up:  ## собрать и поднять всё (backend, frontend, OSRM)
+up:  ## собрать и поднять всё (backend, frontend, OSRM, Postgres)
 	$(COMPOSE) up -d --build
 
 rebuild:  ## пересобрать только backend: бандлы, ночные планы и матрицы едут в образе
@@ -33,6 +40,20 @@ ps:  ## что запущено
 graph:  ## построить граф дорог OSRM (один раз, ~3.5 мин)
 	$(COMPOSE) --profile prepare run --rm --build osrm-prepare
 
+## --- база дня ---
+
+db:  ## поднять только Postgres, в котором живёт день диспетчера
+	$(COMPOSE) up -d postgres
+
+migrate:  ## применить миграции схемы вручную; обычно backend делает это сам на старте
+	$(COMPOSE) exec backend python -m app.state.migrate
+
+rollback:  ## откатить последнюю миграцию; вместе с таблицами уходят все сохранённые дни
+	$(COMPOSE) exec backend python -m app.state.migrate rollback
+
+psql:  ## заглянуть в базу дня: psql внутри её контейнера
+	$(COMPOSE) exec postgres psql -U $(POSTGRES_USER) $(POSTGRES_DB)
+
 smoke:  ## проверить живой сервис: регионы, план дня, ночной план
 	@curl -sf http://localhost:8000/api/config | python3 -c "import json,sys; d=json.load(sys.stdin); print('помощник:', d['llm_enabled'], '| слотов окон:', len(d.get('window_grid', [])))"
 	@curl -sf http://localhost:8000/api/scenarios | python3 -c "import json,sys; [print(' ', s['title'], s['requests'], 'заявок', '(сгенерирован)' if s['generated'] else '') for s in json.load(sys.stdin)]"
@@ -45,6 +66,15 @@ test:  ## полный прогон бэкенда (~6.5 мин)
 
 test-fast:  ## бэкенд без тестов солвера и API (быстрая обратная связь)
 	cd backend && $(UV) run pytest -o addopts= -q --ignore=tests/test_api.py --ignore=tests/test_timeline_api.py
+
+test-db:  ## тесты хранилища на настоящем Postgres: своя база на PG_TEST_PORT, убирается за собой
+	@docker rm -f $(PG_TEST_NAME) >/dev/null 2>&1 || true
+	@docker run -d --name $(PG_TEST_NAME) -e POSTGRES_DB=routing -e POSTGRES_USER=routing \
+		-e POSTGRES_PASSWORD=routing -p $(PG_TEST_PORT):5432 postgres:17-alpine >/dev/null
+	@until docker exec $(PG_TEST_NAME) pg_isready -U routing -d routing >/dev/null 2>&1; do sleep 1; done
+	@cd backend && TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(UV) run pytest -o addopts= -q \
+		tests/test_state_repo.py tests/test_state_api.py; status=$$?; \
+		docker rm -f $(PG_TEST_NAME) >/dev/null; exit $$status
 
 lint:  ## ruff: проверка стиля и форматирования
 	cd backend && $(UV) run ruff check app tests scripts && $(UV) run ruff format --check app tests scripts

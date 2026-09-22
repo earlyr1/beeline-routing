@@ -12,11 +12,14 @@ import {
   getScenarios,
   getTimelineVariants,
   moveCursor,
+  setAgreedWindow,
   setTimelineVariant,
   startScenario as startScenarioRequest,
   uploadFile,
 } from '../api/client';
 import type {
+  AgreedWindow,
+  AgreedWindows,
   ClientConfig,
   DatasetStatus,
   EventChoice,
@@ -27,7 +30,7 @@ import type {
   ScenarioInfo,
   TimelineItem,
 } from '../api/types';
-import { agreedWindow, type AgreedWindows } from '../lib/communications';
+import { agreedWindow } from '../lib/communications';
 import type { PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
@@ -41,12 +44,6 @@ export const POLL_INTERVAL_MS = 1000;
 export const POLL_RETRIES = 3;
 /** Ключ localStorage с набором данных открытого плана: план переживает перезагрузку страницы и закрытие браузера. */
 export const SESSION_DATASET_KEY = 'routing.datasetId';
-/**
- * Ключ localStorage с согласованными окнами набора данных: отметки звонков переживают перезагрузку страницы.
- * Версия в ключе — из-за смены содержимого отметки: раньше в ней лежали время визита и бригада, теперь окно
- * клиента. Отметки прежней версии лежат под своим ключом и просто не читаются.
- */
-export const agreedKey = (datasetId: string) => `routing.agreed.v2.${datasetId}`;
 /** Шаг проигрывания дня: минута плана за 100 мс, то есть час дня за 6 секунд. */
 export const PLAY_TICK_MS = 100;
 /** Часы до первого ответа сервера: плана ещё нет, и шкалы дня, на начало которой их поставить, тоже. */
@@ -132,7 +129,8 @@ export interface AppData {
   lunchEnabled: boolean;
   /**
    * Что уже согласовано с клиентом: номер заявки → окно, которое ему назвали (null — сказали, что сегодня
-   * не приедем). С ним вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда окно снова уедет.
+   * не приедем). Приходит с планом от сервера, поэтому есть в любой вкладке, открывшей этот день, и переживает перезапуск сервиса.
+   * С ним вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда окно снова уедет.
    */
   agreed: AgreedWindows;
 }
@@ -189,7 +187,7 @@ export interface AppActions {
   setTab(tabId: string): void;
   setUnassignedOnly(value: boolean): void;
   /** Отметить, что клиенту назвали окно заявки из текущего плана (или сказали, что сегодня не приедем). */
-  markAgreed(requestId: string): void;
+  markAgreed(requestId: string): Promise<void>;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
   setWorkloadLevel(level: number): void;
   /** Включить или выключить обед по плану для следующего расчёта плана с нуля. */
@@ -298,7 +296,7 @@ const isTransient = (error: unknown) => error instanceof ApiError && (error.stat
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** Прежний план пропал: backend перезапускали, а наборы данных живут в его памяти. */
+/** Прежний план пропал: этого набора данных нет ни в памяти backend, ни в базе дня. */
 export const LOST_SESSION_MESSAGE = 'Прежний план недоступен: сервис перезапускался. Загрузите файл заново.';
 
 function savedDatasetId(): string | null {
@@ -307,24 +305,6 @@ function savedDatasetId(): string | null {
     return localStorage.getItem(SESSION_DATASET_KEY) ?? sessionStorage.getItem(SESSION_DATASET_KEY);
   } catch {
     return null;
-  }
-}
-
-function loadAgreed(datasetId: string): AgreedWindows {
-  try {
-    const saved = localStorage.getItem(agreedKey(datasetId));
-    return saved ? (JSON.parse(saved) as AgreedWindows) : {};
-  } catch {
-    // Хранилище недоступно или в нём мусор: считаем, что клиентам ещё не звонили.
-    return {};
-  }
-}
-
-function saveAgreed(datasetId: string, agreed: AgreedWindows): void {
-  try {
-    localStorage.setItem(agreedKey(datasetId), JSON.stringify(agreed));
-  } catch {
-    // Хранилище недоступно (приватный режим или запрет браузера): отметки живут до перезагрузки страницы.
   }
 }
 
@@ -351,6 +331,15 @@ const isCurrent = (value: number) => value === generation;
 
 /** Номер поиска адреса по точке: ответ на заменённую точку или для закрытого диалога не подставляется. */
 let addressLookup = 0;
+
+/**
+ * Отметки «Согласовано», чей запрос ещё не дошёл до сервера: номер заявки → названное окно.
+ * Ответы других запросов приходят с прежним словарём отметок, и без этого набора отметка на секунду
+ * пропадала бы с экрана. Запись уходит, как только сервер ответил — своим ответом или отказом.
+ */
+const agreedInFlight = new Map<string, AgreedWindow>();
+
+const inFlightAgreed = (): AgreedWindows => Object.fromEntries(agreedInFlight);
 
 /** Запрос ждал очереди, а диспетчер уже открыл другой файл: такой запрос не отправляется. */
 class StaleSession extends Error {}
@@ -405,6 +394,7 @@ function stopTicking(): void {
 export function resetAppSession(): void {
   generation += 1;
   addressLookup += 1;
+  agreedInFlight.clear();
   lane = { tail: Promise.resolve(), size: 0 };
   commitRun = null;
   commitAgain = false;
@@ -434,8 +424,10 @@ export const useAppStore = create<AppState>()((set, get) => {
       // Нагрузка и обед сессии на сервере: «Применить» и восстановленный план продолжают с ними.
       workloadLevel: clampWorkloadLevel(next.workload_level),
       lunchEnabled: lunchEnabledOf(next.lunch_enabled),
-      // Открыли другой набор данных (или этот же после перезагрузки страницы): берём его отметки звонков.
-      ...(same ? {} : { agreed: loadAgreed(next.dataset_id) }),
+      // Отметки звонков живут на сервере и приходят с планом: их ставит и очищает он. Поверх ответа
+      // остаются отметки, чей запрос ещё в очереди: ответ более раннего запроса о них ещё не знает,
+      // и без этого строка «Согласовано» на глазах у диспетчера прыгала бы обратно в список звонков.
+      agreed: { ...(next.agreed ?? {}), ...inFlightAgreed() },
       ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
     });
     // Время плана остановилось на «ломающем» событии без выбора: часы ждут на нём, открывается окно выбора.
@@ -676,13 +668,11 @@ export const useAppStore = create<AppState>()((set, get) => {
         const state = await enqueue(current, () => buildPlan(datasetId, { workload_level: workloadLevel, lunch: lunchEnabled }));
         if (!isCurrent(current)) return;
         get().setPlanningState(state);
-        // Пересчитанный день начинается заново, как после сброса событий: обзвона в нём ещё не было.
-        saveAgreed(datasetId, {});
         // Новый день начинается со своего начала: часы встают на начало шкалы дня, и это время уходит на сервер,
         // чтобы курсор плана совпал с часами. Шкала дня после пересчёта пуста, и перевод курсора ничего не считает.
+        // Обзвона в пересчитанном дне ещё не было: отметки снял сервер, они пришли вместе с планом.
         // Карточка заявки закрывается; панель «Почему» остаётся, только если открыта бригада.
         set({
-          agreed: {},
           selectedRequestId: null,
           whyOpen: get().whyOpen && get().selectedEngineerId !== null,
           clock: fromMinutes(dayScale(state).from),
@@ -733,9 +723,8 @@ export const useAppStore = create<AppState>()((set, get) => {
         const state = await enqueue(current, () => clearTimeline(datasetId));
         if (!isCurrent(current)) return false;
         get().setPlanningState(state);
-        // День начинается заново: обзвона ещё не было, отметки «Согласовано» снимаются вместе с событиями.
-        saveAgreed(datasetId, {});
-        set({ agreed: {}, clock: fromMinutes(dayScale(state).from) });
+        // День начинается заново: отметки «Согласовано» сервер снял вместе с событиями.
+        set({ clock: fromMinutes(dayScale(state).from) });
         await get().commitClock();
         return true;
       } catch (error) {
@@ -847,7 +836,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       } catch (error) {
         if (!isCurrent(current)) return;
         if (error instanceof ApiError && error.status === 404) {
-          // Backend перезапущен, набора в его памяти больше нет.
+          // Такого набора данных у backend нет: ни в памяти, ни в базе дня.
           saveDatasetId(null);
           set({ error: LOST_SESSION_MESSAGE });
         } else if (error instanceof ApiError && error.status === 409) {
@@ -977,14 +966,31 @@ export const useAppStore = create<AppState>()((set, get) => {
       set({ unassignedOnly: value });
     },
 
-    markAgreed(requestId) {
+    async markAgreed(requestId) {
       const { state, datasetId, agreed, config } = get();
       if (!state || !datasetId) return;
       // Запоминаем окно, которое клиент теперь знает (в окно заявки план не попал — то, которое назвали вместо него):
       // когда обещание снова разойдётся с планом, отметка сама перестанет совпадать. Названное окно — слот сетки.
-      const next = { ...agreed, [requestId]: agreedWindow(state, requestId, config?.window_grid ?? []) };
-      saveAgreed(datasetId, next);
-      set({ agreed: next });
+      // Какое именно окно назвали, считает вкладка: «клиенту называют слот» — правило разговора, а не модели.
+      const window = agreedWindow(state, requestId, config?.window_grid ?? []);
+      const current = generation;
+      // Строка уходит вниз сразу, не дожидаясь ответа: диспетчер уже положил трубку. Пока запрос в очереди,
+      // отметка держится и поверх ответов других запросов — они о ней ещё не знают.
+      agreedInFlight.set(requestId, window);
+      set({ agreed: { ...agreed, [requestId]: window } });
+      try {
+        const next = await enqueue(current, () => setAgreedWindow(datasetId, requestId, window));
+        agreedInFlight.delete(requestId);
+        if (isCurrent(current)) get().setPlanningState(next);
+      } catch (error) {
+        agreedInFlight.delete(requestId);
+        if (!isCurrent(current) || error instanceof StaleSession) return;
+        // Сервер отметку не принял: возвращаем в список звонков только эту строку — соседнюю могли отметить
+        // рядом, и снимок начала запроса её бы потерял. Если отметка у заявки была и раньше, она остаётся.
+        const previous = agreed[requestId];
+        const { [requestId]: _rejected, ...kept } = get().agreed;
+        set({ agreed: previous === undefined ? kept : { ...kept, [requestId]: previous }, error: errorMessage(error) });
+      }
     },
 
     setWorkloadLevel(level) {

@@ -1,4 +1,5 @@
 import type {
+  AgreedWindow,
   ApproveAllResponse,
   ApproveResponse,
   ChatResponse,
@@ -137,6 +138,10 @@ export const clearTimeline = (datasetId: string) =>
 /** План на время дня: применены все события шкалы не позже этого времени. */
 export const moveCursor = (datasetId: string, time: HHMM) =>
   request<PlanningState>(`${dataset(datasetId)}/cursor`, postJson({ time } satisfies CursorRequest));
+
+/** Клиенту назвали окно (или сказали, что сегодня не приедем): отметка «Согласовано» уходит на сервер. */
+export const setAgreedWindow = (datasetId: string, requestId: string, window: AgreedWindow) =>
+  request<PlanningState>(`${dataset(datasetId)}/agreed/${encodeURIComponent(requestId)}`, putJson(window));
 
 export const getExplanation = (datasetId: string, requestId: string) =>
   request<Explanation>(`${dataset(datasetId)}/explain/${encodeURIComponent(requestId)}`);

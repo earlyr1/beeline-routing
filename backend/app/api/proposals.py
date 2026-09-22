@@ -68,13 +68,10 @@ def _approve(deps: AppDeps, record: DatasetRecord, proposal: Proposal) -> Propos
             failed = proposal.model_copy(update={"status": "failed", "event": event, "error": off_grid})
             deps.proposals.save(record.dataset_id, failed)
             return failed
-        entry = record.timeline.create(
-            event, checked=True, variant="optimal" if is_choosable(event) else None
-        )
+    entry = record.new_entry(event, checked=True, variant="optimal" if is_choosable(event) else None)
     step = insert_and_replay(record, ctx, entry)
     if step is None:
-        with record.lock:
-            record.timeline.remove(entry.id)
+        record.drop_entry(entry.id)
         result = proposal.model_copy(
             update={
                 "status": "failed",

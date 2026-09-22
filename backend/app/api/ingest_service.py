@@ -147,10 +147,18 @@ def detect_region(raw: RawFile, bundles: dict[str, Bundle]) -> Bundle:
     return bundles[region]
 
 
+# Поля датасета, которые переживают перезапуск: статус предподсчёта, его стадия, отчёт разбора и ошибка.
+# Счётчик адресов (done, total) в хранилище не идёт: он тикает на каждый адрес, а день, пойманный перезапуском
+# на предподсчёте, всё равно не возобновляется.
+_PERSISTED = frozenset({"status", "stage", "report", "error"})
+
+
 def _set(record: DatasetRecord, **changes) -> None:
     with record.lock:
         for key, value in changes.items():
             setattr(record, key, value)
+        if _PERSISTED & changes.keys():
+            record.save_status()
 
 
 def _counting_geocoder(record: DatasetRecord, geocode: GeocodeFn) -> GeocodeFn:
@@ -327,8 +335,9 @@ def _preprocess(record: DatasetRecord, read: ReadDay, deps: IngestDeps) -> None:
             matrix_source=problem.travel.base.source,
         )
         with record.lock:
-            record.start_day(session)
-            _set(record, prepared=day, report=report, status="ready", stage="ready")
+            # Входные данные дня уходят в хранилище вместе с утренним планом: одна правка — одна транзакция.
+            record.start_day(session, prepared=day)
+            _set(record, report=report, status="ready", stage="ready")
     except ValueError as error:
         _set(record, status="failed", error=str(error))
     except Exception as error:  # noqa: BLE001 - любой сбой предподсчёта показываем пользователю

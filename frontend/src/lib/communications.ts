@@ -1,33 +1,11 @@
-import type { HHMM, PlanEvent, PlanningState, ServiceRequest, TimeSlot } from '../api/types';
+import type { AgreedWindow, AgreedWindows, HHMM, PlanEvent, PlanningState, ServiceRequest, TimeSlot, TimeWindow } from '../api/types';
 import { fromMinutes, requestLabel, requestWindowPhrase, requestWindowText, shortAddress, toMinutes } from './format';
 import { assignmentIndex, byId } from './planView';
 import { offGrid, slotFor } from './windows';
 
-/** Окно клиента: с какого и по какое время он ждёт бригаду. Точного времени визита он не знает. */
-export interface TimeWindow {
-  start: HHMM;
-  end: HHMM;
-  /** Окно «как можно скорее»: его задаёт сервер от времени события до конца смен, и называют его словами. */
-  asap?: boolean;
-}
-
-/**
- * Что клиент знает про заявку после звонка: окно, которое ему назвали, либо null — ему сказали,
- * что сегодня не приедем.
- */
-export interface AgreedWindow {
-  window: TimeWindow | null;
-  /**
-   * Окно самой заявки в момент разговора: по нему видно, что диспетчер передвинул его уже после звонка.
-   * С окном клиента оно совпадает, пока визит попадает в окно заявки; иначе клиенту назвали новое окно.
-   */
-  requestWindow?: TimeWindow;
-  /** Номер плана, на котором договорились. Отметки, записанные до появления номера, его не знают. */
-  version?: number;
-}
-
-/** Согласованные окна по номеру заявки: их помнит стор и localStorage набора данных. */
-export type AgreedWindows = Record<string, AgreedWindow>;
+// Окно клиента (TimeWindow) и отметка разговора (AgreedWindow, AgreedWindows) описаны в контракте API:
+// их помнит сервер вместе с днём, и вкладка получает их в составе плана.
+export type { AgreedWindow, AgreedWindows, TimeWindow };
 
 /** Красный — обещание не выполняется; жёлтый — окно стало другим, и клиент должен узнать новое. */
 export type CallSeverity = 'red' | 'yellow';
@@ -137,7 +115,7 @@ export function agreedWindow(state: PlanningState, requestId: string, grid: Time
   if (!request) return { window: null, version: state.version };
   const window = windowOf(request);
   const visit = assignmentIndex(state.plan).get(requestId);
-  return { window: promisedWindow(window, visit?.visit.start ?? null, grid), requestWindow: window, version: state.version };
+  return { window: promisedWindow(window, visit?.visit.start ?? null, grid), request_window: window, version: state.version };
 }
 
 /** Повод для звонка: какое окно план не выполняет и какое окно диспетчер назовёт вместо него. */
@@ -245,9 +223,9 @@ export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHM
     const window = windowOf(request);
     // Окно, с которым заявка вошла в день: утреннее, у принятой среди дня — окно приёма.
     const entered = morning.get(request.id) ?? accepted.get(request.id) ?? window;
-    // Отметка могла записать и окно, названное по телефону: в форме отметки уверенности нет, она из localStorage.
+    // В отметке записано окно, которое клиенту назвали: null — ему сказали, что сегодня не приедем.
     const known = mark ? (mark.window ?? null) : entered;
-    const base = mark?.requestWindow ?? entered;
+    const base = mark?.request_window ?? entered;
     const start = visit?.visit.start ?? null;
     const reason = callReason(known, base, window, start, grid);
     const label = requestLabel(request.id, request.priority);

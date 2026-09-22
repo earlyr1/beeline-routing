@@ -38,6 +38,9 @@ class Settings:
     llm_tool_mode: str = "auto"
     # 1 — поиск в текущем процессе без пула (так в тестах); больше — пул процессов и несколько стратегий.
     solver_workers: int = 1
+    # Postgres, в котором живёт день диспетчера (postgresql://…). Пусто — день живёт в памяти процесса и
+    # уходит с перезапуском: это сегодняшний сервис, так работают тесты и запуск без compose.
+    database_url: str | None = None
 
     @property
     def bundles_dir(self) -> Path:
@@ -87,4 +90,5 @@ class Settings:
             ),
             llm_tool_mode=llm_tool_mode,
             solver_workers=solver_workers,
+            database_url=optional("DATABASE_URL"),
         )

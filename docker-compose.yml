@@ -22,6 +22,13 @@ services:
       DATA_DIR: /app/data
       CACHE_PATH: /cache/cache.sqlite
       OSRM_URL: http://osrm:5000
+      # День диспетчера живёт в Postgres: перезапуск backend его не теряет. Уберите переменную — сервис
+      # вернётся к дню в памяти процесса, как было раньше. Пароль тут же в подстановке: база наружу
+      # не торчит и живёт только внутри compose.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-routing}:${POSTGRES_PASSWORD:-routing}@postgres:5432/${POSTGRES_DB:-routing}
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       # Матрицы общественного транспорта от 2ГИС лежат в репозитории (data/transit) и копируются в образ
       # вместе с бандлами и ночными планами, поэтому каталог сюда не монтируется: иначе у того, кто его у себя
@@ -36,6 +43,23 @@ services:
       interval: 5s
       timeout: 3s
       retries: 24
+    restart: unless-stopped
+
+  # День диспетчера: планы, шкала событий и согласованные окна. Схему приводят в порядок миграции backend
+  # (backend/migrations), они идут на его старте. Порт наружу не публикуется: смотреть — `make psql`.
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-routing}
+      POSTGRES_USER: ${POSTGRES_USER:-routing}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-routing}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-routing} -d ${POSTGRES_DB:-routing}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
     restart: unless-stopped
 
   osrm:
@@ -60,3 +84,5 @@ services:
 volumes:
   osrm-data:
   backend-cache:
+  # День диспетчера. `docker compose down` его не трогает, `down -v` сносит вместе с kv-кэшем и графом OSRM.
+  pg-data:

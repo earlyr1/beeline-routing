@@ -166,6 +166,7 @@ def make_problem(
     buffer: TravelBuffer = NO_BUFFER,
     lunch: bool = True,
     transit: Sequence[TransitMatrix] = (),
+    travel: TravelTimes | None = None,
 ) -> Problem:
     """Задача на начало дня: все инженеры в стартовых точках, все активные заявки открыты.
 
@@ -173,6 +174,8 @@ def make_problem(
     lunch — обед по плану в этот день.
     transit — матрицы 2ГИС по регионам, посчитанные диспетчером заранее: минуты общественного транспорта берутся
     из них по парам точек (TransitLookup), остальные пары считает встроенная модель.
+    travel — готовая матрица тех же точек: её передаёт подъём дня из базы, где на десяток планов одного дня
+    точки одни и те же и собирать матрицу заново незачем. По умолчанию матрица собирается здесь.
     """
     located = [r for r in requests if r.lat is not None and r.lon is not None]
     unplannable = [
@@ -184,17 +187,18 @@ def make_problem(
         for r in requests
         if (r.lat is None or r.lon is None) and r.status == RequestStatus.ACTIVE
     ]
-    points = [(e.start_lat, e.start_lon) for e in engineers] + [(r.lat, r.lon) for r in located]
-    # Минуты 2ГИС берутся по парам: точка дня привязывается к ближайшей точке матрицы в 150 м, и пара из одной матрицы
-    # идёт из 2ГИС, даже если в дне появилась срочная заявка или сменился адрес. Пары с новой точкой, как и день,
-    # которого нет ни в одной матрице, считает встроенная модель, и это не ошибка.
-    lookup = TransitLookup(points, transit) if transit else None
-    travel = TravelTimes(
-        build_base_matrix(points, model, osrm=osrm, cache=cache),
-        model,
-        traffic,
-        transit=lookup if lookup is not None and lookup.covered else None,
-    )
+    if travel is None:
+        points = [(e.start_lat, e.start_lon) for e in engineers] + [(r.lat, r.lon) for r in located]
+        # Минуты 2ГИС берутся по парам: точка дня привязывается к ближайшей точке матрицы в 150 м, и пара из одной
+        # матрицы идёт из 2ГИС, даже если в дне появилась срочная заявка или сменился адрес. Пары с новой точкой,
+        # как и день, которого нет ни в одной матрице, считает встроенная модель, и это не ошибка.
+        lookup = TransitLookup(points, transit) if transit else None
+        travel = TravelTimes(
+            build_base_matrix(points, model, osrm=osrm, cache=cache),
+            model,
+            traffic,
+            transit=lookup if lookup is not None and lookup.covered else None,
+        )
     states = [initial_state(engineer, k) for k, engineer in enumerate(engineers)]
     open_ids = [r.id for r in located if r.status == RequestStatus.ACTIVE]
     return Problem(

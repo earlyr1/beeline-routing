@@ -30,6 +30,10 @@ from app.llm.store import ProposalStore
 from app.planning.session import PlanningContext
 from app.settings import BACKEND_DIR, Settings
 from app.solvers.portfolio import SolverPool
+from app.state.memory import MemoryStateRepo
+from app.state.migrate import migrate
+from app.state.postgres import PostgresStateRepo
+from app.state.repo import StateRepo
 from app.synth.config import SynthConfig
 
 
@@ -51,10 +55,29 @@ class AppDeps:
     kv: KVCache
     llm: LlmClient | None = None
     proposals: ProposalStore = field(default_factory=ProposalStore)
+    # Где живёт день диспетчера: память процесса или Postgres (app/state).
+    state: StateRepo = field(default_factory=MemoryStateRepo)
     # Адрес точки на карте: (lat, lon) -> короткий адрес и точность.
     reverse_geocode: Callable[[float, float], ReverseAddress] = _without_reverse
     # Запуск фонового предподсчёта таймлайна; тесты подменяют его, чтобы выполнять задачи сами.
     run_background: Callable[[Callable[[], None]], None] = run_in_thread
+
+    def close(self) -> None:
+        """Остановка сервиса: соединения с базой закрываются, остальное уходит вместе с процессом."""
+        self.state.close()
+
+
+def build_state(settings: Settings, planning: PlanningContext) -> StateRepo:
+    """Хранилище дня по настройкам: Postgres, если задан DATABASE_URL, иначе память процесса.
+
+    Схему приводят в порядок миграции, и делают это до первого запроса. Ошибка на этом месте поднимается
+    наверх и не даёт сервису стартовать: молча уехать в память нельзя — диспетчер будет думать, что день
+    сохраняется, а он нет.
+    """
+    if not settings.database_url:
+        return MemoryStateRepo()
+    migrate(settings.database_url)
+    return PostgresStateRepo(settings.database_url, planning)
 
 
 def build_llm(settings: Settings) -> LlmClient | None:
@@ -142,12 +165,20 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         geocode=geocode,
         planning=planning,
     )
+    state = build_state(settings, planning)
+    # Предложения помощника уезжают в хранилище вместе с днём, а поднятый день возвращает их в стор.
+    proposals = ProposalStore(state.writer)
+    registry = DatasetRegistry(
+        state, lambda day: proposals.restore(day.dataset_id, day.proposals, day.urgent_number)
+    )
     return AppDeps(
         settings=settings,
-        registry=DatasetRegistry(),
+        registry=registry,
         ingest=ingest,
         osrm=osrm,
         kv=kv,
         llm=build_llm(settings),
+        proposals=proposals,
+        state=state,
         reverse_geocode=reverse,
     )

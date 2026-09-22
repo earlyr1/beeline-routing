@@ -1,6 +1,13 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { PlanningState } from '../../api/types';
+
+vi.mock('../../api/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../api/client')>();
+  return { ...actual, setAgreedWindow: vi.fn() };
+});
+
+import * as api from '../../api/client';
+import type { AgreedWindow, PlanningState } from '../../api/types';
 import { cancelEvent } from '../../lib/events';
 import { useAppStore } from '../../store/useAppStore';
 import { makeConfig, makePlanningState, makeTimeline } from '../../test/fixtures';
@@ -37,6 +44,11 @@ function callingDay(): PlanningState {
 
 beforeEach(() => {
   resetStore({ datasetId: 'd_test', state: callingDay(), clock: '13:00', config: makeConfig() });
+  // Отметку «Согласовано» помнит сервер: он возвращает её вместе с планом, как настоящий.
+  vi.mocked(api.setAgreedWindow).mockImplementation(async (_dataset, requestId, window: AgreedWindow) => {
+    const state = useAppStore.getState().state!;
+    return { ...state, agreed: { ...(state.agreed ?? {}), [requestId]: window } };
+  });
 });
 
 describe('CommunicationsTab', () => {
@@ -73,17 +85,18 @@ describe('CommunicationsTab', () => {
     expect(rowOf('18754')).toBeInTheDocument();
   });
 
-  it('marks a row as agreed, moves it to the block below and remembers the window', () => {
+  it('marks a row as agreed, moves it to the block below and remembers the window', async () => {
     render(<CommunicationsTab />);
     fireEvent.click(within(rowOf('46393')).getByRole('button', { name: '✓ Согласовано' }));
 
-    expect(useAppStore.getState().agreed).toEqual({
-      '46393': {
-        window: { start: '16:00', end: '18:00', asap: false },
-        requestWindow: { start: '16:00', end: '18:00', asap: false },
-        version: 4,
-      },
-    });
+    const mark = {
+      window: { start: '16:00', end: '18:00', asap: false },
+      request_window: { start: '16:00', end: '18:00', asap: false },
+      version: 4,
+    };
+    // Окно уходит на сервер: его увидит и другая вкладка, и тот же день после перезапуска сервиса.
+    await waitFor(() => expect(api.setAgreedWindow).toHaveBeenCalledWith('d_test', '46393', mark));
+    expect(useAppStore.getState().agreed).toEqual({ '46393': mark });
     const agreed = rowOf('46393');
     expect(agreed).toHaveClass('call--agreed');
     expect(within(agreed).getByText('договорились на окно 16:00–18:00')).toBeInTheDocument();
@@ -91,12 +104,13 @@ describe('CommunicationsTab', () => {
     expect(screen.getByRole('heading', { name: 'Согласовано' })).toBeInTheDocument();
   });
 
-  it('remembers «сегодня не приедем» for a client who is left without a visit', () => {
+  it('remembers «сегодня не приедем» for a client who is left without a visit', async () => {
     render(<CommunicationsTab />);
     fireEvent.click(within(rowOf('18754')).getByRole('button', { name: '✓ Согласовано' }));
 
+    await waitFor(() => expect(api.setAgreedWindow).toHaveBeenCalled());
     expect(useAppStore.getState().agreed).toEqual({
-      '18754': { window: null, requestWindow: { start: '18:00', end: '20:00', asap: false }, version: 4 },
+      '18754': { window: null, request_window: { start: '18:00', end: '20:00', asap: false }, version: 4 },
     });
     expect(within(rowOf('18754')).getByText('сказали, что сегодня не приедем')).toBeInTheDocument();
   });
