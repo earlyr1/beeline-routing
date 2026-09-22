@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
 from app.domain.enums import Transport
 from app.domain.models import Engineer, Event, Office, Plan, Request
 from app.domain.timeutil import HHMM
+from app.domain.windows import TimeSlot
 from app.planning.models import AppliedEvent, EventChoice, EventVariant, PlanDiff, PrecomputedPlan
 from app.planning.session import PlanningSession
 from app.planning.timeline import CURSOR_RANGE_TEXT, LAST_MINUTE, TimelineStatus
@@ -53,6 +54,9 @@ class UploadReport(BaseModel):
     requests: int
     engineers: int
     skipped_rows: list[str] = Field(default_factory=list)
+    # Что не так с окнами самих данных (app/ingest/window_check.py): окно вне рабочего дня, короткое окно
+    # приезда, окна не по сетке. Окна при этом остаются как в файле — список только показывает их диспетчеру.
+    window_warnings: list[str] = Field(default_factory=list)
     geocoding: GeocodingCounts
     not_found: list[NotFoundAddress] = Field(default_factory=list)
     matrix_source: Literal["osrm", "haversine"]
@@ -197,6 +201,9 @@ class ClientConfig(BaseModel):
     osrm_available: bool
     # Типы работ диалога срочной заявки с нормативами организаторов; первый — выбор по умолчанию («Авария»).
     work_types: list[WorkType] = Field(default_factory=list)
+    # Сетка окон визита из того же конфига: слоты, из которых диспетчер выбирает окно клиенту. Клиент их не
+    # повторяет у себя, а берёт отсюда — так сетка не может разойтись с той, по которой сервер проверяет окно.
+    window_grid: list[TimeSlot] = Field(default_factory=list)
 
 
 def morning_requests(morning: PlanningSession | None) -> list[MorningRequest]:

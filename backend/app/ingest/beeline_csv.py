@@ -35,6 +35,9 @@ class RawFile:
     office_address: str | None
     is_control: bool
     skipped: list[str] = field(default_factory=list)
+    # Замечания к окнам из данных для отчёта разбора. Разбор их не ставит: окна проверяет window_check.py,
+    # которому нужны нормативы и сетка окон из конфига.
+    window_warnings: list[str] = field(default_factory=list)
 
 
 def decode_bytes(data: bytes) -> str:

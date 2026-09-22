@@ -133,6 +133,8 @@ def build_deps(settings: Settings, geocoder_override: Geocoder | None = None) ->
         geocode=geocode,
         # Уровень срочной заявки диспетчера по её типу работ — из того же конфига, что у заявок бандлов.
         tier_by_bk=synth_config.tier_by_bk,
+        # Сетка окон визита из того же конфига: на неё помощник кладёт окно, которое назвал.
+        window_grid=synth_config.window_grid,
     )
     ingest = IngestDeps(
         bundles=BundleStore(settings.bundles_dir),

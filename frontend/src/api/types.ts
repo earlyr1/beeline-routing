@@ -188,6 +188,9 @@ export interface UploadReport {
   requests: number;
   engineers: number;
   skipped_rows: string[];
+  // Замечания к окнам из файла: окно вне рабочего дня, короткое окно приезда, окна не по сетке. Заявки при этом
+  // остаются в дне с теми окнами, что в файле, — сервис их не подменяет.
+  window_warnings: string[];
   geocoding: Record<GeocodePrecision, number>;
   not_found: { request_id: string; address: string }[];
   matrix_source: MatrixSource;
@@ -495,10 +498,21 @@ export interface WorkType {
   asap: boolean;
 }
 
+/** Слот сетки окон визита: окно, которое диспетчер называет клиенту. */
+export interface TimeSlot {
+  start: HHMM;
+  end: HHMM;
+}
+
 export interface ClientConfig {
   yandex_maps_api_key: string | null;
   llm_enabled: boolean;
   osrm_available: boolean;
   /** Типы работ диалога срочной заявки, первый выбран по умолчанию. У старого сервера поля нет: диалог спрашивает навык. */
   work_types?: WorkType[];
+  /**
+   * Сетка окон визита: рабочий день по слотам (сегодня шесть двухчасовых, 10:00–12:00 … 20:00–22:00).
+   * Своей сетки у клиента нет — только эта. У старого сервера поля нет: тогда окно вводят временем, как раньше.
+   */
+  window_grid?: TimeSlot[];
 }

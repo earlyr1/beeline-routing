@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import type { Skill, Transport } from '../../api/types';
+import type { Skill, TimeSlot, Transport } from '../../api/types';
 import {
   beforeShiftsHint,
   buildUrgentEvent,
@@ -16,6 +16,7 @@ import { isValidTime, SKILL_LABELS, TRANSPORT_LABELS } from '../../lib/format';
 import { useAppStore } from '../../store/useAppStore';
 import { AsapToggle } from './AsapToggle';
 import { EquipmentToggle } from './EquipmentToggle';
+import { WindowSlotPicker } from './WindowSlotPicker';
 
 const SKILLS: Skill[] = ['emergency', 'connection', 'local'];
 const TRANSPORTS: Transport[] = ['car', 'bike', 'public'];
@@ -40,17 +41,22 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const engineers = state?.engineers ?? [];
   // Типы работ с нормативами организаторов присылает сервер; без них диалог прежний, с выбором навыка.
   const workTypes = useAppStore((s) => s.config?.work_types) ?? [];
+  // Сетка окон визита от сервера: из неё диспетчер выбирает окно. Пустая — сервер её не прислал, окно вводят временем.
+  const grid = useAppStore((s) => s.config?.window_grid) ?? [];
   const [form, setForm] = useState<UrgentForm>(() => {
     // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
     const time = useAppStore.getState().clock;
     // Первый тип от сервера — авария: срочным случаем организаторы считают именно её, и диспетчеру хватает места и времени.
-    const workType = useAppStore.getState().config?.work_types?.[0];
+    const config = useAppStore.getState().config;
+    const workType = config?.work_types?.[0];
+    const fields = workType ? workTypeFields(workType) : MANUAL_URGENT_FIELDS;
     return {
       address: '',
       point: null,
-      ...defaultUrgentWindow(time, engineers),
+      // Окно по умолчанию считается от длительности работ: в слот, который вот-вот кончится, бригаде не успеть.
+      ...defaultUrgentWindow(time, engineers, config?.window_grid ?? [], fields.durationMin),
       time,
-      ...(workType ? workTypeFields(workType) : MANUAL_URGENT_FIELDS),
+      ...fields,
     };
   });
   // Диспетчер раскрыл значения типа работ, чтобы поправить их; новый тип работ сворачивает их снова.
@@ -104,6 +110,11 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
     update(key, value);
   };
 
+  const chooseSlot = (slot: TimeSlot) => {
+    setWindowTouched(true);
+    setForm((prev) => ({ ...prev, windowStart: slot.start, windowEnd: slot.end }));
+  };
+
   const chooseWorkType = (typeBk: string) => {
     const workType = workTypes.find((item) => item.source_type_bk === typeBk);
     if (!workType) return;
@@ -115,7 +126,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
     setForm((prev) => ({
       ...prev,
       time: value,
-      ...(windowTouched || !isValidTime(value) ? {} : defaultUrgentWindow(value, engineers)),
+      ...(windowTouched || !isValidTime(value) ? {} : defaultUrgentWindow(value, engineers, grid, prev.durationMin)),
     }));
 
   const close = () => {
@@ -126,7 +137,7 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const candidate = { ...form, point };
-    const found = validateUrgentForm(candidate);
+    const found = validateUrgentForm(candidate, grid);
     setErrors(found);
     if (found.length > 0) return;
     const ok = await applyEvent(buildUrgentEvent(candidate, newUrgentId(Date.now()), engineers));
@@ -176,19 +187,23 @@ export function UrgentRequestDialog({ onClose }: { onClose: () => void }) {
             {/* Кнопка «Изменить» пропала вместе со строкой: фокус переходит на первое раскрытое поле. */}
             <AsapToggle checked={form.asap} onChange={(checked) => update('asap', checked)} autoFocus={expanded} />
             <div className="field-row">
-              {/* Поля окна скрыты, пока стоит «Как можно скорее»; введённые значения остаются в форме. */}
-              {!form.asap && (
-                <>
-                  <label className="field">
-                    <span>Окно с</span>
-                    <input type="time" value={form.windowStart} onChange={(event) => updateWindow('windowStart', event.target.value)} />
-                  </label>
-                  <label className="field">
-                    <span>Окно до</span>
-                    <input type="time" value={form.windowEnd} onChange={(event) => updateWindow('windowEnd', event.target.value)} />
-                  </label>
-                </>
-              )}
+              {/* Окно скрыто, пока стоит «Как можно скорее»; выбранное остаётся в форме. */}
+              {/* С сеткой от сервера окно выбирают слотом: клиенту называют слот, а не произвольный интервал. */}
+              {!form.asap &&
+                (grid.length > 0 ? (
+                  <WindowSlotPicker grid={grid} start={form.windowStart} end={form.windowEnd} time={form.time} onChange={chooseSlot} />
+                ) : (
+                  <>
+                    <label className="field">
+                      <span>Окно с</span>
+                      <input type="time" value={form.windowStart} onChange={(event) => updateWindow('windowStart', event.target.value)} />
+                    </label>
+                    <label className="field">
+                      <span>Окно до</span>
+                      <input type="time" value={form.windowEnd} onChange={(event) => updateWindow('windowEnd', event.target.value)} />
+                    </label>
+                  </>
+                ))}
               <label className="field" title={form.workType ? NORM_DURATION_HINT : undefined}>
                 <span>Длительность, мин</span>
                 <input type="number" min={5} step={5} value={form.durationMin} onChange={(event) => update('durationMin', Number(event.target.value))} />

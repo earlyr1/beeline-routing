@@ -11,6 +11,7 @@ import pytest
 from app.api.deps import planning_context
 from app.domain.enums import EventType, Priority, RequestStatus, RequestTier, Skill, Transport
 from app.domain.models import Event
+from app.domain.timeutil import fmt_hhmm
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.geo.transit import build_transit_matrix
 from app.ingest.bundle import save_bundle
@@ -536,7 +537,9 @@ def test_raw_csv_of_a_prepared_region_has_the_fingerprint_of_its_bundle(tmp_path
     bundle = sample_bundle()
     write_night_plan(tmp_path / "bundles", deps.ingest.planning, bundle.requests, bundle.engineers)
     from_bundle = upload(client, "bundle.json", bundle.model_dump_json().encode())
-    rows = [(r.id, "10:00", "12:00", r.address) for r in bundle.requests]
+    # Нетронутая выгрузка региона: и номера заявок, и окна те же, что в бандле, — иначе день строится по файлу
+    # и отпечаток у него свой (app/api/ingest_service.py).
+    rows = [(r.id, fmt_hhmm(r.window_start), fmt_hhmm(r.window_end), r.address) for r in bundle.requests]
     from_csv = upload(client, "east.csv", csv_bytes(rows))
 
     weights = workload_weights(DEFAULT_WORKLOAD_LEVEL)

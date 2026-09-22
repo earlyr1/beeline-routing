@@ -310,8 +310,8 @@ def test_timeline_event_checks_ids_and_time_range(tmp_path, solves):
             "lat": 55.751,
             "lon": 37.61,
             "duration_min": 30,
-            "window_start": "15:00",
-            "window_end": "17:00",
+            "window_start": "14:00",
+            "window_end": "16:00",
             "skill": "local",
         },
     }
@@ -925,7 +925,8 @@ def test_changing_an_earlier_choice_replays_a_later_breaking_event_with_its_own_
 
 
 def urgent(time="12:00", request_id="U1"):
-    return Event(type=EventType.URGENT, time=time, request=req(request_id, 0, 0, "13:00", "17:00"))
+    # Окно — слот сетки окон: другое сервер от диспетчера не примет.
+    return Event(type=EventType.URGENT, time=time, request=req(request_id, 0, 0, "14:00", "16:00"))
 
 
 def test_urgent_request_can_be_given_to_a_named_brigade_and_that_plan_is_counted_on_demand(tmp_path, solves):

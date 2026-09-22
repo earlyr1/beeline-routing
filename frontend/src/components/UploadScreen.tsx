@@ -198,8 +198,23 @@ export function UploadScreen() {
             {report.skipped_rows.length > 0 && (
               <details>
                 <summary>Пропущено строк: {report.skipped_rows.length}</summary>
+                <p className="muted">Эти строки в день не вошли: работать по ним нельзя.</p>
                 <ul>
                   {report.skipped_rows.map((row) => (
+                    <li key={row}>{row}</li>
+                  ))}
+                </ul>
+              </details>
+            )}
+            {report.window_warnings.length > 0 && (
+              <details>
+                <summary>Замечания к окнам: {report.window_warnings.length}</summary>
+                <p className="muted">
+                  Эти заявки остались в дне со своими окнами — сервис их не подменяет: спланировано ровно то, что пришло
+                  в выгрузке. Строки, которые сервис не смог прочитать, — выше, в «Пропущено строк».
+                </p>
+                <ul>
+                  {report.window_warnings.map((row) => (
                     <li key={row}>{row}</li>
                   ))}
                 </ul>

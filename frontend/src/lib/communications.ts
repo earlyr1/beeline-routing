@@ -1,6 +1,7 @@
-import type { HHMM, PlanEvent, PlanningState, ServiceRequest } from '../api/types';
+import type { HHMM, PlanEvent, PlanningState, ServiceRequest, TimeSlot } from '../api/types';
 import { fromMinutes, requestLabel, requestWindowPhrase, requestWindowText, shortAddress, toMinutes } from './format';
 import { assignmentIndex, byId } from './planView';
+import { offGrid, slotFor } from './windows';
 
 /** Окно клиента: с какого и по какое время он ждёт бригаду. Точного времени визита он не знает. */
 export interface TimeWindow {
@@ -49,8 +50,10 @@ export interface CallRow {
   known: TimeWindow | null;
   /** Окно, в которое план не попадает: его и называть нельзя. null — у остальных поводов для звонка. */
   missed: TimeWindow | null;
-  /** Окно, которое диспетчер назовёт клиенту; null — сегодня к нему не приедут. */
+  /** Окно, которое диспетчер назовёт клиенту: слот сетки, если окно новое. null — сегодня к нему не приедут. */
   promise: TimeWindow | null;
+  /** Окно называть поздно: визит уже идёт, а слот вокруг него к времени на часах закончился. */
+  underway: boolean;
   /** Начало визита в плане; null — сегодня к клиенту не приедут. Клиенту эту минуту не называют. */
   start: HHMM | null;
   /** Бригада плана: справка для диспетчера, а не причина звонка. */
@@ -84,36 +87,57 @@ const sameWindow = (a: TimeWindow, b: TimeWindow) => a.start === b.start && a.en
 const fits = (window: TimeWindow, start: HHMM) =>
   toMinutes(window.start) <= toMinutes(start) && toMinutes(start) <= toMinutes(window.end);
 
-/** Новое окно длится столько же, сколько окно заявки, но не меньше часа и не больше четырёх. */
+/** Без сетки окон (старый сервер, офлайн) новое окно длится столько же, сколько окно заявки: от часа до четырёх. */
 const SHORTEST_WINDOW = 60;
 const LONGEST_WINDOW = 240;
-/** Новое окно начинается с ровной получасовой отметки: клиенту называют окно, а не минуту плана. */
+/** Без сетки новое окно начинается с ровной получасовой отметки: клиенту называют окно, а не минуту плана. */
 const WINDOW_STEP = 30;
 
 /**
- * Окно, которое диспетчер назовёт вместо сорванного: получасовая отметка перед визитом и столько же времени,
- * сколько было в окне заявки. Ровная отметка держит окно на месте, пока визит ходит по плану туда-сюда.
+ * Окно, которое диспетчер назовёт вместо сорванного: слот сетки, в который попадает визит, а если визит вышел
+ * за рабочий день — ближайший слот, других окон у сетки нет. Клиенту называют слот, а не произвольный интервал.
+ *
+ * Без сетки от сервера окно прежнее: получасовая отметка перед визитом и столько же времени, сколько было
+ * в окне заявки. Ровная отметка держит окно на месте, пока визит ходит по плану туда-сюда.
  */
-function suggestedWindow(window: TimeWindow, start: HHMM): TimeWindow {
+function suggestedWindow(window: TimeWindow, start: HHMM, grid: TimeSlot[]): TimeWindow {
+  const slot = slotFor(grid, start);
+  if (slot) return { start: slot.start, end: slot.end, asap: false };
   const length = Math.min(LONGEST_WINDOW, Math.max(SHORTEST_WINDOW, toMinutes(window.end) - toMinutes(window.start)));
   const from = Math.floor(toMinutes(start) / WINDOW_STEP) * WINDOW_STEP;
   return { start: fromMinutes(from), end: fromMinutes(from + length), asap: false };
 }
 
-/** Окно, которое диспетчер назовёт клиенту: своё окно заявки, а если визит в него не попадает — новое вокруг визита. */
-function promisedWindow(window: TimeWindow, start: HHMM | null): TimeWindow | null {
+/**
+ * Окно, которое диспетчер назовёт клиенту: своё окно заявки, а если визит в него не попадает — слот вокруг визита.
+ * Окно, которого в сетке нет, тоже называют слотом: у аварии выгрузки там весь день, 00:01–23:59, и это пометка
+ * данных, а не обещание клиенту. Окно «как можно скорее» остаётся как есть: его называют словами.
+ */
+function promisedWindow(window: TimeWindow, start: HHMM | null, grid: TimeSlot[]): TimeWindow | null {
   if (start === null) return null;
-  return fits(window, start) ? window : suggestedWindow(window, start);
+  const named = window.asap === true || !offGrid(grid, window.start, window.end);
+  return named && fits(window, start) ? window : suggestedWindow(window, start, grid);
+}
+
+/**
+ * Окно называть поздно: визит уже идёт, а слот вокруг его начала к времени на часах закончился.
+ * Слот берётся по началу визита, а оно в прошлом, поэтому к моменту звонка такой слот может уже кончиться:
+ * клиенту в этом случае говорят не про окно, а что бригада у него.
+ */
+function isUnderway(promise: TimeWindow | null, start: HHMM | null, clock: HHMM): boolean {
+  if (promise === null || start === null) return false;
+  const now = toMinutes(clock);
+  return toMinutes(start) <= now && toMinutes(promise.end) <= now;
 }
 
 /** Окно, которое клиент знает после разговора, и окно самой заявки в этот момент: их запоминает отметка «Согласовано». */
-export function agreedWindow(state: PlanningState, requestId: string): AgreedWindow {
+export function agreedWindow(state: PlanningState, requestId: string, grid: TimeSlot[] = []): AgreedWindow {
   const request = byId(state.requests).get(requestId);
   // Визита в плане нет — значит клиенту сказали, что сегодня не приедем; окна он не ждёт.
   if (!request) return { window: null, version: state.version };
   const window = windowOf(request);
   const visit = assignmentIndex(state.plan).get(requestId);
-  return { window: promisedWindow(window, visit?.visit.start ?? null), requestWindow: window, version: state.version };
+  return { window: promisedWindow(window, visit?.visit.start ?? null, grid), requestWindow: window, version: state.version };
 }
 
 /** Повод для звонка: какое окно план не выполняет и какое окно диспетчер назовёт вместо него. */
@@ -130,16 +154,23 @@ interface CallReason {
  * Повод ровно три: сегодня не приедем, визит вне окна клиента и новое окно самой заявки. Окно, которое диспетчер
  * назовёт, — то, которое план выполняет: своё окно заявки, если визит в него попадает, иначе новое вокруг визита.
  */
-function callReason(known: TimeWindow | null, base: TimeWindow, window: TimeWindow, start: HHMM | null): CallReason | null {
+function callReason(
+  known: TimeWindow | null,
+  base: TimeWindow,
+  window: TimeWindow,
+  start: HHMM | null,
+  grid: TimeSlot[],
+): CallReason | null {
   // Визита сегодня нет: звоним, если клиент ещё ждёт бригаду.
   if (start === null) return known === null ? null : { kind: 'lost', missed: null, promise: null };
   // Клиенту сказали, что сегодня не приедем, а визит вернулся: он должен узнать окно.
-  if (known === null) return { kind: 'window', missed: null, promise: promisedWindow(window, start) };
+  if (known === null) return { kind: 'window', missed: null, promise: promisedWindow(window, start, grid) };
   // Диспетчер передвинул окно заявки уже после того, как клиент узнал своё: назовём новое.
   const moved = !sameWindow(base, window);
   const named = moved ? window : known;
   // В окно, которое собирались назвать, план не попадает: клиенту нужно другое.
-  if (!fits(named, start)) return { kind: 'outside', missed: named, promise: suggestedWindow(window, start) };
+  if (!fits(named, start)) return { kind: 'outside', missed: named, promise: suggestedWindow(window, start, grid) };
+  // Окно, которое диспетчер поставил сам, называют как есть: сетку ему уже не обойти, и подменять его нечем.
   return moved ? { kind: 'window', missed: null, promise: window } : null;
 }
 
@@ -196,7 +227,7 @@ function acceptedWindows(state: PlanningState): Map<string, TimeWindow> {
  * на плане новее текущего (часы отмотали назад), пропускаем целиком: сравнение с прежним планом перевернуло бы
  * строку и позвало отзывать окно, которое никуда не делось.
  */
-export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHMM): CallList {
+export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHMM, grid: TimeSlot[] = []): CallList {
   const assigned = assignmentIndex(state.plan);
   const morning = new Map((state.morning ?? []).map((item) => [item.request_id, windowOf(item)]));
   const accepted = acceptedWindows(state);
@@ -218,7 +249,7 @@ export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHM
     const known = mark ? (mark.window ?? null) : entered;
     const base = mark?.requestWindow ?? entered;
     const start = visit?.visit.start ?? null;
-    const reason = callReason(known, base, window, start);
+    const reason = callReason(known, base, window, start, grid);
     const label = requestLabel(request.id, request.priority);
     const address = shortAddress(request.address);
     if (reason === null) {
@@ -235,6 +266,7 @@ export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHM
       known,
       missed: reason.missed,
       promise: reason.promise,
+      underway: isUnderway(reason.promise, start, clock),
       start,
       engineerId: visit?.engineerId ?? null,
     });
@@ -280,7 +312,13 @@ export function callChangeText(row: CallRow): string {
   if (row.promise === null) {
     return row.known === null ? 'сегодня не приедем' : `сегодня не приедем, обещали ${windowPhrase(row.known)}`;
   }
-  if (row.known === null) return `сказали, что сегодня не приедем → приедем ${inWindow(row.promise)}`;
-  if (row.missed !== null) return `не попадаем ${inWindow(row.missed)} — назовите ${windowPhrase(row.promise)}`;
+  // Слот вокруг визита уже кончился: называть его нечестно, и клиенту говорят, что бригада у него.
+  const arrived = 'бригада уже у клиента';
+  if (row.known === null) {
+    return `сказали, что сегодня не приедем → ${row.underway ? arrived : `приедем ${inWindow(row.promise)}`}`;
+  }
+  if (row.missed !== null) {
+    return `не попадаем ${inWindow(row.missed)} — ${row.underway ? arrived : `назовите ${windowPhrase(row.promise)}`}`;
+  }
   return changedText(row.known, row.promise);
 }

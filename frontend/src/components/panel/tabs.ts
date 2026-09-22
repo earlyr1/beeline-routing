@@ -36,6 +36,6 @@ export const PANEL_TABS: PanelTab[] = [
     title: 'Коммуникации',
     component: CommunicationsTab,
     // В бейдже — сколько клиентов ждут звонка: согласованные строки в него не входят.
-    badge: (app) => (app.state ? callList(app.state, app.agreed, app.clock).pending.length || null : null),
+    badge: (app) => (app.state ? callList(app.state, app.agreed, app.clock, app.config?.window_grid ?? []).pending.length || null : null),
   },
 ];

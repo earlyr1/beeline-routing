@@ -22,8 +22,9 @@ from app.domain.enums import (
     request_label,
 )
 from app.domain.models import DELAY_RANGE_TEXT, MAX_DELAY_MIN, MIN_DELAY_MIN, Event, Request
-from app.domain.timeutil import HHMM
+from app.domain.timeutil import HHMM, fmt_hhmm
 from app.domain.validation_text import validation_text
+from app.domain.windows import slot_for, slots_text
 from app.llm.client import LlmResult, ToolCall
 from app.planning.session import (
     EDITABLE_REQUEST_FIELDS,
@@ -205,7 +206,31 @@ def _validation_text(error: ValidationError) -> str:
     return validation_text(error.errors(), limit=1)
 
 
-def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:
+def _on_grid(ctx: PlanningContext, window_start: int, window_end: int, notes: list[str]) -> tuple[int, int]:
+    """Окно, которое назвала модель, на сетке окон: клиенту называют слот, а не произвольный интервал.
+
+    Слот берётся по началу окна (app/domain/windows.py), поэтому «с часу до четырёх» становится слотом ещё до
+    того, как из предложения соберётся событие, — но не молча: сдвиг уходит строкой в предложение, и диспетчер
+    видит в карточке и то, о чём просили, и то, что он подтверждает. Время вне рабочего дня своего слота не имеет,
+    и ближайший слот означал бы совсем другое окно (с 22:00 до 23:00 уехало бы назад, в 20:00–22:00): про такое
+    окно помощник переспрашивает. Сетки в контексте нет — окно как есть.
+    """
+    slot = slot_for(ctx.window_grid, window_start)
+    if slot is None:
+        return window_start, window_end
+    named = f"{fmt_hhmm(window_start)}–{fmt_hhmm(window_end)}"
+    if not slot.start <= window_start < slot.end:
+        raise Unresolved(
+            f"Окна {named} в сетке нет: клиенту называют слот. Выберите один из: {slots_text(ctx.window_grid)}."
+        )
+    if (slot.start, slot.end) != (window_start, window_end):
+        notes.append(f"Окно {named} положено на слот {fmt_hhmm(slot.start)}–{fmt_hhmm(slot.end)}.")
+    return slot.start, slot.end
+
+
+def _updated_request(
+    stored: Request, args: RequestUpdateArgs, ctx: PlanningContext, notes: list[str]
+) -> Request:
     """Текущая заявка с полями, которые назвала модель. У нового адреса координаты сбрасываются: их найдёт геокодер."""
     changes = args.model_dump(include=EDITABLE_REQUEST_FIELDS, exclude_none=True)
     if not changes:
@@ -220,6 +245,23 @@ def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:
     elif stored.asap and "asap" not in changes and {"window_start", "window_end"} & changes.keys():
         # Названное окно означает, что заявка больше не «как можно скорее».
         changes["asap"] = False
+    if {"window_start", "window_end"} & changes.keys() and not changes.get("asap", stored.asap):
+        # Новое окно кладём на сетку до того, как соберётся событие: диспетчеру предлагают слот.
+        changes["window_start"], changes["window_end"] = _on_grid(
+            ctx,
+            changes.get("window_start", stored.window_start),
+            changes.get("window_end", stored.window_end),
+            notes,
+        )
+    elif changes.get("asap") is False and stored.asap:
+        # Заявка перестала быть «как можно скорее»: окно ей задал сервер, слотом оно не бывает, и клиенту его
+        # не называли. Берём слот, в который попадает начало ожидания, — иначе обещанием стало бы окно сервера.
+        slot = slot_for(ctx.window_grid, stored.window_start)
+        if slot is not None:
+            changes["window_start"], changes["window_end"] = slot.start, slot.end
+            notes.append(
+                f"Заявка больше не «как можно скорее»: окно {fmt_hhmm(slot.start)}–{fmt_hhmm(slot.end)} с сетки."
+            )
     if "transport_required" in changes:
         required = changes["transport_required"]
         changes["transport_required"] = None if required == "none" else Transport(required)
@@ -230,10 +272,12 @@ def _updated_request(stored: Request, args: RequestUpdateArgs) -> Request:
     return stored.model_copy(update=changes)
 
 
-def _request_update_event(session: PlanningSession, args: RequestUpdateArgs, time: int) -> Event:
+def _request_update_event(
+    session: PlanningSession, args: RequestUpdateArgs, time: int, ctx: PlanningContext, notes: list[str]
+) -> Event:
     request_id = resolve_request(session, args.request_id)
     stored = session.request(request_id)
-    request = _updated_request(stored, args)
+    request = _updated_request(stored, args, ctx, notes)
     # Окно заявки «как можно скорее» задаёт backend при проверке события, порядок границ здесь не важен.
     if request.asap or request.window_end > request.window_start:
         return Event(type=EventType.REQUEST_UPDATED, time=time, request_id=request_id, request=request)
@@ -247,11 +291,18 @@ def _request_update_event(session: PlanningSession, args: RequestUpdateArgs, tim
 
 
 def _build_event(
-    name: str, args: BaseModel, session: PlanningSession, new_request_id: Callable[[], str], now: int
+    name: str,
+    args: BaseModel,
+    session: PlanningSession,
+    ctx: PlanningContext,
+    new_request_id: Callable[[], str],
+    now: int,
+    notes: list[str],
 ) -> Event:
+    """notes — что помощник сделал с окном сверх сказанного моделью: эти строки уходят в пояснение предложения."""
     time = args.time if args.time is not None else now
     if name == "propose_request_update":
-        return _request_update_event(session, args, time)
+        return _request_update_event(session, args, time, ctx, notes)
     if name == "propose_cancel":
         return Event(type=EventType.CANCEL, time=time, request_id=resolve_request(session, args.request_id))
     if name == "propose_restore":
@@ -282,7 +333,8 @@ def _build_event(
     elif args.window_start is None or args.window_end is None:
         raise Unresolved(URGENT_WINDOW_MISSING)
     else:
-        window_start, window_end = args.window_start, args.window_end
+        # Окно срочной заявки кладём на сетку до сборки события: клиенту называют слот.
+        window_start, window_end = _on_grid(ctx, args.window_start, args.window_end, notes)
     transport = None if args.transport_required in (None, "none") else Transport(args.transport_required)
     request = Request(
         id=new_request_id(),
@@ -328,8 +380,9 @@ def _interpret_call(
         out.clarifications.append(args.question.strip())
         return
     refusal: str | None = None
+    notes: list[str] = []
     try:
-        event = _build_event(call.name, args, session, new_request_id, now)
+        event = _build_event(call.name, args, session, ctx, new_request_id, now, notes)
     except Refused as error:
         event, refusal = error.event, str(error)
     except Unresolved as error:
@@ -362,7 +415,8 @@ def _interpret_call(
         return
     seen.add(key)
 
-    rationale = args.rationale.strip() or "Помощник не пояснил предложение."
+    # Что помощник сделал с окном сам, диспетчер читает там же, где пояснение модели: в карточке предложения.
+    rationale = " ".join([args.rationale.strip() or "Помощник не пояснил предложение.", *notes])
     if refusal is not None:
         out.drafts.append(ProposalDraft(event=event, rationale=rationale, error=refusal))
         return

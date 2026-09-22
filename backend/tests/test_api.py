@@ -26,6 +26,15 @@ def test_health_and_config(tmp_path):
         "Ремонт у клиента",
         "Дозаказ оборудования",
     ]
+    # Сетка окон визита: рабочий день смен конфига по два часа — ровно окна настоящих данных.
+    assert config.pop("window_grid") == [
+        {"start": "10:00", "end": "12:00"},
+        {"start": "12:00", "end": "14:00"},
+        {"start": "14:00", "end": "16:00"},
+        {"start": "16:00", "end": "18:00"},
+        {"start": "18:00", "end": "20:00"},
+        {"start": "20:00", "end": "22:00"},
+    ]
     assert config == {
         "yandex_maps_api_key": "test-key",
         "llm_enabled": False,
@@ -329,8 +338,8 @@ def test_urgent_address_is_geocoded_before_taking_dataset_lock(tmp_path):
         "address": "Город Москва, ул.Таганская, д. 1",
         "district": "Таганский",
         "duration_min": 30,
-        "window_start": "13:00",
-        "window_end": "15:00",
+        "window_start": "12:00",
+        "window_end": "14:00",
         "skill": "emergency",
     }
     response = client.post(
@@ -381,7 +390,7 @@ def test_request_update_event_replaces_request_and_explanation(tmp_path):
         json={
             **event,
             "time": "13:30",
-            "request": {**stored, "window_start": "11:00", "window_end": "12:00"},
+            "request": {**stored, "window_start": "10:00", "window_end": "12:00"},
         },
     )
     assert early.status_code == 422

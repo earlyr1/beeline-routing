@@ -1,4 +1,4 @@
-import type { DelayForecast, Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, Transport, Visit, WorkType } from '../api/types';
+import type { DelayForecast, Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, TimeSlot, Transport, Visit, WorkType } from '../api/types';
 import {
   addMinutes,
   formatWindow,
@@ -13,8 +13,9 @@ import {
   toMinutes,
   TRANSPORT_LABELS,
 } from './format';
+import { defaultSlot, offGrid, offGridError, passedWindowError, windowPassed } from './windows';
 
-/** Длина окна срочной заявки по умолчанию, минут. */
+/** Длина окна срочной заявки, когда сетки окон от сервера нет (старый сервер, офлайн), минут. */
 export const URGENT_WINDOW_MIN = 120;
 
 export interface PickedPoint {
@@ -110,24 +111,30 @@ export function beforeShiftsHint(time: string, engineers: Engineer[]): string | 
   return toMinutes(time) < toMinutes(dayStart) ? BEFORE_SHIFTS_HINT : null;
 }
 
-/** Проверки окна визита; окно заявки «как можно скорее» задаёт сервер, его поля скрыты и не проверяются. */
-function windowErrors({ asap, windowStart, windowEnd }: VisitFields): string[] {
+/**
+ * Проверки окна визита; окно заявки «как можно скорее» задаёт сервер, его поля скрыты и не проверяются.
+ * С сеткой окно должно быть её слотом, и слот не должен быть уже прошедшим, — то же самое проверяет сервер.
+ * Без сетки окно вводится временем, как раньше, и прошедшее окно отклоняет только сервер.
+ */
+function windowErrors({ asap, windowStart, windowEnd }: VisitFields, grid: TimeSlot[], time: HHMM): string[] {
   if (asap) return [];
   if (!isValidTime(windowStart) || !isValidTime(windowEnd)) return ['Укажите окно визита в формате ЧЧ:ММ'];
+  if (offGrid(grid, windowStart, windowEnd)) return [offGridError(grid)];
+  if (grid.length > 0 && windowPassed(windowEnd, time)) return [passedWindowError(windowStart, windowEnd)];
   return toMinutes(windowEnd) <= toMinutes(windowStart) ? ['Конец окна должен быть позже начала'] : [];
 }
 
-/** Общие проверки места, окна и длительности визита для срочной и изменённой заявки. */
-function visitErrors(form: VisitFields): string[] {
+/** Общие проверки места, окна и длительности визита для срочной и изменённой заявки; time — время события. */
+function visitErrors(form: VisitFields, grid: TimeSlot[], time: HHMM): string[] {
   const errors: string[] = [];
   if (!form.address.trim() && !form.point) errors.push('Укажите адрес или точку на карте');
-  errors.push(...windowErrors(form));
+  errors.push(...windowErrors(form, grid, time));
   if (!Number.isFinite(form.durationMin) || form.durationMin <= 0) errors.push('Длительность должна быть больше нуля');
   return errors;
 }
 
-export function validateUrgentForm(form: UrgentForm): string[] {
-  const errors = visitErrors(form);
+export function validateUrgentForm(form: UrgentForm, grid: TimeSlot[] = []): string[] {
+  const errors = visitErrors(form, grid, form.time);
   const time = timeError(form.time);
   if (time) errors.push(time);
   return errors;
@@ -153,10 +160,22 @@ export function latestShiftEnd(engineers: Engineer[]): HHMM | null {
   return latest;
 }
 
-/** Окно срочной заявки по умолчанию: с времени события, но не раньше начала смен, длиной два часа. */
-export function defaultUrgentWindow(time: HHMM, engineers: Engineer[]): Pick<UrgentForm, 'windowStart' | 'windowEnd'> {
+/**
+ * Окно срочной заявки по умолчанию: ближайший слот сетки, в который бригада ещё успевает с работами на
+ * durationMin. Слот, где до конца осталось меньше, чем идут работы, клиенту не называют: в него не приехать,
+ * и заявка осталась бы без инженера — поэтому в 13:50 предлагается 14:00–16:00, а не доживающий 12:00–14:00.
+ * Без сетки (старый сервер, офлайн) окно прежнее: с времени события, но не раньше начала смен, длиной два часа.
+ */
+export function defaultUrgentWindow(
+  time: HHMM,
+  engineers: Engineer[],
+  grid: TimeSlot[] = [],
+  durationMin: number = URGENT_WINDOW_MIN,
+): Pick<UrgentForm, 'windowStart' | 'windowEnd'> {
   const dayStart = earliestShiftStart(engineers);
   const windowStart = dayStart === null ? time : laterTime(time, dayStart);
+  const slot = defaultSlot(grid, windowStart, durationMin);
+  if (slot) return { windowStart: slot.start, windowEnd: slot.end };
   return { windowStart, windowEnd: addMinutes(windowStart, URGENT_WINDOW_MIN) };
 }
 
@@ -436,9 +455,22 @@ export function requestChanges(prev: ServiceRequest, next: ServiceRequest): stri
   return changes;
 }
 
-/** Проверки формы изменения: как у срочной заявки и отказ, если в заявке ничего не поменялось. */
-export function validateRequestEdit(original: ServiceRequest, form: RequestEditForm, time: HHMM): string[] {
-  const errors = visitErrors(form);
+/**
+ * Проверки формы изменения: как у срочной заявки и отказ, если в заявке ничего не поменялось.
+ * Окно, которого диспетчер не трогал, сеткой не проверяется: у заявки из данных оно своё (у аварии там весь день),
+ * и менять длительность или адрес такой заявки это не мешает. Ровно так же смотрит на окно и сервер.
+ * Снятое «как можно скорее» — это всегда новое окно, даже если поля остались прежними: окно такой заявке задал
+ * сервер, клиенту его не называли, и обещанием оно стать не может, пока диспетчер не выбрал слот.
+ */
+export function validateRequestEdit(
+  original: ServiceRequest,
+  form: RequestEditForm,
+  time: HHMM,
+  grid: TimeSlot[] = [],
+): string[] {
+  const kept =
+    form.asap === original.asap && form.windowStart === original.window_start && form.windowEnd === original.window_end;
+  const errors = visitErrors(form, kept ? [] : grid, time);
   const timeProblem = timeError(time);
   if (timeProblem) errors.push(timeProblem);
   else if (requestChanges(original, updatedRequest(original, form)).length === 0) errors.push('Ничего не изменилось');

@@ -132,7 +132,7 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
 
     # Пока предложения ждали, диспетчер сам сдвинул окно R2 и пересадил E1 на пешую работу. Прежнее значение «foot»
     # (старый клиент) принимается как общественный транспорт и пешком.
-    moved = {**before, "window_start": "15:00", "window_end": "17:00"}
+    moved = {**before, "window_start": "16:00", "window_end": "18:00"}
     manual = [
         {"type": "request_updated", "time": "13:00", "request_id": "R2", "request": moved},
         {"type": "engineer_transport_changed", "time": "13:00", "engineer_id": "E1", "transport": "foot"},
@@ -151,8 +151,8 @@ def test_approved_proposals_keep_the_applied_event(tmp_path):
     assert [approved_edit["event"], approved_transport["event"]] == applied
     assert approved_edit["event"]["previous_request"] == {
         **moved,
-        "window_start": "15:00",
-        "window_end": "17:00",
+        "window_start": "16:00",
+        "window_end": "18:00",
     }
     assert approved_edit["event"]["request"] == {**before, "duration_min": 90}
     assert (approved_transport["event"]["previous_transport"], approved_transport["event"]["transport"]) == (

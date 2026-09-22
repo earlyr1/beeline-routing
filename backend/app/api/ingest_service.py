@@ -10,7 +10,7 @@ import logging
 import threading
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -21,6 +21,7 @@ from app.domain.models import Bundle, Request
 from app.ingest.beeline_csv import RawFile, RawRequestRow, parse_beeline_csv
 from app.ingest.bundle import load_bundle
 from app.ingest.geocode import GeoResult
+from app.ingest.window_check import check_windows
 from app.planning.session import PlanningContext, start_session
 from app.solvers.problem import make_problem
 from app.synth.config import SynthConfig
@@ -28,6 +29,9 @@ from app.synth.requests import build_requests
 
 GeocodeFn = Callable[[str, str], GeoResult]
 logger = logging.getLogger(__name__)
+
+# Сколько причин пропуска уходит в текст ошибки, когда в файле не осталось ни одной заявки.
+SKIPPED_IN_ERROR = 3
 
 
 class BundleStore:
@@ -62,6 +66,14 @@ class BundleStore:
         self.all()
         with self._lock:
             return region in self._broken
+
+
+@dataclass(frozen=True)
+class FileNotes:
+    """Что отчёт разбора говорит о самом файле: пропущенные строки и замечания к окнам заявок."""
+
+    skipped: list[str] = field(default_factory=list)
+    windows: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -198,9 +210,35 @@ def _bundle_day(record: DatasetRecord, bundle: Bundle, deps: IngestDeps) -> Prep
     )
 
 
+def _nothing_left(raw: RawFile) -> str:
+    """Почему в файле не осталось заявок: пустой он или его целиком съели пропущенные строки.
+
+    Причины пропуска дальше нигде не покажутся — отчёта разбора у неудавшейся загрузки нет, — поэтому первые
+    из них идут прямо в текст ошибки: диспетчеру важно понять, что дело в окнах, а не в формате файла.
+    """
+    if not raw.skipped:
+        return "В файле нет ни одной заявки."
+    shown = "; ".join(raw.skipped[:SKIPPED_IN_ERROR])
+    tail = " …" if len(raw.skipped) > SKIPPED_IN_ERROR else ""
+    return f"В файле нет ни одной заявки: пропущены все строки ({len(raw.skipped)}). {shown}{tail}"
+
+
+def _is_reference_file(raw: RawFile, reference: Bundle) -> bool:
+    """Файл — та самая выгрузка, из которой собран бандл региона: те же заявки и те же окна.
+
+    Только тогда можно взять готовый бандл с контрольным распределением диспетчеров вместо разбора файла.
+    Совпадения одних номеров мало: подправленное в Excel окно номера заявки не меняет, и день построился бы
+    по окнам бандла, а не по окнам файла — ровно та тихая подмена данных, которой мы не делаем. У восьми
+    файлов `data/raw` окна выгрузки и окна бандла совпадают, так что нетронутый файл остаётся на этом пути.
+    """
+    return [(row.request_id, row.window_start, row.window_end) for row in raw.rows] == [
+        (request.id, request.window_start, request.window_end) for request in reference.requests
+    ]
+
+
 def _read_upload(
     record: DatasetRecord, filename: str, data: bytes, deps: IngestDeps
-) -> tuple[PreparedDay, str, list[str]]:
+) -> tuple[PreparedDay, str, FileNotes]:
     if filename.lower().endswith(".json"):
         try:
             bundle = Bundle.model_validate_json(data)
@@ -210,18 +248,23 @@ def _read_upload(
             message = str(first["msg"]).removeprefix("Value error, ")
             detail = f"{location}: {message}" if location else message
             raise ValueError(f"JSON не соответствует схеме бандла: {detail}") from error
-        return _bundle_day(record, bundle, deps), "bundle", []
+        return _bundle_day(record, bundle, deps), "bundle", FileNotes()
 
     raw = parse_beeline_csv(data)
     if raw.is_control:
         raise ValueError("Это файл «Контрольное распределение». Загрузите «Синтетические данные» региона.")
+    # Повторы уносятся до проверки окон: замечание про окно строки, которой в дне всё равно не будет, диспетчера
+    # только запутает, да и знаменатель «столько-то из скольких» должен считать заявки дня.
+    raw = _drop_repeated_ids(raw)
+    # Окна выгрузки проверяются до всего остального, но не правятся: строка, в окне которой работать нельзя,
+    # выпадает, остальные замечания уходят в отчёт разбора (app/ingest/window_check.py).
+    raw = check_windows(deps.synth_config, raw)
     if not raw.rows:
-        raise ValueError("В файле нет ни одной заявки.")
+        raise ValueError(_nothing_left(raw))
     reference = detect_region(raw, deps.bundles.all())
-    if [row.request_id for row in raw.rows] == [request.id for request in reference.requests]:
+    if _is_reference_file(raw, reference):
         requests, control = list(reference.requests), reference.control_plan
     else:
-        raw = _drop_repeated_ids(raw)
         _set(record, stage="geocoding", done=0, total=len(raw.rows))
         requests = build_requests(deps.synth_config, raw, _counting_geocoder(record, deps.geocode))
         control = None
@@ -234,17 +277,17 @@ def _read_upload(
         control,
         is_generated(deps, reference.region),
     )
-    return day, "beeline_csv", raw.skipped
+    return day, "beeline_csv", FileNotes(raw.skipped, raw.window_warnings)
 
 
-ReadDay = Callable[[], tuple[PreparedDay, str, list[str]]]
+ReadDay = Callable[[], tuple[PreparedDay, str, FileNotes]]
 
 
 def _preprocess(record: DatasetRecord, read: ReadDay, deps: IngestDeps) -> None:
-    """Общий путь дня: read даёт заявки и бригады, дальше матрица, план начала дня и отчёт предподсчёта."""
+    """Общий путь дня: read даёт заявки, бригады и замечания к файлу, дальше матрица, план и отчёт."""
     try:
         _set(record, stage="parsing")
-        day, source, skipped = read()
+        day, source, notes = read()
         _set(record, stage="matrix")
         ctx = deps.planning
         problem = make_problem(
@@ -268,7 +311,8 @@ def _preprocess(record: DatasetRecord, read: ReadDay, deps: IngestDeps) -> None:
             generated=day.generated,
             requests=len(day.requests),
             engineers=len(day.engineers),
-            skipped_rows=skipped,
+            skipped_rows=notes.skipped,
+            window_warnings=notes.windows,
             geocoding=GeocodingCounts(
                 house=precision["house"],
                 street=precision["street"],
@@ -298,4 +342,4 @@ def preprocess_upload(record: DatasetRecord, filename: str, data: bytes, deps: I
 
 def preprocess_scenario(record: DatasetRecord, bundle: Bundle, deps: IngestDeps) -> None:
     """Предподсчёт подготовленного региона: тот же путь, что у загруженного бандла, только файл не разбирается."""
-    _preprocess(record, lambda: (_bundle_day(record, bundle, deps), "scenario", []), deps)
+    _preprocess(record, lambda: (_bundle_day(record, bundle, deps), "scenario", FileNotes()), deps)

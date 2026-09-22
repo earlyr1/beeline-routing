@@ -112,15 +112,28 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
     if not fitting:
         state, sim = min(solo, key=lambda pair: (pair[1].visits[0].start, pair[1].visits[0].end))
         visit = sim.visits[0]
-        lead = "Сегодня не успеть" if request.asap else f"Работа не помещается в окно {window} или в смену"
         # Без обеда инженер успел бы: не помещается именно обед.
         lunch_note = "и с учётом обеда " if sim.lunch_conflict else ""
-        return result(
-            ReasonCode.DOES_NOT_FIT,
-            f"{lead}: даже без других заявок {lunch_note}"
-            f"{state.engineer.name} начнёт не раньше {fmt_hhmm(visit.start)} и закончит в "
-            f"{fmt_hhmm(visit.end)} (смена до {fmt_hhmm(state.available_until)}).",
+        detail = (
+            f"без других заявок {lunch_note}{state.engineer.name} начнёт не раньше {fmt_hhmm(visit.start)} "
+            f"и закончит в {fmt_hhmm(visit.end)} (смена до {fmt_hhmm(state.available_until)})."
         )
+        # Короткое окно приезда — это уже не про маршрут, а про данные, и диспетчеру важнее услышать про окно,
+        # чем общее «не помещается». Окна из выгрузки мы не подменяем (app/ingest/window_check.py), поэтому
+        # причина называет те же числа, что и замечание отчёта разбора. Но говорим так, только когда бригада
+        # в окно и правда не успевает приехать (visit.late_min): если она приезжает вовремя, а не помещается
+        # смена, виновато не окно — например, у слота 20:00–22:00, который диспетчер сам выбрал в сетке, длиннее
+        # двух часов варианта нет, и совет «возьмите окно подлиннее» был бы тупиком.
+        length = request.window_end - request.window_start
+        if not request.asap and visit.late_min and length < request.duration_min:
+            kind = f" по типу «{request.source_type_bk}»" if request.source_type_bk else ""
+            return result(
+                ReasonCode.DOES_NOT_FIT,
+                f"Окно приезда {window} — всего {length} мин, бригада должна попасть ровно в них, "
+                f"а работ{kind} на {request.duration_min} мин. Даже {detail}",
+            )
+        lead = "Сегодня не успеть" if request.asap else f"Работа не помещается в окно {window} или в смену"
+        return result(ReasonCode.DOES_NOT_FIT, f"{lead}: даже {detail}")
 
     finish, state = min(
         ((simulate_route(problem, s, sequences.get(s.engineer.id, [])).end_time, s) for s in fitting),

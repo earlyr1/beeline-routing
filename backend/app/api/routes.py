@@ -30,8 +30,10 @@ from app.api.timeline import (
     planning_state,
     settle,
 )
-from app.domain.models import Event
+from app.domain.enums import EventType, Priority, request_label
+from app.domain.models import Event, Request
 from app.domain.timeutil import fmt_hhmm
+from app.domain.windows import is_slot, off_grid_text
 from app.planning.explain import build_explanation
 from app.planning.models import EventChoice, Explanation
 from app.planning.session import (
@@ -77,6 +79,50 @@ def _check_known(record: DatasetRecord, event: Event) -> None:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
 
+def window_grid_problem(deps: AppDeps, event: Event, known: dict[str, Request]) -> str | None:
+    """Чем окно события не годится диспетчеру, или None — годится; отказ один и у API, и у помощника.
+
+    Правило живёт в слое API, потому что сетка — правило разговора с клиентом, а не модели: диспетчер предлагает
+    клиенту слот, поэтому произвольный интервал сервер не принимает, что бы ни прислал клиент.
+
+    Проверяются ровно два события со своей заявкой: срочная заявка (окно у неё всегда новое) и изменение заявки,
+    и только если окно в нём действительно выбирают. Заявка «как можно скорее» не проверяется: её окно задаёт
+    сервер, от времени события до конца смен, и слотом оно не бывает. А вот обратный переход проверяется: окно
+    сервера клиенту не называли, поэтому снять «как можно скорее» можно, только выбрав слот.
+
+    Заявки ДАННЫХ сеткой не проверяются вовсе — ни при загрузке выгрузки и бандла, ни в контрольных файлах:
+    настоящие данные и есть источник правды. У аварий выгрузки там стоит весь день, 00:01–23:59, и такая заявка
+    должна и дальше и планироваться, и редактироваться; поэтому изменение с тем же окном сетку не задевает.
+    """
+    grid = deps.ingest.synth_config.window_grid
+    request = event.request
+    if not grid or request is None or request.asap:
+        return None
+    if event.type not in (EventType.URGENT, EventType.REQUEST_UPDATED):
+        return None
+    stored = known.get(event.request_id or request.id)
+    if (
+        event.type == EventType.REQUEST_UPDATED
+        and stored is not None
+        and not stored.asap
+        and (stored.window_start, stored.window_end) == (request.window_start, request.window_end)
+    ):
+        return None
+    if is_slot(grid, request.window_start, request.window_end):
+        return None
+    # Срочная заявка у диспетчера всегда «URG-<номер>»: приоритет ей ставит сервер, что бы ни прислал клиент.
+    priority = Priority.URGENT if event.type == EventType.URGENT else (stored or request).priority
+    label = request_label(request.id, priority)
+    return off_grid_text(label, request.window_start, request.window_end, grid)
+
+
+def _check_window_grid(deps: AppDeps, event: Event, known: dict[str, Request]) -> None:
+    """Окно, которое ВЫБРАЛ диспетчер, должно быть слотом сетки окон (app/domain/windows.py). Иначе 422."""
+    problem = window_grid_problem(deps, event, known)
+    if problem is not None:
+        raise HTTPException(status_code=422, detail=problem)
+
+
 def _check_variant(record: DatasetRecord, event: Event, variant: str) -> None:
     try:
         check_variant(record, event, variant)
@@ -97,6 +143,8 @@ def client_config(deps: Deps) -> ClientConfig:
         osrm_available=deps.osrm.health() if deps.osrm is not None else False,
         # Нормативы из того же конфига, по которому собраны бандлы дня.
         work_types=urgent_work_types(deps.ingest.synth_config),
+        # Сетка окон визита оттуда же: диалоги фронтенда выбирают окно из этих слотов, своих у них нет.
+        window_grid=deps.ingest.synth_config.window_grid,
     )
 
 
@@ -203,6 +251,7 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
     with record.lock:
         _session(record)
         requests = known_requests(record.base, record.timeline.entries)
+    _check_window_grid(deps, event, requests)
     # Геокодер может отвечать долго: адрес срочной заявки и новый адрес изменённой заявки ищем до блокировок
     # датасета, чтобы не держать остальные запросы к нему. При пересчётах геокодер больше не вызывается, даже если
     # адрес не нашёлся.
@@ -253,6 +302,7 @@ def add_timeline_event(
         if variant is not None:
             _check_variant(record, event, variant)
         requests = known_requests(record.base, record.timeline.entries)
+    _check_window_grid(deps, event, requests)
     event, geo = geocode_entry(event, requests, ctx)
     try:
         with record.timeline_lock:
