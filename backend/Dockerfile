@@ -15,6 +15,9 @@ RUN uv sync --frozen --no-dev
 COPY backend/ ./
 COPY data/bundles /app/data/bundles
 COPY data/geocode_cache.json /app/data/geocode_cache.json
+# Матрицы общественного транспорта 2ГИС (© 2ГИС, демо-ключ, некоммерческое использование):
+# в образе, чтобы сервис считал одинаково на любой машине и без сети.
+COPY data/transit /app/data/transit
 
 EXPOSE 8001
 CMD ["uvicorn", "app.api.main:app", "--host", "0.0.0.0", "--port", "8001"]

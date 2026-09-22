@@ -3,8 +3,6 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 data/cache.sqlite
-# Матрицы времени на общественном транспорте от 2ГИС по регионам: условия API запрещают хранить результаты
-data/transit/
 node_modules/
 frontend/dist/
 .env
