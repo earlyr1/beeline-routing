@@ -222,7 +222,12 @@ jobs:
             jq -r .access_token | docker login --username iam --password-stdin cr.yandex
           trap 'docker logout cr.yandex >/dev/null' EXIT
           compose pull --quiet
-          compose up -d --no-build --remove-orphans
+          # up ждёт здоровья backend (миграции, загрузка данных): если не дождался, в лог job — хвост его лога.
+          if ! compose up -d --no-build --remove-orphans; then
+            compose ps
+            compose logs --tail 80 backend postgres
+            exit 1
+          fi
           compose ps
           EOF
 
