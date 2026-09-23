@@ -7,7 +7,7 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 import * as api from '../api/client';
-import { cancelEvent, reassignEvent, restoreEvent } from '../lib/events';
+import { cancelEvent, reassignEvent } from '../lib/events';
 import { useAppStore } from '../store/useAppStore';
 import { makeAsapState, makeDataUrgentState, makeExplanation, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
@@ -67,10 +67,10 @@ describe('ExplanationCard', () => {
     expect(useAppStore.getState().editingRequestId).toBe('50104');
   });
 
-  it('cancels the request from the header next to «Изменить» at the time on the clock', async () => {
-    const applyEvent = vi.fn().mockResolvedValue(true);
+  it('cancels the request from the header next to «Изменить» at the time on the clock, through the undo notice', async () => {
+    const cancelRequest = vi.fn();
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '13:30', applyEvent });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '13:30', cancelRequest });
     render(<ExplanationCard />);
     await screen.findByText(/Назначена Бригада Арташкин/);
     expect(headerActions().map((button) => button.textContent)).toEqual(['Изменить', 'Отменить', '✕']);
@@ -78,19 +78,18 @@ describe('ExplanationCard', () => {
     expect(cancel).toBeEnabled();
     expect(cancel).not.toHaveAttribute('title');
     fireEvent.click(cancel);
-    expect(applyEvent).toHaveBeenCalledWith(cancelEvent('50104', '13:30'));
+    expect(cancelRequest).toHaveBeenCalledWith(cancelEvent('50104', '13:30'));
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
-  it('restores a cancelled request from the header at the time on the clock, even before the time of the plan', async () => {
-    const applyEvent = vi.fn().mockResolvedValue(true);
+  it('offers neither «Отменить» nor «Вернуть» for a cancelled request: restoring is not in the interface', async () => {
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation({ request_id: '10135', status: 'cancelled', visit: null }));
-    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '10135', clock: '12:00', applyEvent });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '10135', clock: '12:00' });
     render(<ExplanationCard />);
     await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(headerActions().map((button) => button.textContent)).toEqual(['Изменить', '✕']);
     expect(screen.queryByRole('button', { name: 'Отменить' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Вернуть' }));
-    expect(applyEvent).toHaveBeenCalledWith(restoreEvent('10135', '12:00'));
+    expect(screen.queryByRole('button', { name: 'Вернуть' })).not.toBeInTheDocument();
   });
 
   it('treats a visit that started before the clock as started work, like the server', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ServiceRequest } from '../api/types';
+import type { PlanEvent, ServiceRequest } from '../api/types';
 import {
   makeAsapRequest,
   makeDataUrgentState,
@@ -39,7 +39,6 @@ import {
   requestChanges,
   requestEditForm,
   requestUpdateEvent,
-  restoreEvent,
   timeError,
   transportChangeEvent,
   unavailableEvent,
@@ -207,9 +206,8 @@ describe('events', () => {
     expect(latestShiftEnd([])).toBeNull();
   });
 
-  it('builds cancel, restore and unavailability events', () => {
+  it('builds cancel and unavailability events', () => {
     expect(cancelEvent('1', '14:00')).toEqual({ type: 'cancel', time: '14:00', request: null, request_id: '1', engineer_id: null });
-    expect(restoreEvent('1', '14:00').type).toBe('restore');
     expect(unavailableEvent('E01', '14:00')).toMatchObject({ type: 'engineer_unavailable', engineer_id: 'E01', request_id: null });
   });
 
@@ -300,7 +298,9 @@ describe('events', () => {
     const cancel = cancelEvent('50104', '13:30');
     expect(cancel.request_id).toBe('50104');
     expect(describeEvent(cancel, engineers, requests)).toBe('Отмена заявки URG-50104 в 13:30');
-    expect(describeEvent(restoreEvent('50104', '13:30'), engineers, requests)).toBe('Возврат заявки URG-50104 в 13:30');
+    // Возврат интерфейс больше не ставит, но в днях, сохранённых раньше, он есть: шкала подписывает его как прежде.
+    const restore: PlanEvent = { ...cancel, type: 'restore' };
+    expect(describeEvent(restore, engineers, requests)).toBe('Возврат заявки URG-50104 в 13:30');
     expect(describeEvent(reassignEvent('50104', 'E02', '13:30'), engineers, requests)).toBe(
       'Переназначение заявки URG-50104 → Бригада Белузин с 13:30',
     );
@@ -530,7 +530,7 @@ describe('request update', () => {
     expect(isWorkStarted(requestOf('18754'), undefined, '23:00')).toBe(false);
   });
 
-  it('shares one rule for the edit, cancel and restore buttons of a request at the clock', () => {
+  it('shares one rule for the edit and cancel buttons of a request at the clock, with no restore for a cancelled one', () => {
     const visits = assignmentIndex(state.plan);
     const idle = { busy: false, clock: '13:30' };
     const actionsOf = (id: string, patch = {}) => requestActionState(requestOf(id), visits.get(id)?.visit, { ...idle, ...patch });
@@ -540,10 +540,11 @@ describe('request update', () => {
       disabled: false,
       editTitle: undefined,
       cancelTitle: undefined,
-      cancelLabel: 'Отменить',
       cancelEvent: cancelEvent('50104', '13:30'),
     });
-    expect(actionsOf('10135')).toMatchObject({ cancelled: true, disabled: false, cancelLabel: 'Вернуть', cancelEvent: restoreEvent('10135', '13:30') });
+    // Отменённая заявка помечена: кнопки «Отменить» у неё нет, а «Вернуть» интерфейс больше не предлагает.
+    expect(actionsOf('10135')).toMatchObject({ cancelled: true, disabled: false });
+    expect(actionsOf('10135')).not.toHaveProperty('cancelLabel');
     expect(actionsOf('50104', { clock: '08:15' }).cancelEvent).toEqual(cancelEvent('50104', '08:15'));
     expect(actionsOf('50104', { clock: '14:30' })).toMatchObject({
       disabled: true,

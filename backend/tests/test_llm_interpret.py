@@ -3,8 +3,9 @@ from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
 from app.ingest.geocode import GeoResult
 from app.llm.client import LlmResult, ToolCall
-from app.llm.interpret import NOTHING_FOUND, interpret
+from app.llm.interpret import NOTHING_FOUND, RESTORE_UNSUPPORTED, interpret, nothing_found
 from app.llm.prompt import build_messages
+from app.llm.tools import TOOL_NAMES
 from app.planning.session import apply_event
 from tests.helpers import req
 from tests.llm_helpers import ids, named_session
@@ -55,10 +56,36 @@ def test_ambiguous_or_unknown_names_become_clarifications():
 
 
 def test_conflicts_with_day_state_become_failed_drafts():
-    out = run(
-        [ToolCall("propose_restore", {"request_id": "R2", "time": "13:00", "rationale": "Снова в силе"})]
+    ctx = context()
+    session = apply_event(
+        named_session(ctx), Event(type=EventType.CANCEL, time="12:00", request_id="R2"), ctx
     )
-    assert out.drafts[0].error == "Заявка R2 не отменена, возвращать нечего."
+    out = run(
+        [ToolCall("propose_cancel", {"request_id": "R2", "time": "13:00", "rationale": "Отказ"})],
+        ctx=ctx,
+        session=session,
+    )
+    assert out.drafts[0].error == "Заявка R2 уже отменена."
+
+
+def test_restoring_a_cancelled_request_is_not_offered_and_is_answered_honestly():
+    # Инструмента возврата у помощника нет, а правила говорят модели переспросить, а не молчать.
+    assert "propose_restore" not in TOOL_NAMES
+    system, _ = build_messages("Верните заявку R2", named_session(context()))
+    assert "возврат отменённой заявки не поддерживается" in system["content"]
+    assert "propose_restore" not in system["content"]
+    # Модель со старой памятью назвала прежний инструмент: предложения нет, есть честный ответ.
+    out = run([ToolCall("propose_restore", {"request_id": "R2", "rationale": "Снова в силе"})])
+    assert out.drafts == []
+    assert out.clarifications == [RESTORE_UNSUPPORTED]
+    assert "возврат" not in NOTHING_FOUND
+
+
+def test_a_restore_request_with_no_answer_from_the_model_gets_the_honest_refusal():
+    for text in ("вернуть заявку 57866", "Верните 57866, клиент передумал", "57866 снова в силе"):
+        assert nothing_found(text) == RESTORE_UNSUPPORTED
+    for text in ("Как дела?", "Всё верно", "Вернулся из отпуска"):
+        assert nothing_found(text) == NOTHING_FOUND
 
 
 def test_transport_change_by_surname_becomes_pending_draft():

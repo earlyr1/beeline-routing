@@ -31,8 +31,8 @@ import type {
   TimelineItem,
 } from '../api/types';
 import { agreedWindow } from '../lib/communications';
-import type { PickedPoint } from '../lib/events';
-import { fromMinutes, isValidTime, toMinutes } from '../lib/format';
+import { eventRequestId, type PickedPoint } from '../lib/events';
+import { fromMinutes, isValidTime, requestLabel, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
 import { NO_TIMELINE_MOVE, newlyRejected, pausesAt, playEnd, rejectedNotice, timelineMove, type TimelineMove } from '../lib/timeBar';
 import { dayScale } from '../lib/timeline';
@@ -44,6 +44,8 @@ export const POLL_INTERVAL_MS = 1000;
 export const POLL_RETRIES = 3;
 /** Ключ localStorage с набором данных открытого плана: план переживает перезагрузку страницы и закрытие браузера. */
 export const SESSION_DATASET_KEY = 'routing.datasetId';
+/** Сколько отмена заявки ждёт в уведомлении, прежде чем уйти на сервер: время передумать после мисклика. */
+export const CANCEL_UNDO_MS = 5000;
 /** Шаг проигрывания дня: минута плана за 100 мс, то есть час дня за 6 секунд. */
 export const PLAY_TICK_MS = 100;
 /** Часы до первого ответа сервера: плана ещё нет, и шкалы дня, на начало которой их поставить, тоже. */
@@ -62,6 +64,20 @@ export interface EngineerDialog {
   kind: EngineerDialogKind;
   /** Инженер со страницы бригады. */
   engineerId: string;
+}
+
+/**
+ * Отмена заявки, которая ещё не ушла на сервер: уведомление ждёт CANCEL_UNDO_MS, и диспетчер может её не делать.
+ * Событие собрано в момент клика — со временем часов и выбором диспетчера — и уходит без изменений.
+ */
+export interface PendingCancel {
+  event: PlanEvent;
+  /** Стратегия, которую диспетчер выбрал до уведомления (вкладка «Коммуникации»); без неё — как у кнопки «Отменить». */
+  variant?: EventVariant;
+  /** Номер заявки, как его подписывает интерфейс: у срочной заявки дня с приставкой «URG-». */
+  label: string;
+  /** Когда отмена применится сама, по Date.now(). */
+  deadline: number;
 }
 
 /** Поиск адреса по точке срочной заявки: idle — не искали, loading — ждём ответ, done — ответ пришёл. */
@@ -133,6 +149,8 @@ export interface AppData {
    * С ним вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда окно снова уедет.
    */
   agreed: AgreedWindows;
+  /** Отмена заявки в уведомлении «Заявка … отменена»: на сервер она ещё не ушла. */
+  pendingCancel: PendingCancel | null;
 }
 
 export interface AppActions {
@@ -148,6 +166,15 @@ export interface AppActions {
    * variant — стратегия события сразу, без окна выбора: так отменяется заявка отказавшегося клиента.
    */
   applyEvent(event: PlanEvent, variant?: EventVariant): Promise<boolean>;
+  /**
+   * Отменить заявку с отсрочкой: событие не уходит на сервер, пока идёт уведомление с отсчётом CANCEL_UNDO_MS.
+   * Ожидающая отмена другой заявки применяется сразу, одновременно ждёт только одна.
+   */
+  cancelRequest(event: PlanEvent, variant?: EventVariant): void;
+  /** «✓» в уведомлении или конец отсчёта: отправить ожидающую отмену сейчас. */
+  confirmCancel(): Promise<boolean>;
+  /** «✕» или Esc в уведомлении: отмены не было, на сервер ничего не уходит. */
+  undoCancel(): void;
   /** Сброс событий: все события шкалы убираются, план — утренний, часы на начале дня. */
   resetEvents(): Promise<boolean>;
   /** Убрать событие со шкалы дня. */
@@ -256,6 +283,7 @@ export const initialAppData: AppData = {
   workloadLevel: DEFAULT_WORKLOAD_LEVEL,
   lunchEnabled: DEFAULT_LUNCH_ENABLED,
   agreed: {},
+  pendingCancel: null,
 };
 
 /** Плавающие диалоги открываются на одном месте, поэтому открытый диалог закрывает остальные. */
@@ -381,6 +409,13 @@ let playTimer: ReturnType<typeof setInterval> | null = null;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 /** Поколение, чей опрос состояния сейчас ждёт ответа; -1 — никакой. */
 let pollInFlight = -1;
+/** Отсчёт уведомления об отмене заявки: по нему ожидающая отмена уходит на сервер. */
+let cancelTimer: ReturnType<typeof setTimeout> | null = null;
+
+function stopCancelTimer(): void {
+  if (cancelTimer !== null) clearTimeout(cancelTimer);
+  cancelTimer = null;
+}
 
 function stopTicking(): void {
   if (playTimer !== null) clearInterval(playTimer);
@@ -402,6 +437,7 @@ export function resetAppSession(): void {
   if (pollTimer !== null) clearTimeout(pollTimer);
   pollTimer = null;
   pollInFlight = -1;
+  stopCancelTimer();
 }
 
 export const useAppStore = create<AppState>()((set, get) => {
@@ -612,6 +648,8 @@ export const useAppStore = create<AppState>()((set, get) => {
       mapMenu: null,
       ...NO_ADDRESS_LOOKUP,
       ...NO_CHOICE,
+      // Другой день: отмена заявки прежнего дня пропадает, не уходя на сервер (отсчёт снял resetAppSession).
+      pendingCancel: null,
     });
     try {
       const status = await send();
@@ -662,6 +700,8 @@ export const useAppStore = create<AppState>()((set, get) => {
       if (!datasetId) return;
       // Пересчёт с нуля ставит часы на начало дня: идущие часы останавливаются без фиксации.
       get().stopPlayback();
+      // Пересчёт с нуля очищает шкалу дня: ожидающая отмена ушла бы на неё задним числом, поэтому она пропадает.
+      get().undoCancel();
       const current = generation;
       set({ busy: true, error: null, ...NO_CHOICE });
       try {
@@ -712,11 +752,47 @@ export const useAppStore = create<AppState>()((set, get) => {
       }
     },
 
+    cancelRequest(event, variant) {
+      const pending = get().pendingCancel;
+      const requestId = eventRequestId(event);
+      // Повторный клик по той же заявке, пока идёт её уведомление, ничего не меняет: отсчёт продолжается.
+      if (pending && eventRequestId(pending.event) === requestId) return;
+      // Одновременно ждёт одна отмена: прежняя применяется сразу, новая начинает свой отсчёт.
+      if (pending) void get().confirmCancel();
+      const priority = get().state?.requests.find((request) => request.id === requestId)?.priority;
+      set({
+        pendingCancel: {
+          event,
+          ...(variant === undefined ? {} : { variant }),
+          label: requestLabel(requestId ?? '', priority),
+          deadline: Date.now() + CANCEL_UNDO_MS,
+        },
+      });
+      stopCancelTimer();
+      cancelTimer = setTimeout(() => void get().confirmCancel(), CANCEL_UNDO_MS);
+    },
+
+    confirmCancel() {
+      const pending = get().pendingCancel;
+      stopCancelTimer();
+      if (!pending) return Promise.resolve(false);
+      set({ pendingCancel: null });
+      // Время события — время часов в момент клика: за секунды уведомления часы могли уйти дальше.
+      return get().applyEvent(pending.event, pending.variant);
+    },
+
+    undoCancel() {
+      stopCancelTimer();
+      if (get().pendingCancel) set({ pendingCancel: null });
+    },
+
     async resetEvents() {
       const { datasetId } = get();
       if (!datasetId) return false;
       // Сброс ставит часы на начало дня: идущие часы останавливаются без фиксации, окно выбора закрывается.
       get().stopPlayback();
+      // Сброс убирает все события шкалы: ожидающая отмена исчезла бы вместе с ними, на сервер она не уходит.
+      get().undoCancel();
       const current = generation;
       set({ busy: true, error: null, ...NO_CHOICE });
       try {
@@ -1097,3 +1173,12 @@ export const useAppStore = create<AppState>()((set, get) => {
     },
   };
 });
+
+/**
+ * Ожидающая отмена заявки живёт только в памяти вкладки и в хранилище браузера не попадает: перезагрузка страницы
+ * или уход с неё отменяют её, а не отправляют, — диспетчер не подтвердил отмену и не дождался отсчёта.
+ * pagehide нужен ради кэша страниц браузера: вернувшись по «Назад», вкладка иначе дождалась бы старого отсчёта.
+ */
+if (typeof window !== 'undefined') {
+  window.addEventListener('pagehide', () => useAppStore.getState().undoCancel());
+}

@@ -29,7 +29,9 @@ describe('RequestsTab', () => {
     expect(within(urgent).getByText('Новое назначение')).toBeInTheDocument();
 
     expect(within(rowOf('18754')).getByText('Не назначена')).toBeInTheDocument();
-    expect(within(rowOf('10135')).getByRole('button', { name: 'Вернуть' })).toBeEnabled();
+    // Отменённая заявка без кнопок отмены и возврата: передумать можно только в уведомлении сразу после отмены.
+    expect(within(rowOf('10135')).queryByRole('button', { name: 'Вернуть' })).not.toBeInTheDocument();
+    expect(within(rowOf('10135')).queryByRole('button', { name: 'Отменить' })).not.toBeInTheDocument();
   });
 
   it('метит подключение уровнем распределения, а ремонт и аварию не метит', () => {
@@ -44,9 +46,9 @@ describe('RequestsTab', () => {
   });
 
   it('shows an urgent request of the day as URG-… and keeps the raw number in the event and in the store', () => {
-    const applyEvent = vi.fn().mockResolvedValue(true);
+    const cancelRequest = vi.fn();
     resetStore({ datasetId: 'd_test', state: makeDataUrgentState(), clock: '13:30' });
-    useAppStore.setState({ applyEvent });
+    useAppStore.setState({ cancelRequest });
     render(<RequestsTab />);
     const urgent = rowOf('URG-50104');
     expect(within(urgent).getByText('Срочная')).toBeInTheDocument();
@@ -56,17 +58,17 @@ describe('RequestsTab', () => {
     expect(screen.queryByText('URG-URG-001')).not.toBeInTheDocument();
 
     fireEvent.click(within(urgent).getByRole('button', { name: 'Отменить' }));
-    expect(applyEvent).toHaveBeenCalledWith({ type: 'cancel', time: '13:30', request: null, request_id: '50104', engineer_id: null });
+    expect(cancelRequest).toHaveBeenCalledWith({ type: 'cancel', time: '13:30', request: null, request_id: '50104', engineer_id: null });
     fireEvent.click(urgent);
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
   it('cancels a request at the chosen event time without selecting the row', () => {
-    const applyEvent = vi.fn().mockResolvedValue(true);
-    useAppStore.setState({ applyEvent });
+    const cancelRequest = vi.fn();
+    useAppStore.setState({ cancelRequest });
     render(<RequestsTab />);
     fireEvent.click(within(rowOf('50104')).getByRole('button', { name: 'Отменить' }));
-    expect(applyEvent).toHaveBeenCalledWith({ type: 'cancel', time: '13:30', request: null, request_id: '50104', engineer_id: null });
+    expect(cancelRequest).toHaveBeenCalledWith({ type: 'cancel', time: '13:30', request: null, request_id: '50104', engineer_id: null });
     expect(useAppStore.getState().selectedRequestId).toBeNull();
   });
 

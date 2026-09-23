@@ -28,7 +28,7 @@ import type { DatasetStatus, EventChoice, PlanningState, ReverseGeocode, Timelin
 import { cancelEvent, reassignEvent } from '../lib/events';
 import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem, makeUrgentChoice, makeVariantOption } from '../test/fixtures';
 import { resetStore } from '../test/store';
-import { LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
+import { CANCEL_UNDO_MS, LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
 
 /** План на время дня cursor. */
 const at = (cursor: string, patch: Partial<PlanningState> = {}) => makePlanningState({ cursor, ...patch });
@@ -1157,6 +1157,21 @@ describe('agreed windows of the calls to clients', () => {
     vi.mocked(api.addTimelineEvent).mockResolvedValue(makePlanningState({ version: 5 }));
     expect(await useAppStore.getState().applyEvent(cancelEvent('50104', '13:00'), 'keep')).toBe(true);
     expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '13:00'), 'keep');
+  });
+
+  it.each([
+    ['«Сброс событий»', () => useAppStore.getState().resetEvents(), () => vi.mocked(api.clearTimeline)],
+    ['пересчёт с нуля', () => useAppStore.getState().plan(), () => vi.mocked(api.buildPlan)],
+  ])('drops a cancel still in its notice on %s: the timeline is emptied anyway', async (_, run, request) => {
+    vi.useFakeTimers();
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+    request().mockResolvedValue(makePlanningState({ timeline: [], cursor: '09:00' }));
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ timeline: [], cursor: '09:00' }));
+    useAppStore.getState().cancelRequest(cancelEvent('50104', '13:00'), 'keep');
+    await run();
+    expect(useAppStore.getState().pendingCancel).toBeNull();
+    await vi.advanceTimersByTimeAsync(CANCEL_UNDO_MS * 2);
+    expect(api.addTimelineEvent).not.toHaveBeenCalled();
   });
 });
 

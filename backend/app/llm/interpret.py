@@ -36,8 +36,19 @@ from app.planning.session import (
 )
 
 NOTHING_FOUND = (
-    "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена или возврат заявки, "
+    "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена заявки, "
     "срочная заявка, изменение заявки, недоступность инженера, смена транспорта или задержка инженера."
+)
+# Возврат отменённой заявки убран из интерфейса и из инструментов помощника: передумать можно только в уведомлении
+# сразу после отмены. На просьбу вернуть помощник честно говорит, что так нельзя, а не молчит.
+RESTORE_UNSUPPORTED = (
+    "Вернуть отменённую заявку нельзя: передумать можно только в первые 5 секунд после отмены, в уведомлении. "
+    "Если клиент снова ждёт визит, добавьте срочную заявку."
+)
+# Инструмент возврата, которого больше нет: модель со старой памятью ещё может его назвать.
+LEGACY_RESTORE_TOOL = "propose_restore"
+_RESTORE_WORDS = re.compile(
+    r"\bверн(?:и|ите|уть|ём|ем|ёт|ет|ул|ула|ули)\b|снова в силе|\bвозврат", re.IGNORECASE
 )
 URGENT_WINDOW_MISSING = "Укажите окно визита или отметьте, что заявка как можно скорее."
 
@@ -130,7 +141,6 @@ class ClarifyArgs(BaseModel):
 ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
     "propose_urgent_request": UrgentArgs,
     "propose_cancel": RequestArgs,
-    "propose_restore": RequestArgs,
     "propose_engineer_unavailable": EngineerArgs,
     "propose_engineer_transport_change": TransportChangeArgs,
     "propose_request_update": RequestUpdateArgs,
@@ -305,8 +315,6 @@ def _build_event(
         return _request_update_event(session, args, time, ctx, notes)
     if name == "propose_cancel":
         return Event(type=EventType.CANCEL, time=time, request_id=resolve_request(session, args.request_id))
-    if name == "propose_restore":
-        return Event(type=EventType.RESTORE, time=time, request_id=resolve_request(session, args.request_id))
     if name == "propose_engineer_unavailable":
         return Event(
             type=EventType.ENGINEER_UNAVAILABLE,
@@ -360,6 +368,9 @@ def _interpret_call(
     seen: set[tuple],
     now: int,
 ) -> None:
+    if call.name == LEGACY_RESTORE_TOOL:
+        out.clarifications.append(RESTORE_UNSUPPORTED)
+        return
     model = ARGUMENT_MODELS.get(call.name)
     if model is None:
         out.clarifications.append(
@@ -439,6 +450,11 @@ def _interpret_call(
         )
         return
     out.drafts.append(ProposalDraft(event=stored, rationale=rationale))
+
+
+def nothing_found(text: str) -> str:
+    """Ответ, когда помощник не нашёл ни изменений, ни вопроса: просьба вернуть заявку получает честный отказ."""
+    return RESTORE_UNSUPPORTED if _RESTORE_WORDS.search(text) else NOTHING_FOUND
 
 
 def interpret(

@@ -2096,16 +2096,29 @@ h4 {
   padding-left: 18px;
 }
 
-/* Сообщение об ошибке выше окна выбора варианта: неудачный выбор оставляет окно открытым, ошибку должно быть видно. */
-.toast {
+/*
+ * Уведомления внизу по центру, выше окна выбора варианта: неудачный выбор оставляет окно открытым, ошибку должно быть видно.
+ * Ошибка и отмена заявки могут быть на экране вместе: стопка ставит их друг над другом, а не одно поверх другого.
+ */
+.toast-stack {
   position: fixed;
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
   z-index: 80;
   display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+}
+
+.toast {
+  display: flex;
   align-items: center;
   gap: 12px;
+  max-width: 100%;
   background: var(--text);
   color: #fff;
   padding: 10px 14px;
@@ -2115,6 +2128,71 @@ h4 {
 
 .toast .btn-ghost {
   color: #fff;
+}
+
+/* Отмена заявки с отсчётом: число секунд и полоса снизу, которая убывает до нуля. */
+.toast--undo {
+  position: relative;
+  overflow: hidden;
+  gap: 8px;
+  padding-bottom: 13px;
+}
+
+.toast__text {
+  margin-right: 4px;
+  overflow-wrap: anywhere;
+}
+
+.toast__count {
+  min-width: 1.5em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+.toast .toast__confirm {
+  background: #fff;
+  border-color: #fff;
+  color: var(--text);
+}
+
+.toast__bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: var(--primary);
+  transform-origin: left;
+  animation: toast-countdown linear forwards;
+}
+
+@keyframes toast-countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast__bar {
+    animation: none;
+  }
+}
+
+/* Текст для программ чтения с экрана: на экране его нет, объявление есть. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 @media (max-width: 1180px) {

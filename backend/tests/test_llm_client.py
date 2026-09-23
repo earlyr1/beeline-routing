@@ -248,7 +248,6 @@ def test_tools_mode_sends_eight_tools_and_parses_calls():
     assert [tool["function"]["name"] for tool in body["tools"]] == [
         "propose_urgent_request",
         "propose_cancel",
-        "propose_restore",
         "propose_engineer_unavailable",
         "propose_engineer_transport_change",
         "propose_request_update",

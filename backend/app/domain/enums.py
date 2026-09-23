@@ -52,6 +52,9 @@ class RequestStatus(StrEnum):
 class EventType(StrEnum):
     URGENT = "urgent"
     CANCEL = "cancel"
+    # Возврат отменённой заявки интерфейс и помощник больше не предлагают: передумать можно только в уведомлении
+    # сразу после отмены, пока событие не ушло на сервер. Тип остаётся ради дней, уже сохранённых в Postgres
+    # (их шкала переигрывается с возвратами), и ради API событий.
     RESTORE = "restore"
     ENGINEER_UNAVAILABLE = "engineer_unavailable"
     ENGINEER_TRANSPORT_CHANGED = "engineer_transport_changed"

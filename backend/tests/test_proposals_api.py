@@ -2,6 +2,7 @@ import json
 
 import httpx
 
+from app.llm.interpret import RESTORE_UNSUPPORTED
 from tests.api_helpers import HashGeocoder, sample_bundle, upload
 from tests.llm_helpers import ScriptedProvider, completion, tool_call
 
@@ -225,12 +226,15 @@ def test_approve_all_survives_stale_proposals_and_reject_endpoints(api):
             "propose_cancel", {"request_id": "R2", "time": "13:00", "rationale": "Отказ клиента"}, "call_2"
         ),
     ]
-    restore = [tool_call("propose_restore", {"request_id": "R2", "rationale": "Снова в силе"})]
+    unavailable = [tool_call("propose_engineer_unavailable", {"engineer_id": "E1", "rationale": "Заболел"})]
+    delay = [
+        tool_call("propose_engineer_delay", {"engineer_id": "E1", "delay_min": 30, "rationale": "Пробка"})
+    ]
     client, _ = with_llm(
         api,
         completion(tool_calls=cancels),
-        completion(tool_calls=restore),
-        completion(tool_calls=restore),
+        completion(tool_calls=unavailable),
+        completion(tool_calls=delay),
     )
     base = ready(client)
     assert [
@@ -248,8 +252,8 @@ def test_approve_all_survives_stale_proposals_and_reject_endpoints(api):
     assert by_id["pr_2"]["status"] == "approved" and by_id["pr_2"]["event"]["time"] == "13:30"
     assert result["state"]["version"] == 3
 
-    client.post(f"{base}/chat", json={"text": "R2 снова в силе"})
-    client.post(f"{base}/chat", json={"text": "Верните R2"})
+    client.post(f"{base}/chat", json={"text": "Арташкин заболел"})
+    client.post(f"{base}/chat", json={"text": "Арташкин застрял в пробке на полчаса"})
     rejected = client.post(f"{base}/proposals/pr_3/reject").json()
     assert rejected["status"] == "rejected"
     assert client.post(f"{base}/proposals/pr_3/reject").json()["detail"] == "Предложение pr_3 уже отклонено."
@@ -276,3 +280,20 @@ def test_chat_errors_are_russian(api):
     assert nothing["proposals"] == [] and nothing["clarification"].startswith(
         "Не нашёл в сообщении изменений"
     )
+
+
+def test_restoring_a_cancelled_request_gets_an_honest_answer_and_changes_nothing(api):
+    # Модель промолчала или назвала прежний инструмент возврата: в обоих случаях диспетчер читает, что так нельзя.
+    legacy = [tool_call("propose_restore", {"request_id": "R2", "rationale": "Снова в силе"})]
+    client, _ = with_llm(api, completion(content=""), completion(tool_calls=legacy))
+    base = ready(client)
+    cancel = {"type": "cancel", "time": "13:00", "request_id": "R2"}
+    assert client.post(f"{base}/events", json=cancel).status_code == 200
+    version = client.get(f"{base}/state").json()["version"]
+
+    for text in ("Вернуть заявку R2", "R2 снова в силе"):
+        answer = client.post(f"{base}/chat", json={"text": text}).json()
+        assert answer["proposals"] == []
+        assert answer["clarification"] == RESTORE_UNSUPPORTED
+    assert client.get(f"{base}/proposals").json() == []
+    assert client.get(f"{base}/state").json()["version"] == version

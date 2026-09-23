@@ -1,15 +1,15 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>();
-  return { ...actual, setAgreedWindow: vi.fn() };
+  return { ...actual, setAgreedWindow: vi.fn(), addTimelineEvent: vi.fn(), moveCursor: vi.fn() };
 });
 
 import * as api from '../../api/client';
 import type { AgreedWindow, PlanningState } from '../../api/types';
 import { cancelEvent } from '../../lib/events';
-import { useAppStore } from '../../store/useAppStore';
+import { CANCEL_UNDO_MS, useAppStore } from '../../store/useAppStore';
 import { makeConfig, makePlanningState, makeTimeline } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { CommunicationsTab } from './CommunicationsTab';
@@ -42,7 +42,12 @@ function callingDay(): PlanningState {
   };
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 beforeEach(() => {
+  vi.mocked(api.addTimelineEvent).mockReset();
   resetStore({ datasetId: 'd_test', state: callingDay(), clock: '13:00', config: makeConfig() });
   // Отметку «Согласовано» помнит сервер: он возвращает её вместе с планом, как настоящий.
   vi.mocked(api.setAgreedWindow).mockImplementation(async (_dataset, requestId, window: AgreedWindow) => {
@@ -116,19 +121,36 @@ describe('CommunicationsTab', () => {
   });
 
   it('cancels the request of a client who refused, with or without replanning the rest of the day', () => {
-    const applyEvent = vi.fn().mockResolvedValue(true);
-    useAppStore.setState({ applyEvent });
+    const cancelRequest = vi.fn();
+    useAppStore.setState({ cancelRequest });
     render(<CommunicationsTab />);
     fireEvent.click(within(rowOf('46393')).getByRole('button', { name: '✕ Клиент отказался' }));
 
     // Выбор разворачивается прямо в строке: уходить с вкладки не нужно.
     fireEvent.click(within(rowOf('46393')).getByRole('button', { name: 'Отменить, маршруты не трогать' }));
-    expect(applyEvent).toHaveBeenCalledWith(cancelEvent('46393', '13:00'), 'keep');
+    expect(cancelRequest).toHaveBeenCalledWith(cancelEvent('46393', '13:00'), 'keep');
     expect(screen.queryByRole('button', { name: 'Отменить, маршруты не трогать' })).toBeNull();
 
     fireEvent.click(within(rowOf('18754')).getByRole('button', { name: '✕ Клиент отказался' }));
     fireEvent.click(within(rowOf('18754')).getByRole('button', { name: 'Отменить и пересчитать остаток дня' }));
-    expect(applyEvent).toHaveBeenLastCalledWith(cancelEvent('18754', '13:00'), 'optimal');
+    expect(cancelRequest).toHaveBeenLastCalledWith(cancelEvent('18754', '13:00'), 'optimal');
+  });
+
+  it('carries «маршруты не трогать» through the undo notice into the event that reaches the server', async () => {
+    vi.useFakeTimers();
+    const state = { ...useAppStore.getState().state!, cursor: '13:00' };
+    useAppStore.setState({ state });
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(state);
+    render(<CommunicationsTab />);
+    fireEvent.click(within(rowOf('46393')).getByRole('button', { name: '✕ Клиент отказался' }));
+    fireEvent.click(within(rowOf('46393')).getByRole('button', { name: 'Отменить, маршруты не трогать' }));
+    // Пока идёт уведомление, на сервер ничего не ушло, а выбор диспетчера ждёт вместе с событием.
+    expect(api.addTimelineEvent).not.toHaveBeenCalled();
+    expect(useAppStore.getState().pendingCancel).toMatchObject({ event: cancelEvent('46393', '13:00'), variant: 'keep' });
+
+    await act(() => vi.advanceTimersByTimeAsync(CANCEL_UNDO_MS));
+    expect(api.addTimelineEvent).toHaveBeenCalledTimes(1);
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('46393', '13:00'), 'keep');
   });
 
   it('does not offer to cancel a request that is already being worked on', () => {

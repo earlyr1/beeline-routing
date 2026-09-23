@@ -56,18 +56,6 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "required": ["request_id", "rationale"],
         },
     },
-    "propose_restore": {
-        "description": "Предложить вернуть в план ранее отменённую заявку.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "request_id": {"type": "string", "description": "id отменённой заявки"},
-                "time": _TIME,
-                "rationale": _RATIONALE,
-            },
-            "required": ["request_id", "rationale"],
-        },
-    },
     "propose_engineer_unavailable": {
         "description": "Предложить отметить инженера недоступным с указанного времени до конца дня.",
         "parameters": {

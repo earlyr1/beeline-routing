@@ -11,6 +11,7 @@ export type RequestStatus = 'active' | 'cancelled';
 export type EventType =
   | 'urgent'
   | 'cancel'
+  // Возврат отменённой заявки интерфейс больше не предлагает; тип остаётся ради дней, сохранённых раньше, и API.
   | 'restore'
   | 'engineer_unavailable'
   | 'engineer_transport_changed'

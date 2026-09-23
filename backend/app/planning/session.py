@@ -588,6 +588,7 @@ def _changed_inputs(
         requests[index] = merged
         return requests, engineers, event.model_copy(update={"request": merged, "previous_request": stored})
 
+    # Возврат в интерфейсе больше не предлагается, но дни, сохранённые раньше, и API его содержат: он переигрывается как был.
     if event.type in (EventType.CANCEL, EventType.RESTORE):
         request = by_id.get(event.request_id or "")
         if request is None:

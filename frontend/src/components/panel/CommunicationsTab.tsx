@@ -30,7 +30,7 @@ export function CommunicationsTab() {
   const busy = useAppStore((s) => s.busy);
   const clock = useAppStore((s) => s.clock);
   const markAgreed = useAppStore((s) => s.markAgreed);
-  const applyEvent = useAppStore((s) => s.applyEvent);
+  const cancelRequest = useAppStore((s) => s.cancelRequest);
   const selectRequest = useAppStore((s) => s.selectRequest);
   // Сетка окон визита от сервера: окно, которое диспетчер назовёт клиенту, — её слот.
   const grid = useAppStore((s) => s.config?.window_grid) ?? [];
@@ -48,9 +48,10 @@ export function CommunicationsTab() {
     event.stopPropagation();
     action();
   };
+  // Выбор «пересчитать / не трогать» едет в событие как есть; на сервер оно уйдёт после уведомления об отмене.
   const cancelFor = (event: PlanEvent, variant: 'optimal' | 'keep') => {
     setRefusing(null);
-    void applyEvent(event, variant);
+    cancelRequest(event, variant);
   };
 
   return (

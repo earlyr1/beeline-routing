@@ -5,14 +5,15 @@ import { assignmentIndex } from '../lib/planView';
 import { useAppStore } from '../store/useAppStore';
 
 /**
- * Кнопки «Изменить» и «Отменить» или «Вернуть» у заявки. Одни и те же в строке списка заявок и в карточке заявки,
+ * Кнопки «Изменить» и «Отменить» у заявки. Одни и те же в строке списка заявок и в карточке заявки,
  * поэтому правила доступности и время события у них не расходятся: событие ставится на время часов дня.
+ * «Отменить» не отправляет событие сразу: 5 секунд его можно не делать в уведомлении. У отменённой заявки кнопки нет.
  */
 export function RequestActions({ request }: { request: ServiceRequest }) {
   const state = useAppStore((s) => s.state);
   const busy = useAppStore((s) => s.busy);
   const clock = useAppStore((s) => s.clock);
-  const applyEvent = useAppStore((s) => s.applyEvent);
+  const cancelRequest = useAppStore((s) => s.cancelRequest);
   const startEdit = useAppStore((s) => s.startEdit);
   if (!state) return null;
 
@@ -36,15 +37,17 @@ export function RequestActions({ request }: { request: ServiceRequest }) {
       >
         Изменить
       </button>
-      <button
-        type="button"
-        className="btn btn-small"
-        disabled={actions.disabled}
-        title={actions.cancelTitle}
-        onClick={handle(() => void applyEvent(actions.cancelEvent))}
-      >
-        {actions.cancelLabel}
-      </button>
+      {!actions.cancelled && (
+        <button
+          type="button"
+          className="btn btn-small"
+          disabled={actions.disabled}
+          title={actions.cancelTitle}
+          onClick={handle(() => cancelRequest(actions.cancelEvent))}
+        >
+          Отменить
+        </button>
+      )}
     </>
   );
 }

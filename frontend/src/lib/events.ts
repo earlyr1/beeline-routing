@@ -225,19 +225,22 @@ export function isWorkStarted(request: ServiceRequest, visit: Visit | undefined,
 
 export interface RequestActionContext {
   busy: boolean;
-  /** Время на часах шкалы дня: в это время ставятся отмена и возврат. */
+  /** Время на часах шкалы дня: в это время ставится отмена. */
   clock: HHMM;
 }
 
-/** Кнопки «Изменить» и «Отменить» или «Вернуть» у заявки: одно правило для списка заявок и карточки заявки. */
+/**
+ * Кнопки «Изменить» и «Отменить» у заявки: одно правило для списка заявок, карточки заявки и «Коммуникаций».
+ * Кнопки «Вернуть» у отменённой заявки нет: передумать можно только в уведомлении сразу после отмены.
+ */
 export interface RequestActionState {
+  /** Заявка отменена: кнопки «Отменить» у неё нет. */
   cancelled: boolean;
   /** Кнопки недоступны: идёт перепланирование или работа уже началась. */
   disabled: boolean;
   editTitle: string | undefined;
   cancelTitle: string | undefined;
-  cancelLabel: string;
-  /** Что отправит кнопка «Отменить» или «Вернуть». */
+  /** Что отправит кнопка «Отменить»: время часов в момент клика. */
   cancelEvent: PlanEvent;
 }
 
@@ -249,14 +252,12 @@ export function requestActionState(
 ): RequestActionState {
   const cancelled = request.status === 'cancelled';
   const started = isWorkStarted(request, visit, clock);
-  const time = clock;
   return {
     cancelled,
     disabled: busy || started,
     editTitle: started ? 'Работа уже началась, изменить нельзя' : undefined,
     cancelTitle: started ? 'Работа уже началась, отменить нельзя' : undefined,
-    cancelLabel: cancelled ? 'Вернуть' : 'Отменить',
-    cancelEvent: cancelled ? restoreEvent(request.id, time) : cancelEvent(request.id, time),
+    cancelEvent: cancelEvent(request.id, clock),
   };
 }
 
@@ -485,14 +486,6 @@ export const cancelEvent = (requestId: string, time: HHMM): PlanEvent => ({
   engineer_id: null,
 });
 
-export const restoreEvent = (requestId: string, time: HHMM): PlanEvent => ({
-  type: 'restore',
-  time,
-  request: null,
-  request_id: requestId,
-  engineer_id: null,
-});
-
 export const unavailableEvent = (engineerId: string, time: HHMM): PlanEvent => ({
   type: 'engineer_unavailable',
   time,
@@ -617,6 +610,7 @@ export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>
       return `Срочная заявка ${eventRequestLabel(event, requests)} в ${event.time}`;
     case 'cancel':
       return `Отмена заявки ${eventRequestLabel(event, requests)} в ${event.time}`;
+    // Возврата в интерфейсе больше нет, но он есть в днях, сохранённых раньше, и в API: шкала подписывает его как прежде.
     case 'restore':
       return `Возврат заявки ${eventRequestLabel(event, requests)} в ${event.time}`;
     case 'engineer_unavailable':
