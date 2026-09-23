@@ -1,6 +1,7 @@
 # Тесты на каждый пуш в main и на pull request; после зелёных тестов пуш в main собирает образы и выкатывает их
 # на сервер жюри. Выкат вручную — Actions → ci → Run workflow на ветке main. Откат — Re-run all jobs у прогона
-# нужного коммита: он соберёт те же образы из кэша и выкатит их.
+# нужного коммита: он соберёт те же образы из кэша и выкатит их. Пуш, который к концу тестов уже не верхушка
+# main, не выкатывается (job tip): иначе поздно дотестированный старый коммит откатил бы сервер назад.
 #
 # Настройки репозитория (кладёт infra/github/set_secrets.py):
 #   переменные — YC_SA_ID (сервисный аккаунт routing-ci), YC_REGISTRY_ID, VM_HOST (публичный IP), TLS_MODE;
@@ -92,10 +93,40 @@ jobs:
       - run: npx vitest run
       - run: npm run build
 
-  deploy:
-    name: образы и выкат на сервер жюри
+  # Выкатывается только верхушка main. Тесты двух близких пушей могут закончиться в обратном порядке, и тогда
+  # выкат старого коммита встал бы в очередь за новым и откатил бы сервер. Ручной запуск и Re-run (откат на
+  # старый коммит нарочно) проходят всегда. Проверка после тестов: к этому времени более новый пуш уже виден.
+  tip:
+    name: коммит всё ещё верхушка main
     needs: [backend, backend-db, frontend]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      deploy: ${{ steps.tip.outputs.deploy }}
+    steps:
+      - id: tip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          ATTEMPT: ${{ github.run_attempt }}
+        run: |
+          if [[ $EVENT != push || $ATTEMPT != 1 ]]; then
+            echo "deploy=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [[ $main_sha == "$GITHUB_SHA" ]]; then
+            echo "deploy=true" >>"$GITHUB_OUTPUT"
+          else
+            echo "::notice::В main уже $main_sha: $GITHUB_SHA не выкатывается. Нужен именно он — Re-run all jobs"
+            echo "deploy=false" >>"$GITHUB_OUTPUT"
+          fi
+
+  deploy:
+    name: образы и выкат на сервер жюри
+    needs: tip
+    if: needs.tip.outputs.deploy == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # Никакого environment: у этого job — с ним sub в OIDC-токене станет repo:…:environment:…, а федерация
@@ -103,7 +134,8 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    # Одна правка сервера за раз: выкаты и сборка графа OSRM (osrm-graph.yml) встают в общую очередь.
+    # Одна правка сервера за раз: выкаты и сборка графа OSRM (osrm-graph.yml) встают в общую очередь. Ждать в ней
+    # GitHub даёт только одному прогону: новый отменяет ожидающий, и отменённый выкат или граф запускают заново.
     concurrency:
       group: jury-vm
       cancel-in-progress: false
