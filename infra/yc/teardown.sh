@@ -33,6 +33,12 @@ remove_named() {
   local kind=$1 name=$2 id
   # shellcheck disable=SC2086  # kind — несколько слов команды yc
   id=$(id_of $kind get --name "$name")
+  # Не у всех ресурсов есть get --name (федерации нужен federation_id): тогда ищем по имени в списке каталога.
+  if [[ -z $id ]]; then
+    # shellcheck disable=SC2086
+    id=$(yc_ $kind list --format json 2>/dev/null |
+      jq -r --arg name "$name" '[.[]? | select(.name == $name)][0].id // empty' || true)
+  fi
   if [[ -z $id ]]; then
     echo "Нет $kind $name, пропускаю"
     return 0

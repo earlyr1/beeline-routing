@@ -108,7 +108,9 @@ registry_role container-registry.images.pusher "$CI_SA_ID"
 registry_role container-registry.images.puller "$VM_SA_ID"
 
 step "Федерация GitHub OIDC $FEDERATION_NAME"
-FEDERATION_ID=$(id_of iam workload-identity oidc federation get --name "$FEDERATION_NAME")
+# У федерации нет get --name (yc требует federation_id), поэтому ищем по имени в списке каталога.
+FEDERATION_ID=$(yc_ iam workload-identity oidc federation list --format json |
+  jq -r --arg name "$FEDERATION_NAME" '[.[]? | select(.name == $name)][0].id // empty')
 if [[ -z $FEDERATION_ID ]]; then
   FEDERATION_ID=$(yc_ iam workload-identity oidc federation create --name "$FEDERATION_NAME" \
     --description "GitHub Actions репозитория $GITHUB_REPO" \
