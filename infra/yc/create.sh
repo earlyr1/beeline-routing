@@ -178,16 +178,15 @@ if [[ -z $INSTANCE_ID ]]; then
   # Подстановка без ${var//…}: bash 3.2 из macOS и bash 5 по-разному обходятся с кавычками в замене.
   template=$(<"$YC_DIR/cloud-init.yaml")
   printf '%s%s%s\n' "${template%%__DEPLOY_SSH_PUBLIC_KEY__*}" "$PUBLIC_KEY" "${template#*__DEPLOY_SSH_PUBLIC_KEY__}" >"$user_data"
-  # Ice Lake, 2 ядра по 50%, 4 ГБ, 30 ГБ network-hdd. Метаданные в стиле GCE нужны для IAM-токена машины:
-  # им она логинится в реестр перед каждым pull. Метаданные в стиле AWS не нужны никому и выключены явно:
-  # IMDSv1 отвечает без особого заголовка, обычная цель SSRF. Контейнерам дорогу к метаданным закрывает
+  # Ice Lake, 2 ядра по 50%, 4 ГБ, 30 ГБ network-hdd. Настройки метаданных по умолчанию: через адрес
+  # в стиле AWS cloud-init на Ubuntu в Яндексе получает user-data (выключенный — «no datasource found», машина
+  # встаёт без deploy и Docker), через адрес в стиле GCE машина берёт IAM-токен для реестра. Контейнерам дорогу к метаданным закрывает
   # cloud-init.yaml (правило в цепочке DOCKER-USER).
   INSTANCE_ID=$(yc_ compute instance create --name "$VM_NAME" --hostname "$VM_NAME" --zone "$ZONE" \
     --platform standard-v3 --cores 2 --core-fraction 50 --memory 4 \
     --create-boot-disk "image-family=ubuntu-2404-lts,image-folder-id=standard-images,size=30,type=network-hdd,auto-delete=true" \
     --network-interface "subnet-id=$SUBNET_ID,nat-ip-version=ipv4,nat-address=$VM_IP,security-group-ids=[$SG_ID]" \
     --service-account-id "$VM_SA_ID" \
-    --metadata-options "gce-http-endpoint=enabled,gce-http-token=enabled,aws-v1-http-endpoint=disabled,aws-v1-http-token=disabled,aws-v2-http-endpoint=disabled,aws-v2-http-token=disabled" \
     --metadata-from-file "user-data=$user_data" \
     --format json | jq -r .id)
   JUST_CREATED=1
