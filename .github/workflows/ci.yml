@@ -24,6 +24,8 @@ jobs:
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           # requires-python в backend/pyproject.toml: >=3.12,<3.13
@@ -58,6 +60,8 @@ jobs:
       TEST_DATABASE_URL: postgresql://routing:routing@localhost:5432/routing
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -75,6 +79,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           # Как в frontend/Dockerfile (node:22-alpine).
@@ -120,7 +126,10 @@ jobs:
             exit 1
           fi
 
+      # Git после checkout не нужен: токен прогона не остаётся в .git/config на всё время job.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       # Без долгоживущих ключей: GitHub выдаёт прогону OIDC-токен, Yandex Cloud меняет его на IAM-токен routing-ci.
       - name: Вход в Container Registry
@@ -269,3 +278,9 @@ jobs:
       # Старые образы на диске не нужны: откат всё равно скачает свой тег из реестра заново.
       - name: Уборка старых образов
         run: ssh vm 'docker image prune -af >/dev/null && df -h / | tail -1'
+
+      # Ключ deploy — по сути root на машине. Обычные шаги идут раньше завершающих (post) шагов сторонних
+      # actions, так что к их запуску ключа на раннере уже нет.
+      - name: Ключ SSH с раннера
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/config ~/.ssh/known_hosts_vm

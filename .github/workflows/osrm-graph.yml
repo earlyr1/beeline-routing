@@ -42,7 +42,10 @@ jobs:
             exit 1
           fi
 
+      # Git после checkout не нужен: токен прогона не остаётся в .git/config на всё время job.
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Вход в Container Registry
         uses: yc-actions/yc-cr-login@v3
@@ -106,3 +109,9 @@ jobs:
           compose logs --tail 60 osrm
           exit 1
           EOF
+
+      # Ключ deploy — по сути root на машине. Обычные шаги идут раньше завершающих (post) шагов сторонних
+      # actions, так что к их запуску ключа на раннере уже нет.
+      - name: Ключ SSH с раннера
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/config ~/.ssh/known_hosts_vm
