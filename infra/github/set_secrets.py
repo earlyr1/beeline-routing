@@ -17,9 +17,10 @@
   генерируется        — POSTGRES_PASSWORD (только если в GitHub его ещё нет: база на машине уже создана
                          со старым паролем, новый её сломал бы), BASIC_AUTH_HASH (bcrypt от пароля жюри).
 Сам пароль жюри тоже уходит в секрет BASIC_AUTH_PASSWORD: им деплой проверяет сервис через Caddy.
+Переменная TLS_MODE меняется только с --tls-mode; если её в GitHub ещё нет, ставится acme.
 
 Токен GitHub (нужны права Secrets и Variables на запись для репозитория) ищется по порядку:
-~/.config/github-mcp/token, $GITHUB_TOKEN, файл GITHUB_MCP_TOKEN в корне репозитория.
+$GITHUB_TOKEN, ~/.config/github-mcp/token, файл GITHUB_MCP_TOKEN в корне репозитория.
 """
 
 from __future__ import annotations
@@ -69,20 +70,21 @@ def parse_env_file(path: Path) -> dict[str, str]:
 
 def read_token() -> tuple[str, str]:
     """Токен GitHub и откуда он взят (печатается только источник). Следующий источник читается, только если
-    в предыдущем токена нет."""
+    в предыдущем токена нет. $GITHUB_TOKEN первым: так его можно подставить на один запуск, не трогая файлы,
+    например если у токена из файла нет прав на секреты."""
     sources = (
+        ("$GITHUB_TOKEN", lambda: os.environ.get("GITHUB_TOKEN", "")),
         (
             "~/.config/github-mcp/token",
             lambda: read_if_exists(Path.home() / ".config" / "github-mcp" / "token"),
         ),
-        ("$GITHUB_TOKEN", lambda: os.environ.get("GITHUB_TOKEN", "")),
         ("GITHUB_MCP_TOKEN", lambda: read_if_exists(REPO_ROOT / "GITHUB_MCP_TOKEN")),
     )
     for source, read in sources:
         token = token_from_text(read())
         if token:
             return token, source
-    sys.exit("Нет токена GitHub: ни ~/.config/github-mcp/token, ни $GITHUB_TOKEN, ни файла GITHUB_MCP_TOKEN")
+    sys.exit("Нет токена GitHub: ни $GITHUB_TOKEN, ни ~/.config/github-mcp/token, ни файла GITHUB_MCP_TOKEN")
 
 
 def read_if_exists(path: Path) -> str:
@@ -103,9 +105,10 @@ def token_from_text(text: str) -> str:
 
 
 class GitHub:
-    def __init__(self, repo: str, token: str) -> None:
+    def __init__(self, repo: str, token: str, source: str) -> None:
         self.repo = repo
         self.token = token
+        self.source = source
         self._box: public.SealedBox | None = None
         self._key_id = ""
 
@@ -132,7 +135,14 @@ class GitHub:
     def check(self, status: int, payload: dict, what: str) -> None:
         if status >= 300:
             # В ответе GitHub только его сообщение об ошибке: значений секретов там нет.
-            sys.exit(f"GitHub ответил {status} на «{what}»: {payload.get('message', '')}")
+            message = f"GitHub ответил {status} на «{what}»: {payload.get('message', '')}"
+            if status in (401, 403, 404):
+                message += (
+                    f"\nТокен взят из {self.source}. Нужен доступ к {self.repo} с правами Secrets и Variables"
+                    " на чтение и запись (fine-grained) или repo (classic); другой токен на один запуск —"
+                    " через $GITHUB_TOKEN. 404 — ещё и если репозитория нет."
+                )
+            sys.exit(message)
 
     def secret_names(self) -> set[str]:
         names: set[str] = set()
@@ -158,6 +168,13 @@ class GitHub:
             "PUT", f"/actions/secrets/{name}", {"encrypted_value": encrypted, "key_id": self._key_id}
         )
         self.check(status, payload, f"секрет {name}")
+
+    def has_variable(self, name: str) -> bool:
+        status, payload = self.request("GET", f"/actions/variables/{name}")
+        if status == 404:
+            return False
+        self.check(status, payload, f"переменная {name}")
+        return True
 
     def put_variable(self, name: str, value: str) -> None:
         status, payload = self.request("POST", "/actions/variables", {"name": name, "value": value})
@@ -202,8 +219,13 @@ def main() -> None:
         "--basic-auth-user", default=os.environ.get("BASIC_AUTH_USER", "jury"), help="логин жюри"
     )
     parser.add_argument("--password-stdin", action="store_true", help="пароль жюри одной строкой из stdin")
+    # Без флага TLS_MODE не трогается: повторный запуск ради пароля или ключей не должен молча вернуть acme
+    # после перехода на internal (например, когда упёрлись в лимит Let's Encrypt).
     parser.add_argument(
-        "--tls-mode", choices=("acme", "internal"), default="acme", help="переменная TLS_MODE"
+        "--tls-mode",
+        choices=("acme", "internal"),
+        default=None,
+        help="переменная TLS_MODE; без флага остаётся прежней, а если её ещё нет — acme",
     )
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--state-file", type=Path, default=REPO_ROOT / "infra" / "yc" / ".state.env")
@@ -228,7 +250,6 @@ def main() -> None:
         "YC_SA_ID": state["CI_SA_ID"],
         "YC_REGISTRY_ID": state["REGISTRY_ID"],
         "VM_HOST": state["VM_IP"],
-        "TLS_MODE": args.tls_mode,
     }
     values: dict[str, str] = {
         "VM_SSH_KEY": args.ssh_key.read_text(encoding="utf-8"),
@@ -260,8 +281,13 @@ def main() -> None:
     else:
         token, source = read_token()
         print(f"Токен GitHub: {source}")
-        github = GitHub(args.repo, token)
+        github = GitHub(args.repo, token, source)
         existing = github.secret_names()
+
+    if args.tls_mode:
+        variables["TLS_MODE"] = args.tls_mode
+    elif github and not github.has_variable("TLS_MODE"):
+        variables["TLS_MODE"] = "acme"
 
     # Пароль базы только первый раз: том pg-data на машине уже инициализирован с ним.
     if "POSTGRES_PASSWORD" not in existing:
@@ -282,6 +308,12 @@ def main() -> None:
         if github:
             github.put_variable(name, value)
         print(f"переменная {name}")
+    if "TLS_MODE" not in variables:
+        print(
+            "переменная TLS_MODE не менялась"
+            if github
+            else "переменная TLS_MODE прежняя, а если её нет — acme"
+        )
     for name, value in values.items():
         if github:
             github.put_secret(name, value)
