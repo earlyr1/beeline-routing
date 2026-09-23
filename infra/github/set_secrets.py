@@ -41,8 +41,10 @@ from nacl import encoding, public
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPO = "earlyr1/beeline-routing"
 APP_KEYS = ("YANDEX_MAPS_API_KEY", "YANDEX_GEOCODER_API_KEY", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
-# Каждый раз, когда Caddy проверяет пароль без кэша, bcrypt с этой ценой занимает доли секунды ядра машины.
-BCRYPT_COST = 12
+# Каждый запрос с неверным паролем Caddy проверяет bcrypt заново (кэш помнит только уже виденные пары), и при
+# цене 12 это четверть-полсекунды ядра машины: перебор паролей съел бы процессор. Цена 10 вчетверо дешевле, а хэш
+# лежит только в секретах GitHub и в .env машины с правами 600 — стойкость к офлайн-перебору тут вторична.
+BCRYPT_COST = 10
 # GITHUB_API_URL — как в самих Actions; другой адрес нужен только для проверки скрипта на заглушке API.
 API = os.environ.get("GITHUB_API_URL", "https://api.github.com").rstrip("/")
 
