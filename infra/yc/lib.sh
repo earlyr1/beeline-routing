@@ -16,6 +16,7 @@ ADDRESS_NAME=routing-ip
 SG_NAME=routing-sg
 VM_NAME=routing
 # Своя сеть создаётся, только если в папке нет сети default: облачных сетей по умолчанию разрешено всего две.
+# Сеть и подсеть с этими именами бывают только от create.sh, teardown.sh удаляет их по имени.
 DEFAULT_NETWORK_NAME=default
 NETWORK_NAME=routing-net
 SUBNET_NAME=routing-$ZONE
@@ -64,14 +65,6 @@ check_yc() {
   if ! yc_ resource-manager folder get --id "$FOLDER_ID" --format json >/dev/null; then
     echo "yc не видит папку $FOLDER_ID. Сначала: yc init" >&2
     exit 1
-  fi
-}
-
-# Значения из прошлого запуска create.sh: какие сеть и подсеть мы создали сами (их и удалит teardown.sh).
-load_state() {
-  if [[ -f $STATE_FILE ]]; then
-    # shellcheck source=/dev/null
-    source "$STATE_FILE"
   fi
 }
 

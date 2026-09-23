@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Сносит всё, что создал create.sh: машину с дисками, статический IP, группу безопасности, сеть и подсеть (если
-# их создавали мы, а не взяли готовую сеть default), образы и сам реестр, федерацию GitHub и оба сервисных
-# аккаунта. Спрашивает подтверждение. Запуск: infra/yc/teardown.sh
+# их создавали мы, а не взяли готовые: они узнаются по именам routing-*), образы и сам реестр, федерацию GitHub
+# и оба сервисных аккаунта. Спрашивает подтверждение. Запуск: infra/yc/teardown.sh
 # После него не остаётся ничего, за что Yandex Cloud берёт деньги, включая неактивный статический IP.
 set -euo pipefail
 
@@ -9,9 +9,9 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 check_yc
-CREATED_NETWORK=0
-CREATED_SUBNET=0
-load_state
+# Сеть и подсеть — по имени, а не по файлу состояния: если create.sh упал на середине, файла нет, а сеть уже есть.
+SUBNET_ID=$(id_of vpc subnet get --name "$SUBNET_NAME")
+NETWORK_ID=$(id_of vpc network get --name "$NETWORK_NAME")
 
 cat <<EOF
 Будет удалено в папке $FOLDER_ID:
@@ -20,8 +20,8 @@ cat <<EOF
   реестр $REGISTRY_NAME со всеми образами
   федерация $FEDERATION_NAME, сервисные аккаунты $CI_SA_NAME и $VM_SA_NAME
 EOF
-[[ $CREATED_SUBNET == 1 ]] && echo "  подсеть $SUBNET_NAME"
-[[ $CREATED_NETWORK == 1 ]] && echo "  сеть $NETWORK_NAME"
+[[ -n $SUBNET_ID ]] && echo "  подсеть $SUBNET_NAME"
+[[ -n $NETWORK_ID ]] && echo "  сеть $NETWORK_NAME"
 read -r -p 'Напишите «удалить», чтобы продолжить: ' answer
 if [[ $answer != удалить ]]; then
   echo "Ничего не тронуто"
@@ -48,12 +48,8 @@ delete_vm_with_disks "$VM_NAME"
 step "Сеть"
 remove_named "vpc address" "$ADDRESS_NAME"
 remove_named "vpc security-group" "$SG_NAME"
-if [[ $CREATED_SUBNET == 1 ]]; then
-  remove_named "vpc subnet" "$SUBNET_NAME"
-fi
-if [[ $CREATED_NETWORK == 1 ]]; then
-  remove_named "vpc network" "$NETWORK_NAME"
-fi
+remove_named "vpc subnet" "$SUBNET_NAME"
+remove_named "vpc network" "$NETWORK_NAME"
 
 step "Реестр"
 REGISTRY_ID=$(id_of container registry get --name "$REGISTRY_NAME")

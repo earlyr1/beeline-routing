@@ -45,36 +45,65 @@ write_files:
     content: |
       APT::Periodic::Update-Package-Lists "1";
       APT::Periodic::Unattended-Upgrade "1";
+  # Контейнерам в метаданные машины хода нет: оттуда берётся IAM-токен routing-vm, а он нужен только самой
+  # машине для docker login перед pull. Цепочка DOCKER-USER видит лишь трафик контейнеров (FORWARD), свои запросы
+  # машины идут мимо неё. Docker правила в этой цепочке не трогает; -C не даёт задвоить правило при перезапуске.
+  - path: /etc/systemd/system/docker.service.d/10-no-metadata.conf
+    permissions: "0644"
+    content: |
+      [Service]
+      ExecStartPost=/bin/sh -c 'iptables -N DOCKER-USER 2>/dev/null; iptables -C DOCKER-USER -d 169.254.169.254/32 -j REJECT 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254/32 -j REJECT'
   # Docker из официального репозитория: в нём свежий плагин compose (docker-compose.prod.yml просит 2.24+).
   # Если download.docker.com не ответил — пакеты Ubuntu, их compose тоже не младше 2.24.
+  # На первой загрузке dpkg может держать apt-daily или unattended-upgrades: apt ждёт блокировку до 10 минут,
+  # а вся установка повторяется трижды. Если Docker так и не встал, скрипт можно запустить заново руками.
   - path: /usr/local/sbin/install-docker.sh
     permissions: "0755"
     content: |
       #!/usr/bin/env bash
       set -euo pipefail
       export DEBIAN_FRONTEND=noninteractive
-      official() {
-        install -m 0755 -d /etc/apt/keyrings
-        curl -fsSL --retry 5 https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-        chmod a+r /etc/apt/keyrings/docker.asc
-        # shellcheck source=/dev/null
-        codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
-        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
-          > /etc/apt/sources.list.d/docker.list
-        apt-get update
-        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      apt_get() {
+        apt-get -o DPkg::Lock::Timeout=600 "$@"
       }
-      if ! official; then
-        echo "download.docker.com недоступен, ставлю Docker из репозитория Ubuntu" >&2
+      # Внутри `if official` set -e не действует, поэтому шаги сцеплены через &&: первый же сбой — и функция
+      # возвращает ошибку, а не идёт дальше.
+      # shellcheck source=/dev/null
+      official() {
+        local codename
+        codename=$(. /etc/os-release && echo "$VERSION_CODENAME") &&
+          install -m 0755 -d /etc/apt/keyrings &&
+          curl -fsSL --retry 5 https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc &&
+          chmod a+r /etc/apt/keyrings/docker.asc &&
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+            >/etc/apt/sources.list.d/docker.list &&
+          apt_get update &&
+          apt_get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      }
+      ubuntu() {
+        echo "Docker из download.docker.com не встал, ставлю из репозитория Ubuntu" >&2
         rm -f /etc/apt/sources.list.d/docker.list
-        apt-get update
-        apt-get install -y docker.io docker-compose-v2
-      fi
+        apt_get update && apt_get install -y docker.io docker-compose-v2
+      }
+      for attempt in 1 2 3; do
+        if official || ubuntu; then
+          break
+        fi
+        if ((attempt == 3)); then
+          echo "Docker не встал за три попытки" >&2
+          exit 1
+        fi
+        sleep 30
+      done
+      systemctl daemon-reload
       systemctl enable --now docker
+      # Правило из 10-no-metadata.conf ставит старт демона. Нет правила — демон стартовал раньше, чем systemd
+      # увидел файл, и перезапуск это исправит.
+      iptables -C DOCKER-USER -d 169.254.169.254/32 -j REJECT 2>/dev/null || systemctl restart docker
+      usermod -aG docker deploy
       docker compose version
 
 runcmd:
   - /usr/local/sbin/install-docker.sh
-  - usermod -aG docker deploy
   # Сюда деплой кладёт docker-compose.yml, docker-compose.prod.yml, Caddyfile и .env.
   - install -d -o deploy -g deploy -m 0750 /home/deploy/app

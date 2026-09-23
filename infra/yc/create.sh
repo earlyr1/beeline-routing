@@ -43,13 +43,23 @@ if [[ $PUBLIC_KEY != ssh-* || $PUBLIC_KEY == *$'\n'* ]]; then
   exit 1
 fi
 
-CREATED_NETWORK=0
-CREATED_SUBNET=0
-load_state
-
+# Зарезервированный IP старой машины переживает её удаление и без неё стоит дороже. Сам не удаляется:
+# вдруг он ещё нужен. Подсказка, как удалить, повторяется в конце.
+OLD_IP_NOTE=""
 if [[ $DELETE_OLD == 1 ]]; then
   step "Старая машина $OLD_VM_NAME"
+  old_ip=$(yc_ compute instance get --name "$OLD_VM_NAME" --format json 2>/dev/null |
+    jq -r '[.network_interfaces[]?.primary_v4_address.one_to_one_nat.address // empty][0] // empty' || true)
   delete_vm_with_disks "$OLD_VM_NAME"
+  if [[ -n $old_ip ]]; then
+    old_address_id=$(yc_ vpc address list --format json |
+      jq -r --arg ip "$old_ip" \
+        '[.[]? | select(.reserved and (.used | not) and .external_ipv4_address.address == $ip)][0].id // empty')
+    if [[ -n $old_address_id ]]; then
+      OLD_IP_NOTE="Статический IP $old_ip старой машины остался ($old_address_id), без машины он стоит 0,6039 ₽/ч. Не нужен — удалить: yc vpc address delete --id $old_address_id --folder-id $FOLDER_ID"
+      echo "$OLD_IP_NOTE"
+    fi
+  fi
 fi
 
 step "Реестр $REGISTRY_NAME"
@@ -60,12 +70,14 @@ if [[ -z $REGISTRY_ID ]]; then
 fi
 
 # Сервисный аккаунт по имени; создаёт, если его нет. Печатает id.
+# Зовётся внутри $(...), а там set -e не действует: без явных проверок сбой create дал бы пустой id с кодом 0.
 service_account() {
   local name=$1 description=$2 id
   id=$(id_of iam service-account get --name "$name")
   if [[ -z $id ]]; then
-    id=$(yc_ iam service-account create --name "$name" --description "$description" --format json | jq -r .id)
+    id=$(yc_ iam service-account create --name "$name" --description "$description" --format json | jq -r .id) || return 1
   fi
+  [[ -n $id && $id != null ]] || return 1
   echo "$id"
 }
 
@@ -82,8 +94,14 @@ registry_role() {
 }
 
 step "Сервисные аккаунты"
-CI_SA_ID=$(service_account "$CI_SA_NAME" "GitHub Actions: пушит образы в реестр $REGISTRY_NAME")
-VM_SA_ID=$(service_account "$VM_SA_NAME" "Машина жюри: скачивает образы из реестра $REGISTRY_NAME")
+CI_SA_ID=$(service_account "$CI_SA_NAME" "GitHub Actions: пушит образы в реестр $REGISTRY_NAME") || {
+  echo "Не удалось найти или создать сервисный аккаунт $CI_SA_NAME" >&2
+  exit 1
+}
+VM_SA_ID=$(service_account "$VM_SA_NAME" "Машина жюри: скачивает образы из реестра $REGISTRY_NAME") || {
+  echo "Не удалось найти или создать сервисный аккаунт $VM_SA_NAME" >&2
+  exit 1
+}
 echo "$CI_SA_NAME: $CI_SA_ID"
 echo "$VM_SA_NAME: $VM_SA_ID"
 registry_role container-registry.images.pusher "$CI_SA_ID"
@@ -116,6 +134,8 @@ fi
 VM_IP=$(yc_ vpc address get --id "$ADDRESS_ID" --format json | jq -r .external_ipv4_address.address)
 echo "$VM_IP"
 
+# Сеть $NETWORK_NAME и подсеть $SUBNET_NAME бывают только от этого скрипта, поэтому teardown.sh удаляет их по
+# имени. Файл состояния тут ни при чём: он пишется в конце и после сбоя на середине его нет.
 step "Сеть и подсеть в $ZONE"
 NETWORK_ID=$(id_of vpc network get --name "$DEFAULT_NETWORK_NAME")
 if [[ -z $NETWORK_ID ]]; then
@@ -123,7 +143,6 @@ if [[ -z $NETWORK_ID ]]; then
 fi
 if [[ -z $NETWORK_ID ]]; then
   NETWORK_ID=$(yc_ vpc network create --name "$NETWORK_NAME" --format json | jq -r .id)
-  CREATED_NETWORK=1
   echo "Создана сеть $NETWORK_NAME"
 fi
 SUBNET_ID=$(yc_ vpc network list-subnets --id "$NETWORK_ID" --format json |
@@ -131,7 +150,6 @@ SUBNET_ID=$(yc_ vpc network list-subnets --id "$NETWORK_ID" --format json |
 if [[ -z $SUBNET_ID ]]; then
   SUBNET_ID=$(yc_ vpc subnet create --name "$SUBNET_NAME" --network-id "$NETWORK_ID" --zone "$ZONE" \
     --range "$SUBNET_CIDR" --format json | jq -r .id)
-  CREATED_SUBNET=1
   echo "Создана подсеть $SUBNET_NAME $SUBNET_CIDR"
 fi
 echo "сеть $NETWORK_ID, подсеть $SUBNET_ID"
@@ -150,6 +168,7 @@ if [[ -z $SG_ID ]]; then
 fi
 
 step "Машина $VM_NAME"
+JUST_CREATED=0
 INSTANCE_ID=$(id_of compute instance get --name "$VM_NAME")
 if [[ -z $INSTANCE_ID ]]; then
   user_data=$(mktemp)
@@ -158,15 +177,18 @@ if [[ -z $INSTANCE_ID ]]; then
   template=$(<"$YC_DIR/cloud-init.yaml")
   printf '%s%s%s\n' "${template%%__DEPLOY_SSH_PUBLIC_KEY__*}" "$PUBLIC_KEY" "${template#*__DEPLOY_SSH_PUBLIC_KEY__}" >"$user_data"
   # Ice Lake, 2 ядра по 50%, 4 ГБ, 30 ГБ network-hdd. Метаданные в стиле GCE нужны для IAM-токена машины:
-  # им она логинится в реестр перед каждым pull.
+  # им она логинится в реестр перед каждым pull. Метаданные в стиле AWS не нужны никому и выключены явно:
+  # IMDSv1 отвечает без особого заголовка, обычная цель SSRF. Контейнерам дорогу к метаданным закрывает
+  # cloud-init.yaml (правило в цепочке DOCKER-USER).
   INSTANCE_ID=$(yc_ compute instance create --name "$VM_NAME" --hostname "$VM_NAME" --zone "$ZONE" \
     --platform standard-v3 --cores 2 --core-fraction 50 --memory 4 \
     --create-boot-disk "image-family=ubuntu-2404-lts,image-folder-id=standard-images,size=30,type=network-hdd,auto-delete=true" \
     --network-interface "subnet-id=$SUBNET_ID,nat-ip-version=ipv4,nat-address=$VM_IP,security-group-ids=[$SG_ID]" \
     --service-account-id "$VM_SA_ID" \
-    --metadata-options "gce-http-endpoint=enabled,gce-http-token=enabled" \
+    --metadata-options "gce-http-endpoint=enabled,gce-http-token=enabled,aws-v1-http-endpoint=disabled,aws-v1-http-token=disabled,aws-v2-http-endpoint=disabled,aws-v2-http-token=disabled" \
     --metadata-from-file "user-data=$user_data" \
     --format json | jq -r .id)
+  JUST_CREATED=1
   echo "Создана"
 fi
 
@@ -184,39 +206,52 @@ ADDRESS_ID=$ADDRESS_ID
 VM_IP=$VM_IP
 NETWORK_ID=$NETWORK_ID
 SUBNET_ID=$SUBNET_ID
-CREATED_NETWORK=$CREATED_NETWORK
-CREATED_SUBNET=$CREATED_SUBNET
 SG_ID=$SG_ID
 INSTANCE_ID=$INSTANCE_ID
 EOF
 
 # Ключи хоста берутся из вывода последовательного порта: их печатает cloud-init в самом конце первой загрузки,
 # уже после установки Docker. Так known_hosts получается не с первого подключения вслепую, а из облака.
-step "Ключи хоста (cloud-init печатает их в конце первой загрузки, обычно 3–6 минут)"
-host_keys=""
-for _ in $(seq 1 60); do
-  host_keys=$(yc_ compute instance get-serial-port-output --id "$INSTANCE_ID" 2>/dev/null |
-    tr -d '\r' |
-    sed -n '/-----BEGIN SSH HOST KEY KEYS-----/,/-----END SSH HOST KEY KEYS-----/p' |
-    grep -oE '(ssh-ed25519|ecdsa-sha2-nistp[0-9]+|ssh-rsa) AAAA[A-Za-z0-9+/=]+' || true)
-  [[ -n $host_keys ]] && break
-  sleep 15
-done
-if [[ -n $host_keys ]]; then
-  while read -r key_type key; do
-    echo "$VM_IP $key_type $key"
-  done <<<"$host_keys" >"$KNOWN_HOSTS_FILE"
-  echo "Записаны в $KNOWN_HOSTS_FILE"
-  if ssh -i "$SSH_PRIVATE_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
-    -o UserKnownHostsFile="$KNOWN_HOSTS_FILE" -o ConnectTimeout=15 "deploy@$VM_IP" \
-    'cloud-init status --wait >/dev/null; docker compose version'; then
+# Печатает он их только в первую загрузку, после перезагрузки (resize.sh) их там нет. Поэтому ждём их, только
+# если машина создана сейчас или ключей этого IP ещё нет в known_hosts.
+if [[ $JUST_CREATED == 1 ]] || ! grep -q "^$VM_IP " "$KNOWN_HOSTS_FILE" 2>/dev/null; then
+  step "Ключи хоста (cloud-init печатает их в конце первой загрузки, обычно 3–6 минут)"
+  host_keys=""
+  for _ in $(seq 1 60); do
+    host_keys=$(yc_ compute instance get-serial-port-output --id "$INSTANCE_ID" 2>/dev/null |
+      tr -d '\r' |
+      sed -n '/-----BEGIN SSH HOST KEY KEYS-----/,/-----END SSH HOST KEY KEYS-----/p' |
+      grep -oE '(ssh-ed25519|ecdsa-sha2-nistp[0-9]+|ssh-rsa) AAAA[A-Za-z0-9+/=]+' || true)
+    [[ -n $host_keys ]] && break
+    sleep 15
+  done
+  if [[ -n $host_keys ]]; then
+    while read -r key_type key; do
+      echo "$VM_IP $key_type $key"
+    done <<<"$host_keys" >"$KNOWN_HOSTS_FILE"
+    echo "Записаны в $KNOWN_HOSTS_FILE"
+  else
+    echo "Ключи хоста за 15 минут не появились. Посмотреть вывод: yc compute instance get-serial-port-output --id $INSTANCE_ID" >&2
+    echo "и записать строки из блока SSH HOST KEY KEYS в $KNOWN_HOSTS_FILE как «$VM_IP <тип> <ключ>»." >&2
+  fi
+fi
+
+# Сначала сам SSH, потом Docker: по сообщению сразу видно, что из двух не так.
+vm_ssh() {
+  ssh -i "$SSH_PRIVATE_KEY" -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile="$KNOWN_HOSTS_FILE" -o ConnectTimeout=15 "deploy@$VM_IP" "$@"
+}
+if grep -q "^$VM_IP " "$KNOWN_HOSTS_FILE" 2>/dev/null; then
+  step "Машина по SSH"
+  if ! vm_ssh true; then
+    echo "SSH пока не отвечает. Проверить позже: ssh -i $SSH_PRIVATE_KEY -o UserKnownHostsFile=$KNOWN_HOSTS_FILE deploy@$VM_IP" >&2
+  # docker info идёт в сам демон от имени deploy: заодно видно, что deploy в группе docker.
+  elif vm_ssh 'cloud-init status --wait >/dev/null; docker info >/dev/null && docker compose version'; then
     echo "SSH по ключу deploy работает, Docker на месте"
   else
-    echo "SSH пока не отвечает. Проверить позже: ssh -i $SSH_PRIVATE_KEY -o UserKnownHostsFile=$KNOWN_HOSTS_FILE deploy@$VM_IP" >&2
+    echo "SSH работает, а Docker нет. Лог первой загрузки на машине: sudo cat /var/log/cloud-init-output.log" >&2
+    echo "Поставить заново: sudo /usr/local/sbin/install-docker.sh, потом перезайти по SSH." >&2
   fi
-else
-  echo "Ключи хоста за 15 минут не появились. Посмотреть вывод: yc compute instance get-serial-port-output --id $INSTANCE_ID" >&2
-  echo "и записать строки из блока SSH HOST KEY KEYS в $KNOWN_HOSTS_FILE как «$VM_IP <тип> <ключ>»." >&2
 fi
 
 step "Готово"
@@ -231,3 +266,7 @@ IP:              $VM_IP
 
 Дальше: uv run infra/github/set_secrets.py — секреты и переменные GitHub.
 EOF
+if [[ -n $OLD_IP_NOTE ]]; then
+  echo
+  echo "$OLD_IP_NOTE"
+fi
