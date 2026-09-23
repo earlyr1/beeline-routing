@@ -37,7 +37,8 @@ services:
     # Хэш bcrypt полон знаков $: в .env он записан в одинарных кавычках, и compose берёт его как есть, без
     # подстановки переменных. Подставленное значение повторно не разбирается, так что $ доходят до Caddy целыми.
     environment:
-      SITE_ADDRESS: "${SITE_ADDRESS:?SITE_ADDRESS не задан, нужен публичный IP машины}"
+      SITE_ADDRESS: "${SITE_ADDRESS:?SITE_ADDRESS не задан: имя в nip.io и публичный IP машины через запятую}"
+      DEFAULT_SNI: "${DEFAULT_SNI:?DEFAULT_SNI не задан, нужен публичный IP машины}"
       TLS_MODE: ${TLS_MODE:-acme}
       BASIC_AUTH_USER: ${BASIC_AUTH_USER:?BASIC_AUTH_USER не задан}
       BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?BASIC_AUTH_HASH не задан}

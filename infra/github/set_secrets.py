@@ -11,7 +11,7 @@
 
 Откуда что берётся:
   .env в корне         — YANDEX_MAPS_API_KEY, YANDEX_GEOCODER_API_KEY, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL;
-  infra/yc/.state.env  — YC_SA_ID, YC_REGISTRY_ID, VM_HOST (пишет infra/yc/create.sh);
+  infra/yc/.state.env  — YC_SA_ID, YC_REGISTRY_ID, VM_HOST (пишет infra/yc/create.sh), SITE_HOST (<IP>.nip.io);
   infra/yc/known_hosts — VM_KNOWN_HOSTS (тоже create.sh, ключи хоста из вывода последовательного порта);
   ~/.ssh/beeline_routing_deploy — VM_SSH_KEY, закрытый ключ пользователя deploy;
   генерируется        — POSTGRES_PASSWORD (только если в GitHub его ещё нет: база на машине уже создана
@@ -227,6 +227,13 @@ def main() -> None:
         default=None,
         help="переменная TLS_MODE; без флага остаётся прежней, а если её ещё нет — acme",
     )
+    # Кабинет ключа Яндекс Карт не принимает голый IP, поэтому сайт открывается ещё и по имени в nip.io:
+    # 81.26.188.190.nip.io указывает на тот же адрес. Пустое значение — только IP.
+    parser.add_argument(
+        "--site-host",
+        default=None,
+        help="имя сайта для ключа Яндекс Карт, по умолчанию <IP>.nip.io; пустая строка — SITE_HOST не трогать",
+    )
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--state-file", type=Path, default=REPO_ROOT / "infra" / "yc" / ".state.env")
     parser.add_argument("--known-hosts", type=Path, default=REPO_ROOT / "infra" / "yc" / "known_hosts")
@@ -250,7 +257,11 @@ def main() -> None:
         "YC_SA_ID": state["CI_SA_ID"],
         "YC_REGISTRY_ID": state["REGISTRY_ID"],
         "VM_HOST": state["VM_IP"],
+        "SITE_HOST": f"{state['VM_IP']}.nip.io" if args.site_host is None else args.site_host.strip(),
     }
+    # Пустую переменную GitHub не принимает: пустой --site-host просто не трогает SITE_HOST.
+    if not variables["SITE_HOST"]:
+        del variables["SITE_HOST"]
     values: dict[str, str] = {
         "VM_SSH_KEY": args.ssh_key.read_text(encoding="utf-8"),
         "VM_KNOWN_HOSTS": args.known_hosts.read_text(encoding="utf-8").strip() + "\n",
