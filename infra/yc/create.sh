@@ -162,7 +162,7 @@ if [[ -z $SG_ID ]]; then
     --rule "direction=ingress,port=22,protocol=tcp,v4-cidrs=[0.0.0.0/0],description=ssh" \
     --rule "direction=ingress,port=80,protocol=tcp,v4-cidrs=[0.0.0.0/0],description=http" \
     --rule "direction=ingress,port=443,protocol=tcp,v4-cidrs=[0.0.0.0/0],description=https" \
-    --rule "direction=egress,protocol=any,v4-cidrs=[0.0.0.0/0],description=all-egress" \
+    --rule "direction=egress,protocol=any,from-port=0,to-port=65535,v4-cidrs=[0.0.0.0/0],description=all-egress" \
     --format json | jq -r .id)
   echo "Создана"
 fi
