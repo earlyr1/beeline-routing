@@ -176,7 +176,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
 
 Выкатывается только верхушка `main`. Если тесты старого пуша закончились позже нового, job `tip` пропустит его выкат, иначе он встал бы в очередь за новым и откатил сервер. Если новый пуш упал на тестах, на сервере остаётся прошлый выкат; нужен именно пропущенный коммит — Re-run all jobs у его прогона.
 
-У job деплоя нет `environment:` и не должно появиться. С ним поле `sub` в OIDC-токене GitHub становится `repo:…:environment:…`, а федерация в Yandex Cloud доверяет только `repo:earlyr1/beeline-routing:ref:refs/heads/main`. Прогоны из других веток и pull request в облако не попадают вовсе.
+У job деплоя нет `environment:` и не должно появиться. С ним поле `sub` в OIDC-токене GitHub становится `repo:…:environment:…`, а федерация в Yandex Cloud доверяет только `repo:earlyr1@31624290/beeline-routing@1383515516:ref:refs/heads/main`. Это неизменяемый вид `sub`, который GitHub включает новым репозиториям (числовые id владельца и репозитория; узнать — `GET /repos/earlyr1/beeline-routing/actions/oidc/customization/sub`); по старому виду `repo:earlyr1/beeline-routing:…` облако отвечает 401 «No matching federated credentials». Прогоны из других веток и pull request в облако не попадают вовсе.
 
 Если с машины не открывается Docker Hub (`postgres`, `caddy` не скачиваются), в `/etc/docker/daemon.json` добавляется `"registry-mirrors": ["https://mirror.gcr.io"]` и `sudo systemctl restart docker`.
 

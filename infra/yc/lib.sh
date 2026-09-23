@@ -28,7 +28,11 @@ OIDC_ISSUER=https://token.actions.githubusercontent.com
 OIDC_AUDIENCE=https://github.com/earlyr1
 OIDC_JWKS_URL=https://token.actions.githubusercontent.com/.well-known/jwks
 # Токен с таким sub выдаётся только прогонам из ветки main, и только без environment: в job — иначе sub другой.
-OIDC_SUBJECT="repo:$GITHUB_REPO:ref:refs/heads/main"
+# GitHub для новых репозиториев кладёт в OIDC-токен неизменяемый sub с числовыми id владельца и репозитория:
+# repo:earlyr1@31624290/beeline-routing@1383515516:ref:refs/heads/main (узнать: GET
+# /repos/<owner>/<repo>/actions/oidc/customization/sub, поле sub_claim_prefix). По старому виду
+# repo:earlyr1/beeline-routing:… облако отвечает 401 «No matching federated credentials».
+OIDC_SUBJECT=${OIDC_SUBJECT:-"repo:earlyr1@31624290/beeline-routing@1383515516:ref:refs/heads/main"}
 
 YC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATE_FILE="$YC_DIR/.state.env"
