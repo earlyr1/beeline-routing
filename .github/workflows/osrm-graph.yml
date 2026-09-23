@@ -90,7 +90,9 @@ jobs:
           TAG=$tag compose --profile prepare pull --quiet osrm-prepare
           docker logout cr.yandex >/dev/null
           free -h
-          TAG=$tag compose --profile prepare run --rm osrm-prepare
+          # Скрипт приходит в bash через stdin. Без -T и </dev/null `compose run` подключил бы этот stdin к
+          # контейнеру, съел бы остаток скрипта, и перезапуск osrm с проверкой ниже молча не выполнились бы.
+          TAG=$tag compose --profile prepare run --rm -T osrm-prepare </dev/null
           compose up -d --no-build --force-recreate osrm
           # Маршрут между двумя точками Москвы: граф загружен и отвечает. Порт 5050 открыт только на 127.0.0.1.
           for _ in $(seq 1 30); do
