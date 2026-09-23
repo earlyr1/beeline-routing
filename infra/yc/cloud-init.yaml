@@ -1,0 +1,80 @@
+#cloud-config
+# Первая загрузка сервера жюри: пользователь deploy, Docker с плагином compose, jq, swap на 2 ГБ, автообновления.
+# create.sh подставляет публичный ключ из ~/.ssh/beeline_routing_deploy.pub в ssh_authorized_keys пользователя
+# deploy и передаёт готовый файл в метаданные user-data. На уже созданной машине правка этого файла ничего не меняет.
+
+# Пользователь ubuntu по умолчанию не создаётся: заходят только deploy и только по ключу.
+users:
+  - name: deploy
+    shell: /bin/bash
+    lock_passwd: true
+    # Группа docker и так даёт root, поэтому sudo без пароля ничего не открывает, а чинить систему с ним проще.
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - __DEPLOY_SSH_PUBLIC_KEY__
+ssh_pwauth: false
+disable_root: true
+
+package_update: true
+package_upgrade: true
+packages:
+  - ca-certificates
+  - curl
+  - jq
+  - unattended-upgrades
+
+# Запас на пики памяти (сборка графа OSRM, поиск OR-Tools в нескольких процессах): swap медленный,
+# но спасает от OOM-киллера.
+swap:
+  filename: /swapfile
+  size: 2147483648
+  maxsize: 2147483648
+
+write_files:
+  # Логи контейнеров не должны съесть 30 ГБ диска за месяц работы.
+  - path: /etc/docker/daemon.json
+    permissions: "0644"
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": {"max-size": "10m", "max-file": "3"}
+      }
+  # Ежедневные обновления безопасности. Перезагрузок сами не делают: машина жюри не должна пропасть посреди показа.
+  - path: /etc/apt/apt.conf.d/20auto-upgrades
+    permissions: "0644"
+    content: |
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+  # Docker из официального репозитория: в нём свежий плагин compose (docker-compose.prod.yml просит 2.24+).
+  # Если download.docker.com не ответил — пакеты Ubuntu, их compose тоже не младше 2.24.
+  - path: /usr/local/sbin/install-docker.sh
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      official() {
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL --retry 5 https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+        # shellcheck source=/dev/null
+        codename=$(. /etc/os-release && echo "$VERSION_CODENAME")
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $codename stable" \
+          > /etc/apt/sources.list.d/docker.list
+        apt-get update
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+      }
+      if ! official; then
+        echo "download.docker.com недоступен, ставлю Docker из репозитория Ubuntu" >&2
+        rm -f /etc/apt/sources.list.d/docker.list
+        apt-get update
+        apt-get install -y docker.io docker-compose-v2
+      fi
+      systemctl enable --now docker
+      docker compose version
+
+runcmd:
+  - /usr/local/sbin/install-docker.sh
+  - usermod -aG docker deploy
+  # Сюда деплой кладёт docker-compose.yml, docker-compose.prod.yml, Caddyfile и .env.
+  - install -d -o deploy -g deploy -m 0750 /home/deploy/app
