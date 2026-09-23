@@ -185,7 +185,10 @@ jobs:
             echo "::error::TLS_MODE — acme или internal, а не $TLS_MODE"
             exit 1
           fi
-          # Пути в ~/app те же, что в репозитории: docker-compose.prod.yml монтирует ./infra/caddy/Caddyfile.
+          # Хэш Caddyfile — метка контейнера caddy в docker-compose.prod.yml: правка файла пересоздаёт Caddy.
+          # shellcheck disable=SC2034  # читается ниже через ${!name} в env_line
+          CADDYFILE_SHA=$(sha256sum infra/caddy/Caddyfile | cut -c1-64)
+          # Пути в ~/app те же, что в репозитории: docker-compose.prod.yml монтирует каталог ./infra/caddy.
           tar -cf - docker-compose.yml docker-compose.prod.yml infra/caddy/Caddyfile |
             ssh vm 'mkdir -p ~/app && tar -xf - -C ~/app'
           # .env собирается в памяти раннера и уходит через stdin ssh: значений нет ни в командной строке, ни в
@@ -202,8 +205,8 @@ jobs:
             printf "%s='%s'\n" "$name" "$value"
           }
           env_file=$(
-            for name in REGISTRY TAG SITE_ADDRESS TLS_MODE POSTGRES_PASSWORD BASIC_AUTH_USER BASIC_AUTH_HASH \
-              YANDEX_MAPS_API_KEY YANDEX_GEOCODER_API_KEY LLM_BASE_URL LLM_API_KEY LLM_MODEL; do
+            for name in REGISTRY TAG SITE_ADDRESS TLS_MODE CADDYFILE_SHA POSTGRES_PASSWORD BASIC_AUTH_USER \
+              BASIC_AUTH_HASH YANDEX_MAPS_API_KEY YANDEX_GEOCODER_API_KEY LLM_BASE_URL LLM_API_KEY LLM_MODEL; do
               env_line "$name" || exit 1
             done
           )

@@ -41,8 +41,15 @@ services:
       TLS_MODE: ${TLS_MODE:-acme}
       BASIC_AUTH_USER: ${BASIC_AUTH_USER:?BASIC_AUTH_USER не задан}
       BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?BASIC_AUTH_HASH не задан}
+    # Caddy не следит за своим файлом, а `up -d` пересоздаёт контейнер, только если поменялось его описание здесь.
+    # Поэтому хэш Caddyfile (деплой пишет его в .env) — в метке: правка файла меняет метку, и Caddy пересоздаётся
+    # с новым конфигом. Сертификаты в томе caddy-data при этом остаются, новый у Let's Encrypt не просится.
+    labels:
+      caddyfile-sha: "${CADDYFILE_SHA:-}"
+    # Каталог, а не один файл: tar на выкате пишет Caddyfile новым файлом, а смонтированный поодиночке файл
+    # остался бы старым — и `caddy reload` руками перечитал бы прежний конфиг.
     volumes:
-      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./infra/caddy:/etc/caddy:ro
       # Сертификаты и ключ аккаунта ACME: переживают передеплой, иначе каждый выкат просил бы новый сертификат.
       - caddy-data:/data
       - caddy-config:/config
