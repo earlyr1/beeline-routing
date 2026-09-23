@@ -1,0 +1,106 @@
+# Граф дорог OSRM на сервере жюри: собрать и запушить образ osrm-prepare, запустить его на машине (скачать PBF
+# Центрального ФО, вырезать Москву с областью, построить граф в томе osrm-data) и перезапустить osrm.
+# Только вручную: Actions → osrm-graph → Run workflow на ветке main. Нужен уже выкаченный сервис (ci.yml): граф
+# строится рядом с ним, по его ~/app/.env. Если граф для текущего bbox уже есть, скрипт сборки ничего не делает.
+# Сборке тесно в 4 ГБ: перед запуском можно поднять память (infra/yc/resize.sh 50 8), после — вернуть.
+name: osrm-graph
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  graph:
+    name: сборка графа OSRM на машине
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    # Как в ci.yml: без environment:, иначе федерация Yandex Cloud не примет OIDC-токен.
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: jury-vm
+      cancel-in-progress: false
+    env:
+      REGISTRY: cr.yandex/${{ vars.YC_REGISTRY_ID }}
+      TAG: ${{ github.sha }}
+    steps:
+      - name: Настройки репозитория на месте
+        env:
+          YC_SA_ID: ${{ vars.YC_SA_ID }}
+          YC_REGISTRY_ID: ${{ vars.YC_REGISTRY_ID }}
+        run: |
+          missing=()
+          for name in YC_SA_ID YC_REGISTRY_ID; do
+            [[ -n ${!name} ]] || missing+=("$name")
+          done
+          if ((${#missing[@]})); then
+            echo "::error::Не заданы переменные репозитория: ${missing[*]}. Их кладёт infra/github/set_secrets.py"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Вход в Container Registry
+        uses: yc-actions/yc-cr-login@v3
+        with:
+          yc-sa-id: ${{ vars.YC_SA_ID }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Образ osrm-prepare
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: infra/osrm/Dockerfile.prepare
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.REGISTRY }}/osrm-prepare:${{ env.TAG }}
+            ${{ env.REGISTRY }}/osrm-prepare:latest
+          cache-from: type=gha,scope=osrm-prepare
+          cache-to: type=gha,scope=osrm-prepare,mode=max
+
+      - name: SSH до машины
+        uses: ./.github/actions/vm-ssh
+        with:
+          host: ${{ vars.VM_HOST }}
+          ssh-key: ${{ secrets.VM_SSH_KEY }}
+          known-hosts: ${{ secrets.VM_KNOWN_HOSTS }}
+
+      # TAG из окружения перекрывает TAG из ~/app/.env: образ osrm-prepare берётся этого прогона, а остальные
+      # сервисы не трогаются. На 2 ядрах по 50% сборка идёт десятки минут, SSH держится ServerAliveInterval.
+      - name: Сборка графа и перезапуск osrm
+        run: |
+          ssh vm bash -s -- "$TAG" <<'EOF'
+          set -euo pipefail
+          tag=$1
+          cd ~/app
+          if [[ ! -f .env ]]; then
+            echo "На машине нет ~/app/.env: сначала выкатите сервис (workflow ci)" >&2
+            exit 1
+          fi
+          compose() { docker compose -f docker-compose.yml -f docker-compose.prod.yml "$@"; }
+          curl -sf -H Metadata-Flavor:Google \
+            http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token |
+            jq -r .access_token | docker login --username iam --password-stdin cr.yandex
+          TAG=$tag compose --profile prepare pull --quiet osrm-prepare
+          docker logout cr.yandex >/dev/null
+          free -h
+          TAG=$tag compose --profile prepare run --rm osrm-prepare
+          compose up -d --no-build --force-recreate osrm
+          # Маршрут между двумя точками Москвы: граф загружен и отвечает. Порт 5050 открыт только на 127.0.0.1.
+          for _ in $(seq 1 30); do
+            if route=$(curl -fsS "http://127.0.0.1:5050/route/v1/driving/37.6173,55.7558;37.5300,55.7030?overview=false"); then
+              jq -r '"OSRM отвечает: \(.code), \(.routes[0].distance | floor) м"' <<<"$route"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "OSRM не ответил за 2,5 минуты" >&2
+          compose logs --tail 60 osrm
+          exit 1
+          EOF

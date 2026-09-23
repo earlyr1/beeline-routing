@@ -1,0 +1,263 @@
+# Тесты на каждый пуш в main и на pull request; после зелёных тестов пуш в main собирает образы и выкатывает их
+# на сервер жюри. Выкат вручную — Actions → ci → Run workflow на ветке main. Откат — Re-run all jobs у прогона
+# нужного коммита: он соберёт те же образы из кэша и выкатит их.
+#
+# Настройки репозитория (кладёт infra/github/set_secrets.py):
+#   переменные — YC_SA_ID (сервисный аккаунт routing-ci), YC_REGISTRY_ID, VM_HOST (публичный IP), TLS_MODE;
+#   секреты — VM_SSH_KEY, VM_KNOWN_HOSTS, POSTGRES_PASSWORD, BASIC_AUTH_USER, BASIC_AUTH_HASH, BASIC_AUTH_PASSWORD
+#   и ключи приложения YANDEX_MAPS_API_KEY, YANDEX_GEOCODER_API_KEY, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend — ruff и pytest без базы
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # requires-python в backend/pyproject.toml: >=3.12,<3.13
+          python-version: "3.12"
+      # Та же версия uv, что в backend/Dockerfile.
+      - run: python -m pip install uv==0.12.13
+      - name: make lint
+        run: make lint
+      - name: make test
+        run: make test
+
+  backend-db:
+    name: backend — тесты на Postgres (маркер db)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # То же, что make test-db, только базу поднимает сам Actions, а не docker run из Makefile.
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: routing
+          POSTGRES_USER: routing
+          POSTGRES_PASSWORD: routing
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U routing -d routing"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      TEST_DATABASE_URL: postgresql://routing:routing@localhost:5432/routing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install uv==0.12.13
+      - name: pytest -m db
+        working-directory: backend
+        run: uv run pytest -o addopts= -q -m db
+
+  frontend:
+    name: frontend — tsc, vitest, сборка
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Как в frontend/Dockerfile (node:22-alpine).
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+      - run: npm run build
+
+  deploy:
+    name: образы и выкат на сервер жюри
+    needs: [backend, backend-db, frontend]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Никакого environment: у этого job — с ним sub в OIDC-токене станет repo:…:environment:…, а федерация
+    # в Yandex Cloud доверяет только repo:earlyr1/beeline-routing:ref:refs/heads/main.
+    permissions:
+      id-token: write
+      contents: read
+    # Одна правка сервера за раз: выкаты и сборка графа OSRM (osrm-graph.yml) встают в общую очередь.
+    concurrency:
+      group: jury-vm
+      cancel-in-progress: false
+    env:
+      REGISTRY: cr.yandex/${{ vars.YC_REGISTRY_ID }}
+      TAG: ${{ github.sha }}
+      VM_HOST: ${{ vars.VM_HOST }}
+    steps:
+      - name: Настройки репозитория на месте
+        env:
+          YC_SA_ID: ${{ vars.YC_SA_ID }}
+          YC_REGISTRY_ID: ${{ vars.YC_REGISTRY_ID }}
+        run: |
+          missing=()
+          for name in YC_SA_ID YC_REGISTRY_ID VM_HOST; do
+            [[ -n ${!name} ]] || missing+=("$name")
+          done
+          if ((${#missing[@]})); then
+            echo "::error::Не заданы переменные репозитория: ${missing[*]}. Их кладёт infra/github/set_secrets.py"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      # Без долгоживущих ключей: GitHub выдаёт прогону OIDC-токен, Yandex Cloud меняет его на IAM-токен routing-ci.
+      - name: Вход в Container Registry
+        uses: yc-actions/yc-cr-login@v3
+        with:
+          yc-sa-id: ${{ vars.YC_SA_ID }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Образ backend
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/Dockerfile
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.REGISTRY }}/backend:${{ env.TAG }}
+            ${{ env.REGISTRY }}/backend:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+
+      - name: Образ frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: frontend
+          push: true
+          provenance: false
+          tags: |
+            ${{ env.REGISTRY }}/frontend:${{ env.TAG }}
+            ${{ env.REGISTRY }}/frontend:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
+
+      - name: SSH до машины
+        uses: ./.github/actions/vm-ssh
+        with:
+          host: ${{ vars.VM_HOST }}
+          ssh-key: ${{ secrets.VM_SSH_KEY }}
+          known-hosts: ${{ secrets.VM_KNOWN_HOSTS }}
+
+      - name: Файлы compose, Caddyfile и .env на машину
+        env:
+          SITE_ADDRESS: ${{ vars.VM_HOST }}
+          TLS_MODE: ${{ vars.TLS_MODE || 'acme' }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          BASIC_AUTH_USER: ${{ secrets.BASIC_AUTH_USER }}
+          BASIC_AUTH_HASH: ${{ secrets.BASIC_AUTH_HASH }}
+          YANDEX_MAPS_API_KEY: ${{ secrets.YANDEX_MAPS_API_KEY }}
+          YANDEX_GEOCODER_API_KEY: ${{ secrets.YANDEX_GEOCODER_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
+        run: |
+          for name in POSTGRES_PASSWORD BASIC_AUTH_USER BASIC_AUTH_HASH; do
+            if [[ -z ${!name} ]]; then
+              echo "::error::Не задан секрет $name"
+              exit 1
+            fi
+          done
+          if [[ $TLS_MODE != acme && $TLS_MODE != internal ]]; then
+            echo "::error::TLS_MODE — acme или internal, а не $TLS_MODE"
+            exit 1
+          fi
+          # Пути в ~/app те же, что в репозитории: docker-compose.prod.yml монтирует ./infra/caddy/Caddyfile.
+          tar -cf - docker-compose.yml docker-compose.prod.yml infra/caddy/Caddyfile |
+            ssh vm 'mkdir -p ~/app && tar -xf - -C ~/app'
+          # .env собирается в памяти раннера и уходит через stdin ssh: значений нет ни в командной строке, ни в
+          # файлах раннера. Каждое значение в одинарных кавычках — так compose не трогает $ внутри (хэш bcrypt
+          # из них и состоит). Одинарную кавычку и перевод строки в таком виде не записать, их не пускаем.
+          env_line() {
+            local name=$1 value=${!1}
+            case $value in
+              *"'"* | *$'\n'*)
+                echo "::error::В значении $name одинарная кавычка или перевод строки: в .env так не записать" >&2
+                return 1
+                ;;
+            esac
+            printf "%s='%s'\n" "$name" "$value"
+          }
+          env_file=$(
+            for name in REGISTRY TAG SITE_ADDRESS TLS_MODE POSTGRES_PASSWORD BASIC_AUTH_USER BASIC_AUTH_HASH \
+              YANDEX_MAPS_API_KEY YANDEX_GEOCODER_API_KEY LLM_BASE_URL LLM_API_KEY LLM_MODEL; do
+              env_line "$name" || exit 1
+            done
+          )
+          printf '%s\n' "$env_file" | ssh vm 'umask 077 && cat > ~/app/.env.new && mv ~/app/.env.new ~/app/.env'
+
+      - name: Выкат
+        run: |
+          ssh vm 'bash -s' <<'EOF'
+          set -euo pipefail
+          cd ~/app
+          compose() { docker compose -f docker-compose.yml -f docker-compose.prod.yml "$@"; }
+          # Реестр пускает машину по IAM-токену её сервисного аккаунта routing-vm из метаданных. Токен живёт
+          # меньше 12 часов, поэтому логин прямо перед pull, а на выходе из скрипта — logout.
+          curl -sf -H Metadata-Flavor:Google \
+            http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token |
+            jq -r .access_token | docker login --username iam --password-stdin cr.yandex
+          trap 'docker logout cr.yandex >/dev/null' EXIT
+          compose pull --quiet
+          compose up -d --no-build --remove-orphans
+          compose ps
+          EOF
+
+      # Проверка идёт на самой машине, но тем же путём, что у жюри: Caddy, TLS, пароль, nginx, backend.
+      # Пароль уходит в curl на машине через stdin (--config -): его нет ни в командной строке, ни в файлах.
+      - name: Сервис отвечает через Caddy
+        env:
+          BASIC_AUTH_USER: ${{ secrets.BASIC_AUTH_USER }}
+          BASIC_AUTH_PASSWORD: ${{ secrets.BASIC_AUTH_PASSWORD }}
+        run: |
+          if [[ -z $BASIC_AUTH_PASSWORD ]]; then
+            echo "::error::Не задан секрет BASIC_AUTH_PASSWORD"
+            exit 1
+          fi
+          # В конфиге curl строка в кавычках: \ и " внутри экранируются.
+          user=${BASIC_AUTH_USER//\\/\\\\}
+          user=${user//\"/\\\"}
+          password=${BASIC_AUTH_PASSWORD//\\/\\\\}
+          password=${password//\"/\\\"}
+          check="curl -fsS -k --max-time 10 --resolve $VM_HOST:443:127.0.0.1 --config - https://$VM_HOST/api/health"
+          # До 5 минут: на первом выкате Caddy ещё получает сертификат, backend применяет миграции.
+          for attempt in $(seq 1 60); do
+            # shellcheck disable=SC2029  # $check нарочно раскрывается здесь: в нём только IP, без секретов
+            if printf 'user = "%s:%s"\n' "$user" "$password" | ssh vm "$check"; then
+              echo
+              echo "Сервис отвечает, попытка $attempt"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Сервис не ответил за 5 минут"
+          ssh vm 'cd ~/app && c="docker compose -f docker-compose.yml -f docker-compose.prod.yml" &&
+            $c ps && $c logs --tail 60 caddy frontend backend'
+          exit 1
+
+      # Старые образы на диске не нужны: откат всё равно скачает свой тег из реестра заново.
+      - name: Уборка старых образов
+        run: ssh vm 'docker image prune -af >/dev/null && df -h / | tail -1'

@@ -1,0 +1,48 @@
+# Готовит на раннере `ssh vm`: пользователь deploy, ключ из секрета, ключ хоста закреплён заранее.
+# VM_KNOWN_HOSTS снят create.sh с вывода последовательного порта машины, поэтому подменённый сервер SSH не пустит,
+# а не спросит «доверять ли». Общий для ci.yml и osrm-graph.yml.
+name: vm-ssh
+description: SSH до сервера жюри под именем vm
+inputs:
+  host:
+    description: Публичный IP машины
+    required: true
+  ssh-key:
+    description: Закрытый ключ пользователя deploy
+    required: true
+  known-hosts:
+    description: Строки known_hosts для этого IP
+    required: true
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        VM_HOST: ${{ inputs.host }}
+        VM_SSH_KEY: ${{ inputs.ssh-key }}
+        VM_KNOWN_HOSTS: ${{ inputs.known-hosts }}
+      run: |
+        missing=()
+        [[ -n $VM_HOST ]] || missing+=(VM_HOST)
+        [[ -n $VM_SSH_KEY ]] || missing+=(VM_SSH_KEY)
+        [[ -n $VM_KNOWN_HOSTS ]] || missing+=(VM_KNOWN_HOSTS)
+        if ((${#missing[@]})); then
+          echo "::error::Не заданы: ${missing[*]}. Их кладёт infra/github/set_secrets.py"
+          exit 1
+        fi
+        install -d -m 700 ~/.ssh
+        (umask 077 && printf '%s\n' "$VM_SSH_KEY" > ~/.ssh/deploy_key)
+        printf '%s\n' "$VM_KNOWN_HOSTS" > ~/.ssh/known_hosts_vm
+        cat > ~/.ssh/config <<CONFIG
+        Host vm
+          HostName $VM_HOST
+          User deploy
+          IdentityFile ~/.ssh/deploy_key
+          IdentitiesOnly yes
+          UserKnownHostsFile ~/.ssh/known_hosts_vm
+          StrictHostKeyChecking yes
+          BatchMode yes
+          ConnectTimeout 20
+          ServerAliveInterval 30
+        CONFIG
+        ssh vm true
