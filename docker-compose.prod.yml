@@ -1,0 +1,55 @@
+# Надстройка для сервера жюри поверх docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build --remove-orphans
+# Локально она не нужна: `docker compose up` на ноутбуке по-прежнему собирает образы сам и отдаёт http://localhost:8000.
+#
+# На сервере ничего не собирается: backend, frontend и osrm-prepare собирает GitHub Actions и кладёт в Container
+# Registry с тегом коммита. Наружу смотрит только Caddy: HTTPS по IP и базовая авторизация (infra/caddy/Caddyfile).
+# Значения — из ~/app/.env, его пишет деплой (.github/workflows/ci.yml). !reset требует docker compose 2.24+.
+services:
+  backend:
+    build: !reset null
+    image: "${REGISTRY:?REGISTRY не задан, нужен cr.yandex/<id реестра>}/backend:${TAG:?TAG не задан, нужен sha коммита}"
+
+  frontend:
+    build: !reset null
+    image: "${REGISTRY:?REGISTRY не задан}/frontend:${TAG:?TAG не задан}"
+    # Порт 8000 наружу не публикуется: снаружи до фронта можно дойти только через Caddy с паролем.
+    ports: !reset []
+
+  osrm-prepare:
+    build: !reset null
+    image: "${REGISTRY:?REGISTRY не задан}/osrm-prepare:${TAG:?TAG не задан}"
+
+  postgres:
+    environment:
+      # Пароль по умолчанию из docker-compose.yml годится только для ноутбука: на сервере он обязателен.
+      # Он же подставляется в DATABASE_URL backend, поэтому в нём только URL-безопасные символы (set_secrets.py).
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD не задан}
+
+  caddy:
+    image: caddy:2.11-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    # Только то, что нужно Caddyfile, а не весь .env: ключам карт и модели в прокси делать нечего.
+    # Хэш bcrypt полон знаков $: в .env он записан в одинарных кавычках, и compose берёт его как есть, без
+    # подстановки переменных. Подставленное значение повторно не разбирается, так что $ доходят до Caddy целыми.
+    environment:
+      SITE_ADDRESS: "${SITE_ADDRESS:?SITE_ADDRESS не задан, нужен публичный IP машины}"
+      TLS_MODE: ${TLS_MODE:-acme}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?BASIC_AUTH_USER не задан}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?BASIC_AUTH_HASH не задан}
+    volumes:
+      - ./infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Сертификаты и ключ аккаунта ACME: переживают передеплой, иначе каждый выкат просил бы новый сертификат.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

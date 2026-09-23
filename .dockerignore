@@ -9,3 +9,6 @@ frontend/node_modules
 frontend/dist
 data/cache.sqlite
 data/raw
+GITHUB_MCP_TOKEN
+infra/yc/.state.env
+infra/yc/known_hosts

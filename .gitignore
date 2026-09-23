@@ -9,3 +9,8 @@ frontend/dist/
 coverage/
 .claude/
 .DS_Store
+# Идентификаторы и ключ хоста машины в Yandex Cloud: пишет infra/yc/create.sh, у каждого свои.
+infra/yc/.state.env
+infra/yc/known_hosts
+# Токен GitHub для infra/github/set_secrets.py.
+GITHUB_MCP_TOKEN

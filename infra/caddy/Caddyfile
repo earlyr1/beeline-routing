@@ -1,0 +1,41 @@
+# Caddy перед приложением на сервере жюри: HTTPS по голому IP и базовая авторизация на всё — и на SPA, и на /api.
+# Значения приходят из окружения контейнера (docker-compose.prod.yml берёт их из ~/app/.env):
+#   SITE_ADDRESS     — публичный IP машины, на него же выписывается сертификат;
+#   BASIC_AUTH_USER  — логин жюри;
+#   BASIC_AUTH_HASH  — bcrypt-хэш пароля (сам пароль на сервер не попадает);
+#   TLS_MODE         — acme (по умолчанию) или internal.
+# {$...} Caddy подставляет до разбора файла, поэтому переменная может быть и частью слова (import tls_...).
+
+{
+	# Для IP-адреса браузер и curl не шлют SNI, а внутри контейнера адрес назначения — внутренний адрес
+	# докера, не публичный. Без этой строки Caddy не нашёл бы, какой сертификат отдать на такое рукопожатие.
+	default_sni {$SITE_ADDRESS}
+}
+
+# Let's Encrypt выдаёт сертификаты на IP только в профиле shortlived: живут шесть дней, Caddy продлевает их сам.
+# Профили ACME в Caddy пока помечены EXPERIMENTAL. Проверка — http-01 на 80-м порту или tls-alpn-01 на 443-м.
+# Выданный сертификат лежит в томе caddy-data и переживает передеплой: лимит Let's Encrypt — пять
+# сертификатов на один и тот же набор имён за семь дней.
+(tls_acme) {
+	tls {
+		issuer acme {
+			profile shortlived
+		}
+	}
+}
+
+# Запасной вариант, если Let's Encrypt недоступен: свой CA Caddy. Браузер покажет предупреждение о сертификате.
+(tls_internal) {
+	tls internal
+}
+
+{$SITE_ADDRESS} {
+	import tls_{$TLS_MODE:acme}
+
+	basic_auth bcrypt {
+		{$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+	}
+
+	encode zstd gzip
+	reverse_proxy frontend:80
+}
