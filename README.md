@@ -61,6 +61,8 @@ docker compose exec backend python scripts/smoke_api.py
 
 Скрипт загружает бандл Востока, строит план, применяет три демо-события, запрашивает объяснение и линии маршрутов и печатает метрики.
 
+Сервер для жюри в Yandex Cloud — HTTPS по IP, пароль на всё, выкат из GitHub Actions после зелёных тестов — описан в [docs/deploy.md](docs/deploy.md).
+
 ## Разработка без Docker
 
 Backend (Python 3.12 и [uv](https://docs.astral.sh/uv/)):
