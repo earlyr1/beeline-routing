@@ -2,7 +2,7 @@
 
 Запуск из каталога backend, на ночь — под caffeinate, чтобы Mac не уснул от бездействия посреди поиска (от закрытой
 крышки caffeinate -i не спасает):
-  caffeinate -i ~/.local/bin/uv run python -m scripts.night_plan --region all --minutes 120
+  caffeinate -i ~/.local/bin/uv run --env-file ../.env python -m scripts.night_plan --region all --minutes 120
   ~/.local/bin/uv run python -m scripts.night_plan --region east --minutes 1 --out /tmp/night
 
 День региона собирается тем же кодом, что и в сервисе: бандл data/bundles/<регион>/bundle.json, контекст
@@ -64,7 +64,8 @@ DEFAULT_OSRM_URL = "http://localhost:5050"
 OSRM_OFF = "off"
 CAFFEINATE = (
     "Долгий расчёт запускайте под caffeinate, иначе Mac уснёт от бездействия посреди поиска: "
-    "caffeinate -i ~/.local/bin/uv run python -m scripts.night_plan --region all --minutes 120. "
+    "caffeinate -i ~/.local/bin/uv run --env-file ../.env python -m scripts.night_plan --region all "
+    "--minutes 120 (или из корня: make night). "
     "От закрытой крышки caffeinate -i не спасает: на ночь подключите питание и не закрывайте крышку"
 )
 REBUILD = (
@@ -72,7 +73,8 @@ REBUILD = (
     "docker compose up -d --build backend"
 )
 # Строка оптимизированного плана в report.md бандла: её посчитал prepare поиском с лимитом по умолчанию (30 с),
-# с OSRM, но без матриц 2ГИС, то есть на другой задаче: матрицы лежат в репозитории, и у сервиса они есть всегда.
+# с OSRM, но без матриц 2ГИС, то есть на другой задаче: матрицы лежат в репозитории, и у сервиса с ключом
+# TRANSIT_KEY они есть всегда.
 REPORT_ROW = "Оптимизированный"
 # Поиск, который шёл заметно меньше лимита: OR-Tools считает лимит по настенным часам, а монотонные часы
 # в сне Mac стоят. Так видно, что Mac засыпал посреди поиска.
