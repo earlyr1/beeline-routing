@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { describeEvent } from '../../lib/events';
 import { byId } from '../../lib/planView';
-import { choiceEvent, isAssignVariant, sameAsText } from '../../lib/variants';
+import { choiceEvent, choiceHasHolder, isAssignVariant, sameAsText } from '../../lib/variants';
 import { useAppStore } from '../../store/useAppStore';
 import { AssignCard } from './AssignCard';
 import { VariantCard } from './VariantCard';
 
 /**
- * Окно выбора варианта исправления при «ломающем» событии: три посчитанные карточки, рекомендованная выделена,
- * а у срочной заявки четвёртая — «отдать заявку выбранной бригаде».
+ * Окно выбора варианта исправления: три посчитанные карточки, рекомендованная выделена, а у события об одной заявке
+ * четвёртая — «отдать заявку выбранной бригаде». Само открывается у события любого типа, когда «Ничего не менять»
+ * ломает план больше лучшего пересчёта; у остальных событий его открывает «Варианты…» на шкале.
  * Часы стоят, пока окно открыто; закрытое без выбора окно оставляет часы на событии.
  */
 export function ChoiceDialog() {
@@ -44,11 +45,7 @@ export function ChoiceDialog() {
   // У переназначения заголовок называет и бригаду, от которой уходит заявка.
   const title = event ? describeEvent(event, engineers, requests) : 'Событие дня';
   // Событие про одну заявку: каждая карточка называет бригаду, которая её берёт.
-  const holder =
-    choice !== null &&
-    (choice.variants.some((option) => option.request_engineer_id !== null) ||
-      event?.type === 'urgent' ||
-      event?.type === 'request_reassigned');
+  const holder = choice !== null && choiceHasHolder(choice);
 
   return (
     <div className="choice-overlay">

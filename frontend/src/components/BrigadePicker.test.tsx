@@ -212,7 +212,7 @@ describe('BrigadePicker', () => {
     renderPicker('50104');
     fireEvent.click(trigger());
     expect(list()).toBeInTheDocument();
-    // Часы при проигрывании дошли до «ломающего» события: окно выбора открылось без расчёта.
+    // Часы при проигрывании дошли до события, которое ждёт выбора: окно выбора открылось без расчёта.
     act(() => useAppStore.setState({ choice: makeEventChoice() }));
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
     expect(trigger()).toBeDisabled();

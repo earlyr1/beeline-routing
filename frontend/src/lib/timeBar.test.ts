@@ -85,7 +85,7 @@ describe('time bar', () => {
   });
 
   it('names an event that waits for a variant and shows it on its pin first', () => {
-    const awaiting = makeTimelineItem({ id: 'tl_9', status: 'awaiting', choosable: true, variant: null });
+    const awaiting = makeTimelineItem({ id: 'tl_9', status: 'awaiting', variant: null });
     expect(timelineStatusText(awaiting)).toBe('ждёт выбора варианта');
     const pins = timelinePins([makeTimelineItem({ id: 'tl_8', event: { ...awaiting.event }, status: 'rejected', reason: 'нет' }), awaiting], { min: 540, max: 1380 });
     expect(pins[0].status).toBe('awaiting');

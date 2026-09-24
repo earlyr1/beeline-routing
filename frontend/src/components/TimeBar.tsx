@@ -4,7 +4,7 @@ import { fromMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
 import { pinLeft, sliderRange, sliderValue, timelineItemTitle, timelinePins, timelineStatusText } from '../lib/timeBar';
 import { dayScale, hourTicks } from '../lib/timeline';
-import { variantTitle } from '../lib/variants';
+import { timelineVariantText } from '../lib/variants';
 import { useAppStore } from '../store/useAppStore';
 
 /**
@@ -62,7 +62,9 @@ export function TimeBar() {
   const requests = byId(state.requests);
   // Удаление и смена варианта пересчитывают план: не во время расчёта, фиксации часов, проигрывания и открытого окна выбора.
   const deleteLocked = busy || committing || playing || choosing;
-  const status = committing ? 'Пересчитываем план…' : state.timeline_ready === false ? 'Готовим события…' : null;
+  // Событие без выбранной стратегии сервер считает сразу тремя, а нужно ли окно выбора, видно только из ответа:
+  // пока он не пришёл, о расчёте говорит строка у часов, а не окно выбора.
+  const status = committing || busy ? 'Пересчитываем план…' : state.timeline_ready === false ? 'Готовим события…' : null;
 
   // pointerup, pointercancel и lostpointercapture приходят вместе: план пересчитывается один раз.
   const release = () => {
@@ -158,6 +160,10 @@ export function TimeBar() {
                 const requestId = eventRequestId(item.event);
                 // Заявку события можно открыть, когда она уже есть в плане: срочная заявка впереди ещё не добавлена.
                 const openable = requestId !== null && state.requests.some((request) => request.id === requestId);
+                // Варианты есть у любого события, которое сервер не отклонил: окно выбора решает не тип события,
+                // а результат, и стратегию, выбранную без окна, диспетчер может сменить.
+                const withVariants = item.status !== 'rejected';
+                const variantText = timelineVariantText(item, state.engineers);
                 return (
                 <li key={item.id} className="time-bar__event">
                   {openable ? (
@@ -176,15 +182,13 @@ export function TimeBar() {
                     <span>{describeEvent(item.event, engineers, requests)}</span>
                   )}
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
-                  {/* Стратегию видно у любого события, которое её слушает: у отмены окна выбора нет, а стратегия есть. */}
-                  {(item.choosable || item.variant) && (
-                    <span className="muted">{item.variant ? `Вариант: ${variantTitle(item.variant, item.event.type, state.engineers)}` : 'Вариант не выбран'}</span>
-                  )}
-                  {item.choosable && (
+                  {/* У отклонённого события видна только стратегия, которую выбрал диспетчер: варианты он уже не сменит. */}
+                  {(withVariants || variantText) && <span className="muted">{variantText ?? 'Вариант не выбран'}</span>}
+                  {withVariants && (
                     <button
                       type="button"
                       className="btn btn-small"
-                      disabled={deleteLocked || item.status === 'rejected'}
+                      disabled={deleteLocked}
                       onClick={() => {
                         setOpenMinute(null);
                         void openChoice(item.id);

@@ -36,7 +36,6 @@ import { fromMinutes, isValidTime, requestLabel, toMinutes } from '../lib/format
 import { byId } from '../lib/planView';
 import { NO_TIMELINE_MOVE, newlyRejected, pausesAt, playEnd, rejectedNotice, timelineMove, type TimelineMove } from '../lib/timeBar';
 import { dayScale } from '../lib/timeline';
-import { CHOOSABLE_EVENTS } from '../lib/variants';
 import { DEFAULT_LUNCH_ENABLED, DEFAULT_WORKLOAD_LEVEL, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 
 export const POLL_INTERVAL_MS = 1000;
@@ -164,6 +163,7 @@ export interface AppActions {
   /**
    * Поставить событие на шкалу дня. Сначала сервер переводит план на время часов, чтобы событие у часов применилось сразу.
    * variant — стратегия события сразу, без окна выбора: так отменяется заявка отказавшегося клиента.
+   * Без неё окно выбора откроется, только если сервер остановил время на событии (pending_choice в ответе).
    */
   applyEvent(event: PlanEvent, variant?: EventVariant): Promise<boolean>;
   /**
@@ -466,7 +466,8 @@ export const useAppStore = create<AppState>()((set, get) => {
       agreed: { ...(next.agreed ?? {}), ...inFlightAgreed() },
       ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
     });
-    // Время плана остановилось на «ломающем» событии без выбора: часы ждут на нём, открывается окно выбора.
+    // Время плана остановилось на событии, которое ждёт выбора (у любого типа события: «Ничего не менять» ломает план
+    // больше пересчёта): часы ждут на нём, открывается окно выбора.
     const pending = next.pending_choice ?? null;
     // Закрытое окно помнится, только пока план стоит на том же событии: часы ушли назад — дойдя до него, снова спросят.
     if (get().dismissedChoice !== (pending?.entry_id ?? null)) set({ dismissedChoice: null });
@@ -729,17 +730,17 @@ export const useAppStore = create<AppState>()((set, get) => {
       const { datasetId, clock } = get();
       if (!datasetId) return false;
       const current = generation;
-      // «Ломающее» событие на время часов или раньше: сервер сразу попросит выбрать вариант, окно ждёт его ответа.
-      const asks = CHOOSABLE_EVENTS.has(event.type) && isValidTime(event.time) && isValidTime(clock) && toMinutes(event.time) <= toMinutes(clock);
-      set({ busy: true, error: null, ...(asks ? { choice: null, choiceLoading: true, assignLoading: false, dismissedChoice: null } : {}) });
+      // Нужно ли окно выбора, решает результат, а не тип события: заранее окно не открывается, его откроет ответ
+      // с pending_choice. Событие на время часов или раньше диспетчер ждёт применённым сейчас: если время стоит
+      // на событии, окно которого закрыли без выбора, ответ снова его покажет — иначе новое событие молча
+      // встало бы в очередь за ним.
+      const atClock = isValidTime(event.time) && isValidTime(clock) && toMinutes(event.time) <= toMinutes(clock);
+      set({ busy: true, error: null, ...(atClock ? { dismissedChoice: null } : {}) });
       try {
         // Диспетчер видит на часах их время и ждёт, что событие в это время применится сразу.
         await get().commitClock();
         const state = await enqueue(current, () => addTimelineEvent(datasetId, event, variant));
         if (!isCurrent(current)) return false;
-        // Окно «Считаем варианты…» закрыли до ответа: как закрытое без выбора, оно откроется на «Запустить» или сдвиге вперёд.
-        const { choice, choiceLoading } = get();
-        if (asks && !choiceLoading && choice === null) set({ dismissedChoice: state.pending_choice?.entry_id ?? null });
         get().setPlanningState(state);
         return true;
       } catch (error) {
@@ -747,8 +748,6 @@ export const useAppStore = create<AppState>()((set, get) => {
         return false;
       } finally {
         if (isCurrent(current)) set({ busy: false });
-        // Сервер не остановил время на событии (или отклонил его): окно, ждавшее варианты, закрывается.
-        if (isCurrent(current) && get().choiceLoading) set({ choiceLoading: false });
       }
     },
 

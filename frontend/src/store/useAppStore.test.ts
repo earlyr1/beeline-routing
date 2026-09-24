@@ -24,9 +24,18 @@ vi.mock('../api/client', async (importOriginal) => {
 });
 
 import * as api from '../api/client';
-import type { DatasetStatus, EventChoice, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
-import { cancelEvent, reassignEvent } from '../lib/events';
-import { makeDatasetStatus, makeEventChoice, makePlanningState, makeTimeline, makeTimelineItem, makeUrgentChoice, makeVariantOption } from '../test/fixtures';
+import type { DatasetStatus, EventChoice, PlanEvent, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
+import { cancelEvent, delayEvent, reassignEvent, transportChangeEvent, unavailableEvent } from '../lib/events';
+import {
+  makeDatasetStatus,
+  makeEventChoice,
+  makePlanningState,
+  makeRequestUpdateEvent,
+  makeTimeline,
+  makeTimelineItem,
+  makeUrgentChoice,
+  makeVariantOption,
+} from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { CANCEL_UNDO_MS, LOST_SESSION_MESSAGE, PLAY_TICK_MS, POLL_INTERVAL_MS, SESSION_DATASET_KEY, useAppStore } from './useAppStore';
 
@@ -811,9 +820,9 @@ describe('dragging the clock', () => {
   });
 });
 
-describe('choice of a variant for an event that breaks the plan', () => {
+describe('choice of a variant for an event the plan does not survive as it is', () => {
   const awaitingState = (cursor: string) =>
-    at(cursor, { pending_choice: makeEventChoice(), timeline: [makeTimelineItem({ id: 'tl_2', status: 'awaiting', choosable: true, variant: null, event: makeEventChoice().event })] });
+    at(cursor, { pending_choice: makeEventChoice(), timeline: [makeTimelineItem({ id: 'tl_2', status: 'awaiting', variant: null, event: makeEventChoice().event })] });
 
   it('pauses the playing clock at the event, opens the choice and plays on after the choice', async () => {
     vi.useFakeTimers();
@@ -922,43 +931,96 @@ describe('choice of a variant for an event that breaks the plan', () => {
     expect(useAppStore.getState().state?.cursor).toBe('17:00');
   });
 
-  it('does not reopen a loading choice the dispatcher closed before the event was added', async () => {
+  /** Ответ сервера: время встало на событии event, и «Ничего не менять» ломает план больше пересчёта. */
+  const asking = (event: PlanEvent, cursor = '12:00', entryId = 'tl_9') =>
+    at(cursor, {
+      pending_choice: makeEventChoice({ entry_id: entryId, event }),
+      timeline: [makeTimelineItem({ id: entryId, event, status: 'awaiting', variant: null })],
+    });
+
+  it('opens no choice before the answer: whether to ask decides the result, not the type of the event', async () => {
     useAppStore.getState().setPlanningState(at('12:00'));
     const response = deferred<PlanningState>();
     vi.mocked(api.addTimelineEvent).mockReturnValue(response.promise);
-    const adding = useAppStore.getState().applyEvent({ type: 'engineer_unavailable', time: '12:00', request: null, request_id: null, engineer_id: 'E02' });
-    await vi.waitFor(() => expect(useAppStore.getState().choiceLoading).toBe(true));
-    useAppStore.getState().closeChoice();
-    response.resolve(awaitingState('12:00'));
+    const event = unavailableEvent('E02', '12:00');
+    const adding = useAppStore.getState().applyEvent(event);
+    await vi.waitFor(() => expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', event, undefined));
+    expect(useAppStore.getState()).toMatchObject({ busy: true, choice: null, choiceLoading: false });
+
+    response.resolve(asking(event));
     expect(await adding).toBe(true);
-    expect(useAppStore.getState()).toMatchObject({ choice: null, choiceLoading: false, dismissedChoice: 'tl_2', clock: '12:00' });
+    expect(useAppStore.getState()).toMatchObject({ busy: false, choiceLoading: false, clock: '12:00', resumeAfterChoice: { time: '12:00', play: false } });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_9');
+  });
 
+  it.each<[string, PlanEvent]>([
+    ['an edit of a request', makeRequestUpdateEvent({ time: '12:00' })],
+    ['a cancellation', cancelEvent('46393', '12:00')],
+    ['a delay', delayEvent('E01', 60, '12:00')],
+    ['a change of transport', transportChangeEvent('E01', 'bike', '12:00')],
+    ['an unavailable engineer', unavailableEvent('E02', '12:00')],
+    ['a reassignment', reassignEvent('50104', 'E02', '12:00')],
+  ])('opens the choice when the answer stops the time on %s', async (_, event) => {
+    useAppStore.getState().setPlanningState(at('12:00'));
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(asking(event));
+    expect(await useAppStore.getState().applyEvent(event)).toBe(true);
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', event, undefined);
+    expect(useAppStore.getState().choice?.event).toEqual(event);
+    expect(useAppStore.getState()).toMatchObject({ busy: false, playing: false, clock: '12:00' });
+
+    // Выбор применяется, и часы остаются, где были.
+    vi.mocked(api.setTimelineVariant).mockResolvedValue(at('12:00', { version: 7 }));
+    expect(await useAppStore.getState().chooseVariant('optimal')).toBe(true);
+    expect(api.setTimelineVariant).toHaveBeenCalledWith('d_test', 'tl_9', 'optimal');
+    expect(api.moveCursor).not.toHaveBeenCalled();
+    expect(useAppStore.getState()).toMatchObject({ choice: null, clock: '12:00' });
+  });
+
+  it('applies an event without a window when the server took «ничего не менять»', async () => {
+    useAppStore.getState().setPlanningState(at('12:00'));
+    const event = makeRequestUpdateEvent({ time: '12:00' });
+    const kept = makeTimelineItem({ id: 'tl_9', event, status: 'applied', variant: 'keep', variant_auto: true });
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(at('12:00', { version: 6, timeline: [kept] }));
+    expect(await useAppStore.getState().applyEvent(event)).toBe(true);
+    expect(useAppStore.getState()).toMatchObject({ choice: null, choiceLoading: false, resumeAfterChoice: null, busy: false });
+    expect(useAppStore.getState().state?.version).toBe(6);
+  });
+
+  it('shows again a choice closed earlier when an event at the clock queues behind it, but not for an event ahead', async () => {
+    const waiting = awaitingState('13:00');
+    useAppStore.getState().setPlanningState(waiting);
+    useAppStore.getState().closeChoice();
+    // Событие впереди часов ничего не ждёт: закрытое окно не всплывает.
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(waiting);
+    expect(await useAppStore.getState().applyEvent(cancelEvent('46393', '15:00'))).toBe(true);
+    expect(useAppStore.getState()).toMatchObject({ choice: null, dismissedChoice: 'tl_2' });
+
+    // Событие на время часов само не применится, пока время стоит на прежнем: окно того события открывается снова.
+    expect(await useAppStore.getState().applyEvent(cancelEvent('46393', '13:00'), 'keep')).toBe(true);
+    expect(useAppStore.getState()).toMatchObject({ dismissedChoice: null, resumeAfterChoice: { time: '13:00', play: false } });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+  });
+
+  it('stops the playing clock on a cancellation sent after its countdown and plays on after the choice', async () => {
+    vi.useFakeTimers();
+    useAppStore.getState().setPlanningState(at('13:00'));
+    vi.mocked(api.moveCursor).mockImplementation(async (_dataset, time) => at(time));
+    const event = cancelEvent('46393', '13:00');
+    useAppStore.getState().cancelRequest(event);
     useAppStore.getState().play();
-    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
-  });
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(asking(event, '13:00'));
+    await vi.advanceTimersByTimeAsync(CANCEL_UNDO_MS);
 
-  it('opens a loading choice while a breaking event at the clock is added', async () => {
-    useAppStore.getState().setPlanningState(at('12:00'));
-    const response = deferred<PlanningState>();
-    vi.mocked(api.addTimelineEvent).mockReturnValue(response.promise);
-    const adding = useAppStore.getState().applyEvent({ type: 'engineer_unavailable', time: '12:00', request: null, request_id: null, engineer_id: 'E02' });
-    await vi.waitFor(() => expect(useAppStore.getState().choiceLoading).toBe(true));
-    response.resolve(awaitingState('12:00'));
-    await adding;
-    expect(useAppStore.getState()).toMatchObject({ choiceLoading: false });
-    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
-  });
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', event, undefined);
+    expect(useAppStore.getState()).toMatchObject({ pendingCancel: null, playing: false, clock: '13:00' });
+    expect(useAppStore.getState().choice?.entry_id).toBe('tl_9');
+    // Часы успели уйти вперёд, пока шёл отсчёт: после выбора они идут дальше оттуда, где стоит план.
+    expect(useAppStore.getState().resumeAfterChoice?.play).toBe(true);
 
-  it('asks for a variant when a request is reassigned at the clock', async () => {
-    useAppStore.getState().setPlanningState(at('12:00'));
-    const response = deferred<PlanningState>();
-    vi.mocked(api.addTimelineEvent).mockReturnValue(response.promise);
-    const adding = useAppStore.getState().applyEvent(reassignEvent('50104', 'E02', '12:00'));
-    await vi.waitFor(() => expect(useAppStore.getState().choiceLoading).toBe(true));
-    response.resolve(awaitingState('12:00'));
-    await adding;
-    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', reassignEvent('50104', 'E02', '12:00'), undefined);
-    expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
+    vi.mocked(api.setTimelineVariant).mockResolvedValue(at('13:00'));
+    await useAppStore.getState().chooseVariant('keep');
+    expect(useAppStore.getState()).toMatchObject({ choice: null, playing: true });
+    useAppStore.getState().stopPlayback();
   });
 
   it('opens the choice of an applied event from its pin and changes it without moving the clock', async () => {
@@ -998,9 +1060,9 @@ describe('choice of a variant for an event that breaks the plan', () => {
 
   it('keeps the dialog open with an error when the choice fails and closes it on a new day', async () => {
     useAppStore.getState().setPlanningState(awaitingState('13:00'));
-    vi.mocked(api.setTimelineVariant).mockRejectedValue(new api.ApiError(409, 'Для этого события варианты не предлагаются.'));
+    vi.mocked(api.setTimelineVariant).mockRejectedValue(new api.ApiError(409, 'Событие отклонено: Инженер E02 уже недоступен.'));
     expect(await useAppStore.getState().chooseVariant('keep')).toBe(false);
-    expect(useAppStore.getState()).toMatchObject({ error: 'Для этого события варианты не предлагаются.', busy: false });
+    expect(useAppStore.getState()).toMatchObject({ error: 'Событие отклонено: Инженер E02 уже недоступен.', busy: false });
     expect(useAppStore.getState().choice?.entry_id).toBe('tl_2');
     useAppStore.getState().reset();
     expect(useAppStore.getState()).toMatchObject({ choice: null, choiceLoading: false, resumeAfterChoice: null, dismissedChoice: null });

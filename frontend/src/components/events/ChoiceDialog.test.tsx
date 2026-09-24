@@ -4,7 +4,14 @@ import type { Engineer, EventChoice, VariantOption } from '../../api/types';
 import { useAppStore, type AppState } from '../../store/useAppStore';
 import { reassignEvent } from '../../lib/events';
 import { ALL_SAME_TEXT, assignVariant } from '../../lib/variants';
-import { makeEventChoice, makePlanningState, makeTimelineItem, makeUrgentChoice, makeVariantOption } from '../../test/fixtures';
+import {
+  makeEventChoice,
+  makePlanningState,
+  makeRequestUpdateEvent,
+  makeTimelineItem,
+  makeUrgentChoice,
+  makeVariantOption,
+} from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { ChoiceDialog } from './ChoiceDialog';
 
@@ -56,7 +63,7 @@ describe('ChoiceDialog', () => {
   it('names the brigade that loses a reassigned request in the title', () => {
     // Время стоит на переназначении: план ещё до события, заявка 50104 у Бригады Арташкин.
     const event = reassignEvent('50104', 'E02', '13:00');
-    const timeline = [makeTimelineItem({ id: 'tl_7', event, status: 'awaiting', choosable: true })];
+    const timeline = [makeTimelineItem({ id: 'tl_7', event, status: 'awaiting' })];
     useAppStore.setState({ state: makePlanningState({ timeline }), choice: makeEventChoice({ entry_id: 'tl_7', event }) });
     render(<ChoiceDialog />);
     expect(screen.getByRole('dialog', { name: 'Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:00' })).toBeInTheDocument();
@@ -146,7 +153,7 @@ function dropFocusToBody() {
 }
 
 describe('ChoiceDialog: отдать заявку бригаде', () => {
-  it('offers the fourth card for an urgent request only', () => {
+  it('offers the fourth card for an event about one request and not for an event about an engineer', () => {
     renderUrgent();
     expect(within(urgentDialog()).getAllByRole('article').map((item) => item.getAttribute('aria-label'))).toEqual([
       'Оптимально по дню',
@@ -172,6 +179,42 @@ describe('ChoiceDialog: отдать заявку бригаде', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), choice: makeEventChoice() });
     render(<ChoiceDialog />);
     expect(screen.queryByText(/заявку берёт/)).not.toBeInTheDocument();
+  });
+
+  it('offers the fourth card and names the brigade for an edit of a request, like for an urgent one', () => {
+    // Изменение заявки ждёт выбора: в плане она ещё прежняя (местные работы), а событие сделало её аварийной.
+    const event = makeRequestUpdateEvent({ time: '13:00', request: { ...makeRequestUpdateEvent().request!, skill: 'emergency' } });
+    const choice = makeEventChoice({
+      entry_id: 'tl_9',
+      event,
+      assignable: true,
+      variants: [
+        makeVariantOption('optimal', { recommended: true, request_engineer_id: 'E02' }),
+        makeVariantOption('stable', { request_engineer_id: 'E02' }),
+        makeVariantOption('keep', { request_engineer_id: null }),
+      ],
+    });
+    const state = makePlanningState({ timeline: [makeTimelineItem({ id: 'tl_9', event, status: 'awaiting' })] });
+    resetStore({ datasetId: 'd_test', state: { ...state, engineers: [...state.engineers, ZVEREV] }, choice });
+    render(<ChoiceDialog />);
+    const edit = screen.getByRole('dialog', { name: /^Изменена заявка 50104 с 13:00/ });
+    expect(within(edit).getAllByRole('article').map((item) => item.getAttribute('aria-label'))).toEqual([
+      'Оптимально по дню',
+      'Минимум перестановок',
+      'Ничего не менять',
+      'Другая бригада…',
+    ]);
+    expect(within(within(edit).getByRole('article', { name: 'Оптимально по дню' })).getByText('заявку берёт Бригада Белузин')).toBeInTheDocument();
+    expect(within(within(edit).getByRole('article', { name: 'Ничего не менять' })).getByText('заявка остаётся без бригады')).toBeInTheDocument();
+
+    // Список бригад судит по заявке после изменения: без аварийного навыка её не взять.
+    fireEvent.click(within(within(edit).getByRole('article', { name: 'Другая бригада…' })).getByRole('button', { name: 'Выбрать бригаду' }));
+    expect(within(list()).getAllByRole('option').map((option) => option.textContent)).toEqual([
+      'Бригада Арташкиннет навыка «Аварийные работы»',
+      'Бригада Белузинв плане',
+      'Бригада Комарьнедоступна с 13:00',
+      'Бригада Зверев0 заявок',
+    ]);
   });
 
   it('opens the list of brigades and disables the ones that cannot take the request', () => {

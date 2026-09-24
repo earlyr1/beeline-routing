@@ -19,8 +19,9 @@ interface AssignCardProps {
 }
 
 /**
- * Четвёртая карточка у срочной заявки: диспетчер не согласен с оптимизатором и отдаёт заявку выбранной бригаде.
- * План считается только после выбора бригады, а цена решения показана против «Оптимально по дню».
+ * Четвёртая карточка у события об одной заявке (срочная, изменение, переназначение, возврат): диспетчер не согласен
+ * с оптимизатором и отдаёт заявку выбранной бригаде. План считается только после выбора бригады, а цена решения
+ * показана против «Оптимально по дню».
  */
 export function AssignCard({ choice, option, engineers, holder, locked, onChoose, onListOpenChange }: AssignCardProps) {
   const state = useAppStore((s) => s.state);
@@ -28,7 +29,9 @@ export function AssignCard({ choice, option, engineers, holder, locked, onChoose
   const previewAssign = useAppStore((s) => s.previewAssign);
 
   const requestId = eventRequestId(choice.event);
-  const request = state?.requests.find((item) => item.id === requestId) ?? choice.event.request ?? null;
+  // Заявка такой, какой её сделало событие: у изменения, которое ждёт выбора, в плане дня она ещё прежняя,
+  // а навык и транспорт для списка бригад нужны новые. У переназначения и возврата заявки в событии нет.
+  const request = choice.event.request ?? state?.requests.find((item) => item.id === requestId) ?? null;
   // «В плане» отмечена бригада, которая берёт заявку в оптимальном плане: с ним диспетчер и спорит.
   const optimal = choice.variants.find((item) => item.variant === 'optimal');
   const options = state && request ? brigadeOptions(request, state.engineers, state.plan, optimal?.request_engineer_id) : [];

@@ -108,6 +108,7 @@ export const postEvent = (datasetId: string, event: PlanEvent) =>
 /**
  * Событие на шкалу дня: время плана не меняется, событие позже него остаётся впереди.
  * variant — стратегия события сразу, без окна выбора: так отменяется заявка отказавшегося клиента.
+ * Без variant сервер сам решает по результату, нужен ли выбор: тогда в ответе pending_choice.
  */
 export const addTimelineEvent = (datasetId: string, event: PlanEvent, variant?: EventVariant) =>
   request<PlanningState>(
@@ -119,7 +120,7 @@ export const deleteTimelineEvent = (datasetId: string, entryId: string) =>
   request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
 
 /**
- * Варианты исправления для «ломающего» события шкалы. С assign сервер считает ещё один план — с заявкой
+ * Варианты исправления для события шкалы (кроме отклонённого). С assign сервер считает ещё один план — с заявкой
  * у выбранной бригады — и присылает его четвёртым вариантом.
  */
 export const getTimelineVariants = (datasetId: string, entryId: string, assign?: string) =>

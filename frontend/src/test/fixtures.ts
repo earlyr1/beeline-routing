@@ -273,7 +273,7 @@ export function makeTimelineItem(overrides: Partial<TimelineItem> = {}): Timelin
     status: 'applied',
     reason: null,
     variant: null,
-    choosable: false,
+    variant_auto: false,
     ...overrides,
   };
 }
@@ -298,7 +298,7 @@ export function makeTimeline(): TimelineItem[] {
 const BASE_VARIANT_TEXTS: Record<string, { title: string; summary: string }> = {
   optimal: { title: 'Оптимально по дню', summary: 'Пересчитать остаток дня целиком' },
   stable: { title: 'Минимум перестановок', summary: 'Чужие маршруты почти не трогаем' },
-  keep: { title: 'Ничего не менять', summary: 'Оставить маршруты как есть' },
+  keep: { title: 'Ничего не менять', summary: 'Только само событие, остальные маршруты как есть' },
 };
 
 /**

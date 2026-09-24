@@ -3,16 +3,27 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api/client')>();
-  return { ...actual, addTimelineEvent: vi.fn(), moveCursor: vi.fn(), postEvent: vi.fn(), clearTimeline: vi.fn() };
+  return { ...actual, addTimelineEvent: vi.fn(), moveCursor: vi.fn(), postEvent: vi.fn(), clearTimeline: vi.fn(), setTimelineVariant: vi.fn() };
 });
 
 import * as api from '../../api/client';
-import type { PlanningState, ServiceRequest, Transport } from '../../api/types';
+import type { PlanEvent, PlanningState, ServiceRequest, Transport } from '../../api/types';
 import { BEFORE_SHIFTS_HINT, cancelEvent, unavailableEvent } from '../../lib/events';
 import { toMinutes } from '../../lib/format';
-import { useAppStore } from '../../store/useAppStore';
-import { makeAsapRequest, makeAsapState, makeConfig, makePlanningState, makeTimeline, WINDOW_GRID, WORK_TYPES } from '../../test/fixtures';
+import { useAppStore, type AppState } from '../../store/useAppStore';
+import {
+  makeAsapRequest,
+  makeAsapState,
+  makeConfig,
+  makeEventChoice,
+  makePlanningState,
+  makeTimeline,
+  makeTimelineItem,
+  WINDOW_GRID,
+  WORK_TYPES,
+} from '../../test/fixtures';
 import { resetStore } from '../../test/store';
+import { ChoiceDialog } from './ChoiceDialog';
 import { EngineerDelayDialog } from './EngineerDelayDialog';
 import { EngineerUnavailableDialog } from './EngineerUnavailableDialog';
 import { EventToolbar } from './EventToolbar';
@@ -844,6 +855,111 @@ describe('event dialogs on the clock of the day', () => {
     expect(await useAppStore.getState().applyEvent(cancelEvent('46393', '11:30'))).toBe(true);
     expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('46393', '11:30'), undefined);
     expect(api.postEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('event dialogs when the server asks for a variant', () => {
+  /** Ответ сервера на событие: время встало на нём, и «Ничего не менять» ломает план больше пересчёта. */
+  const asking = (event: PlanEvent): PlanningState =>
+    makePlanningState({
+      cursor: '13:30',
+      version: 5,
+      pending_choice: makeEventChoice({ entry_id: 'tl_9', event }),
+      timeline: [makeTimelineItem({ id: 'tl_9', event, status: 'awaiting', variant: null })],
+    });
+
+  const submit = (name: string) => fireEvent.click(screen.getByRole('button', { name }));
+
+  const flows: [string, Partial<AppState>, () => JSX.Element, () => void, (state: AppState) => boolean][] = [
+    [
+      'the edit of a request',
+      { editingRequestId: '46393' },
+      () => <RequestEditDialog />,
+      () => {
+        fireEvent.change(screen.getByLabelText('Длительность, мин'), { target: { value: '60' } });
+        submit('Сохранить и перепланировать');
+      },
+      (state) => state.editingRequestId === null,
+    ],
+    ['the delay', { delayDialogOpen: true, delayEngineerId: 'E01' }, () => <EngineerDelayDialog />, () => submit('Перепланировать'), (state) => !state.delayDialogOpen],
+    [
+      'the change of transport',
+      { engineerDialog: { kind: 'transport', engineerId: 'E01' } },
+      () => <TransportChangeDialog />,
+      () => submit('Перепланировать'),
+      (state) => state.engineerDialog === null,
+    ],
+    [
+      'the unavailable engineer',
+      { engineerDialog: { kind: 'unavailable', engineerId: 'E02' } },
+      () => <EngineerUnavailableDialog />,
+      () => submit('Перепланировать'),
+      (state) => state.engineerDialog === null,
+    ],
+    [
+      'the urgent request',
+      { toolbarDialog: 'urgent' },
+      () => <EventToolbar />,
+      () => {
+        fireEvent.change(screen.getByLabelText('Адрес'), { target: { value: 'Город Москва, ул.Ташкентская, д. 16к2' } });
+        submit('Добавить и перепланировать');
+      },
+      (state) => state.toolbarDialog === null,
+    ],
+  ];
+
+  beforeEach(() => {
+    vi.mocked(api.addTimelineEvent).mockReset();
+    vi.mocked(api.moveCursor).mockReset();
+    vi.mocked(api.setTimelineVariant).mockReset();
+  });
+
+  it.each(flows)('closes %s, opens the choice at the clock and keeps the clock after it', async (_, patch, dialog, fill, closed) => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ cursor: '13:30' }), config: makeConfig({ work_types: [] }), ...patch });
+    vi.mocked(api.addTimelineEvent).mockImplementation(async (_dataset, event) => asking(event));
+    render(
+      <>
+        {dialog()}
+        <ChoiceDialog />
+      </>,
+    );
+    fill();
+    await waitFor(() => expect(closed(useAppStore.getState())).toBe(true));
+    // Стратегию событию выбирает не диалог: без variant сервер сам решает, нужно ли окно.
+    expect(vi.mocked(api.addTimelineEvent).mock.calls[0][2]).toBeUndefined();
+    const choice = screen.getByRole('dialog');
+    expect(within(choice).getByText('Как исправить план')).toBeInTheDocument();
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:30', playing: false, busy: false, resumeAfterChoice: { time: '13:30', play: false } });
+
+    vi.mocked(api.setTimelineVariant).mockResolvedValue(makePlanningState({ cursor: '13:30', version: 6 }));
+    fireEvent.click(within(within(choice).getByRole('article', { name: 'Оптимально по дню' })).getByRole('button', { name: 'Выбрать' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(api.setTimelineVariant).toHaveBeenCalledWith('d_test', 'tl_9', 'optimal');
+    expect(api.moveCursor).not.toHaveBeenCalled();
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:30', choice: null });
+  });
+
+  it('closes the dialog without a choice window when the server kept the routes as they are', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ cursor: '13:30' }), editingRequestId: '46393' });
+    vi.mocked(api.addTimelineEvent).mockImplementation(async (_dataset, event) =>
+      makePlanningState({
+        cursor: '13:30',
+        version: 5,
+        timeline: [makeTimelineItem({ id: 'tl_9', event, status: 'applied', variant: 'keep', variant_auto: true })],
+      }),
+    );
+    render(
+      <>
+        <RequestEditDialog />
+        <ChoiceDialog />
+      </>,
+    );
+    fireEvent.change(screen.getByLabelText('Длительность, мин'), { target: { value: '60' } });
+    submit('Сохранить и перепланировать');
+    await waitFor(() => expect(useAppStore.getState().editingRequestId).toBeNull());
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(useAppStore.getState()).toMatchObject({ choice: null, choiceLoading: false, clock: '13:30' });
+    expect(useAppStore.getState().state?.version).toBe(5);
   });
 });
 

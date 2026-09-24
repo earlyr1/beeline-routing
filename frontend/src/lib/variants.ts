@@ -3,24 +3,15 @@ import type {
   BaseVariant,
   Engineer,
   EventChoice,
-  EventType,
   EventVariant,
   PlanEvent,
   PlanningState,
+  TimelineItem,
   VariantOption,
 } from '../api/types';
 import { brigadeName } from './format';
 
-/** «Ломающие» события: для них сервер предлагает варианты исправления. */
-export const CHOOSABLE_EVENTS: ReadonlySet<EventType> = new Set<EventType>([
-  'urgent',
-  'engineer_unavailable',
-  'engineer_transport_changed',
-  'engineer_delayed',
-  'request_reassigned',
-]);
-
-/** Названия трёх готовых стратегий, как в ответах сервера. */
+/** Названия трёх готовых стратегий, как в ответах сервера: у всех событий одни и те же. */
 export const VARIANT_TITLES: Record<BaseVariant, string> = {
   optimal: 'Оптимально по дню',
   stable: 'Минимум перестановок',
@@ -46,24 +37,41 @@ export function assignedEngineer(variant: EventVariant): string | null {
 }
 
 /**
- * Название стратегии для события, как в ответе сервера. У переназначения заявки «ничего не менять» —
- * вставка заявки в маршрут выбранной бригады: остальные маршруты остаются как есть.
- * У «отдать бригаде» имя бригады ищется среди бригад дня: там, где под рукой сам вариант, берите его title сервера.
+ * Название стратегии, как в ответе сервера. У «отдать бригаде» имя бригады ищется среди бригад дня:
+ * там, где под рукой сам вариант, берите его title сервера.
  */
-export function variantTitle(variant: EventVariant, eventType: EventType, engineers: Engineer[] = []): string {
+export function variantTitle(variant: EventVariant, engineers: Engineer[] = []): string {
   if (isAssignVariant(variant)) {
     const assigned = assignedEngineer(variant) ?? '';
     return `Отдать: ${brigadeName(engineers.find((item) => item.id === assigned)?.name ?? assigned)}`;
   }
-  if (variant === 'keep' && eventType === 'request_reassigned') return 'Вставить в маршрут';
-  // У отмены «keep» — «маршруты не трогать»: так называется кнопка, которой диспетчер её выбрал.
-  if (variant === 'keep' && eventType === 'cancel') return 'Маршруты не трогать';
   return VARIANT_TITLES[variant];
+}
+
+/** Подпись стратегии, которую выбрал проход шкалы, а не диспетчер. */
+export const AUTO_VARIANT_NOTE = 'выбирать было не из чего';
+
+/**
+ * Стратегия события на шкале словами: выбор диспетчера или «Ничего не менять», если окно выбора не понадобилось.
+ * null — стратегии у события нет: сервер его ещё не посчитал или ждёт выбора.
+ */
+export function timelineVariantText(item: TimelineItem, engineers: Engineer[] = []): string | null {
+  if (!item.variant) return null;
+  const title = `Вариант: ${variantTitle(item.variant, engineers)}`;
+  return item.variant_auto ? `${title} — ${AUTO_VARIANT_NOTE}` : title;
 }
 
 /** Название варианта в окне: у посчитанного берётся заголовок сервера, у остального — собранное по токену. */
 export function choiceVariantTitle(choice: EventChoice, variant: EventVariant, engineers: Engineer[] = []): string {
-  return choice.variants.find((item) => item.variant === variant)?.title ?? variantTitle(variant, choice.event.type, engineers);
+  return choice.variants.find((item) => item.variant === variant)?.title ?? variantTitle(variant, engineers);
+}
+
+/**
+ * Событие об одной заявке: каждая карточка окна называет бригаду, которая её берёт. Тип события не проверяется:
+ * заявку можно отдать бригаде (assignable) или хоть в одном варианте сервер назвал её бригаду.
+ */
+export function choiceHasHolder(choice: EventChoice): boolean {
+  return choice.assignable || choice.variants.some((option) => option.request_engineer_id !== null);
 }
 
 /** Подпись рекомендованной карточки, когда у всех вариантов одни и те же числа. */
