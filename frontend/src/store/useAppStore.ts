@@ -116,6 +116,8 @@ export interface AppData {
   resumeAfterChoice: { time: HHMM; play: boolean } | null;
   /** Событие, окно которого закрыли без выбора: ответы сервера его не открывают, пока часы не пойдут дальше. */
   dismissedChoice: string | null;
+  /** Окно «Итоги дня»: выпадает, когда часы дошли до конца шкалы, и открывается снова кнопкой у часов. */
+  daySummaryOpen: boolean;
   busy: boolean;
   error: string | null;
   pickMode: boolean;
@@ -185,6 +187,9 @@ export interface AppActions {
   previewAssign(engineerId: string): Promise<void>;
   /** Закрыть окно без выбора: часы стоят на событии. */
   closeChoice(): void;
+  /** Открыть окно «Итоги дня». */
+  openDaySummary(): void;
+  closeDaySummary(): void;
   /** Вернуть план, открытый до перезагрузки страницы. */
   restoreSession(): Promise<void>;
   setPlanningState(state: PlanningState): void;
@@ -268,6 +273,7 @@ export const initialAppData: AppData = {
   assignLoading: false,
   resumeAfterChoice: null,
   dismissedChoice: null,
+  daySummaryOpen: false,
   busy: false,
   error: null,
   pickMode: false,
@@ -658,6 +664,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       mapMenu: null,
       ...NO_ADDRESS_LOOKUP,
       ...NO_CHOICE,
+      daySummaryOpen: false,
       // Другой день: отмена заявки прежнего дня пропадает, не уходя на сервер (отсчёт снял resetAppSession).
       pendingCancel: null,
     });
@@ -904,6 +911,14 @@ export const useAppStore = create<AppState>()((set, get) => {
 
     closeChoice() {
       set({ dismissedChoice: get().choice?.entry_id ?? null, choice: null, choiceLoading: false, assignLoading: false, resumeAfterChoice: null });
+    },
+
+    openDaySummary() {
+      set({ daySummaryOpen: true });
+    },
+
+    closeDaySummary() {
+      set({ daySummaryOpen: false });
     },
 
     async restoreSession() {

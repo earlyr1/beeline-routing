@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { dayOver } from '../lib/daySummary';
 import { describeEvent, eventRequestId } from '../lib/events';
 import { fromMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
@@ -26,19 +27,21 @@ export function TimeBar() {
   const deleteTimelineEvent = useAppStore((s) => s.deleteTimelineEvent);
   const openChoice = useAppStore((s) => s.openChoice);
   const selectRequest = useAppStore((s) => s.selectRequest);
+  const openDaySummary = useAppStore((s) => s.openDaySummary);
   // Пока открыто окно выбора варианта, часы стоят на событии: ни запуска, ни ползунка.
   const choosing = useAppStore((s) => s.choice !== null || s.choiceLoading);
+  const summaryOpen = useAppStore((s) => s.daySummaryOpen);
   /** Минута отметки, чьи события открыты; null — список закрыт. */
   const [openMinute, setOpenMinute] = useState<number | null>(null);
 
   // Часы идут, только пока шкала на экране.
   useEffect(() => () => useAppStore.getState().stopPlayback(), []);
 
-  // Список событий отметки лежит выше окна выбора: открылось окно — он закрывается.
+  // Список событий отметки лежит выше окна выбора и итогов дня: открылось окно — он закрывается.
   useEffect(() => {
-    if (!choosing) return;
+    if (!choosing && !summaryOpen) return;
     setOpenMinute(null);
-  }, [choosing]);
+  }, [choosing, summaryOpen]);
 
   useEffect(() => {
     if (openMinute === null) return;
@@ -65,6 +68,8 @@ export function TimeBar() {
   // Событие без выбранной стратегии сервер считает сразу тремя, а нужно ли окно выбора, видно только из ответа:
   // пока он не пришёл, о расчёте говорит строка у часов, а не окно выбора.
   const status = committing || busy ? 'Пересчитываем план…' : state.timeline_ready === false ? 'Готовим события…' : null;
+  // День дошёл до конца: итоги, которые выпали и были закрыты, открываются снова отсюда.
+  const ended = dayOver(state, clock);
 
   // pointerup, pointercancel и lostpointercapture приходят вместе: план пересчитывается один раз.
   const release = () => {
@@ -92,6 +97,11 @@ export function TimeBar() {
         <strong className="time-bar__clock" role="timer" aria-label="Время на часах">
           {clock}
         </strong>
+        {ended && (
+          <button type="button" className="btn btn-small" disabled={choosing} onClick={openDaySummary}>
+            Итоги дня
+          </button>
+        )}
       </div>
       <div className="time-bar__scale">
         <div className="time-bar__pins">

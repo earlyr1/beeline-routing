@@ -2090,6 +2090,27 @@ h4 {
   }
 }
 
+/* Итоги дня: то же окно поверх экрана, что у выбора варианта, но уже — таблица «утро → итог» и два ряда чисел. */
+.choice--summary {
+  width: min(760px, 100%);
+}
+
+.day-summary__line {
+  margin: 8px 0 0;
+}
+
+/* «Из них перенесено…» уточняет строку «Не назначено» над ней. */
+.day-summary__nested td:first-child {
+  padding-left: 24px;
+  color: var(--muted);
+}
+
+.day-summary__figures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+}
+
 .error-list {
   color: var(--danger);
   margin: 8px 0 0;

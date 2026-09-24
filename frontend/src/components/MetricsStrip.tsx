@@ -40,7 +40,8 @@ interface MetricProps {
   title?: string;
 }
 
-function Metric({ label, value, delta, warn, title }: MetricProps) {
+/** Число полосы метрик: подпись над крупным значением. Так же выглядят числа окна «Итоги дня». */
+export function Metric({ label, value, delta, warn, title }: MetricProps) {
   return (
     <div className={`metric${warn ? ' metric--warn' : ''}`} title={title}>
       <span className="metric__label">{label}</span>

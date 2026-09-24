@@ -368,6 +368,31 @@ describe('TimeBar', () => {
     expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
   });
 
+  it('offers the summary of the day next to the clock only when the plan reached the end of the day', () => {
+    render(<TimeBar />);
+    const button = () => screen.queryByRole('button', { name: 'Итоги дня' });
+    expect(button()).toBeNull();
+    // Ползунок в конце, а план ещё на 13:00: итогов дня пока нет.
+    act(() => useAppStore.setState({ clock: '23:00' }));
+    expect(button()).toBeNull();
+    act(() => useAppStore.setState({ state: at('23:00') }));
+    fireEvent.click(button() as HTMLElement);
+    expect(useAppStore.getState().daySummaryOpen).toBe(true);
+    act(() => useAppStore.setState({ daySummaryOpen: false, choice: makeEventChoice() }));
+    expect(button()).toBeDisabled();
+    // Время стоит на событии, которое ждёт выбора: день не закончился.
+    act(() => useAppStore.setState({ state: at('23:00', { pending_choice: makeEventChoice() }) }));
+    expect(button()).toBeNull();
+  });
+
+  it('closes the events of a pin when the summary of the day drops above them', () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }) });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByTitle(/^Задержка: Бригада Арташкин/));
+    act(() => useAppStore.setState({ daySummaryOpen: true }));
+    expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
+  });
+
   it('closes the events of a pin on Esc and keeps that Esc from the panels below', () => {
     resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }) });
     render(<TimeBar />);

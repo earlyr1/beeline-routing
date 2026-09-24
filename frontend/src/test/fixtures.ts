@@ -246,6 +246,15 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       metrics_after: currentMetrics,
     },
     morning: morningRequests(),
+    // Итоги утреннего плана: заняты все три бригады, а заявка 10135 у Комаря начинается в 14:05 — позже своего окна.
+    morning_metrics: {
+      engineers_used: 3,
+      km_per_engineer: { E01: 20.4, E02: 11.3, E03: 9.8 },
+      total_km: 41.5,
+      assigned: 7,
+      unassigned: 0,
+      violations: 1,
+    },
     events: [
       { id: 'ev_1', event: { type: 'cancel', time: '09:30', request: null, request_id: '10135', engineer_id: null }, version: 2 },
       { id: 'ev_2', event: { type: 'engineer_unavailable', time: '13:00', request: null, request_id: null, engineer_id: 'E03' }, version: 3 },

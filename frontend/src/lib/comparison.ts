@@ -1,16 +1,17 @@
 import type { Metrics, PlanningState } from '../api/types';
 import { formatKm, formatSigned } from './format';
 
-type MetricKey = 'engineers_used' | 'total_km' | 'assigned' | 'unassigned' | 'violations';
+export type MetricKey = 'engineers_used' | 'total_km' | 'assigned' | 'unassigned' | 'violations';
 
-interface MetricSpec {
+export interface MetricSpec {
   key: MetricKey;
   label: string;
   higherIsBetter: boolean;
   km: boolean;
 }
 
-const SPECS: MetricSpec[] = [
+/** Показатели плана, как их подписывает вкладка «Сравнение»; те же подписи у окна «Итоги дня». */
+export const METRIC_SPECS: MetricSpec[] = [
   { key: 'engineers_used', label: 'Задействовано инженеров', higherIsBetter: false, km: false },
   { key: 'total_km', label: 'Суммарный пробег', higherIsBetter: false, km: true },
   { key: 'assigned', label: 'Назначено заявок', higherIsBetter: true, km: false },
@@ -19,6 +20,17 @@ const SPECS: MetricSpec[] = [
 ];
 
 export type Verdict = 'better' | 'worse' | 'same';
+
+/** Лучше или хуже: разница округляется так же, как её подпись, и «+0,0 км» не красится. */
+export function verdictOf(diff: number, spec: Pick<MetricSpec, 'higherIsBetter' | 'km'>): Verdict {
+  const rounded = Number(diff.toFixed(spec.km ? 1 : 0));
+  return rounded === 0 ? 'same' : rounded > 0 === spec.higherIsBetter ? 'better' : 'worse';
+}
+
+/** Разница словами: «+2» или «−2,7 км». */
+export function deltaText(diff: number, spec: Pick<MetricSpec, 'km'>): string {
+  return spec.km ? `${formatSigned(diff, 1)} км` : formatSigned(diff);
+}
 
 export interface ComparisonRow {
   label: string;
@@ -43,17 +55,15 @@ function cell(metrics: Metrics | null, spec: MetricSpec): string {
 }
 
 export function metricRows(state: PlanningState): ComparisonRow[] {
-  return SPECS.map((spec) => {
+  return METRIC_SPECS.map((spec) => {
     const diff = state.plan.metrics[spec.key] - state.baseline.metrics[spec.key];
-    const rounded = Number(diff.toFixed(spec.km ? 1 : 0));
-    const verdict: Verdict = rounded === 0 ? 'same' : rounded > 0 === spec.higherIsBetter ? 'better' : 'worse';
     return {
       label: spec.label,
       baseline: cell(state.baseline.metrics, spec),
       optimized: cell(state.plan.metrics, spec),
       dispatchers: cell(state.control?.metrics ?? null, spec),
-      delta: spec.km ? `${formatSigned(diff, 1)} км` : formatSigned(diff),
-      verdict,
+      delta: deltaText(diff, spec),
+      verdict: verdictOf(diff, spec),
     };
   });
 }
