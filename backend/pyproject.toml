@@ -18,8 +18,10 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3.1",
     "pytest>=8.3",
     "ruff>=0.6",
+    "types-pyyaml>=6.0.12.20260906",
 ]
 
 [tool.uv]
@@ -39,3 +41,25 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
 ignore = ["E501"]  # длинные русские строки сообщений; код форматирует ruff format
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app", "scripts", "tests"]
+# Конструкторы моделей pydantic принимают то, что модель сама приводит к типу поля («13:00» в минуты и т. п.).
+plugins = ["pydantic.mypy"]
+# scripts без __init__.py: модули называются по пути от backend (scripts.night_plan), как их импортируют тесты.
+explicit_package_bases = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Библиотеки без аннотаций типов (ни py.typed, ни пакета types-*).
+[[tool.mypy.overrides]]
+module = ["ortools.*", "yoyo.*"]
+ignore_missing_imports = true
+
+# Тесты обращаются к полям Optional без проверки на None: если там None, тест и так падает на AttributeError.
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disable_error_code = ["union-attr"]

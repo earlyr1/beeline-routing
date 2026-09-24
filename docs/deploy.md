@@ -6,7 +6,7 @@
 
 ```
 git push main ─► GitHub Actions ci.yml
-                   ├─ make lint, make test, тесты на Postgres, фронт (tsc, vitest, сборка)
+                   ├─ make lint, make typecheck, make test, тесты на Postgres, фронт (tsc, vitest, сборка)
                    ├─ коммит всё ещё верхушка main? нет — выката нет
                    ├─ OIDC-токен прогона ─► Yandex Cloud ─► IAM-токен routing-ci (Workload Identity Federation)
                    ├─ образы backend и frontend с тегом коммита ─► Container Registry routing

@@ -15,7 +15,8 @@ TEST_DATABASE_URL ?= postgresql://routing:routing@localhost:$(PG_TEST_PORT)/rout
 PG_TEST_NAME ?= routing-test-db
 
 .DEFAULT_GOAL := help
-.PHONY: help up rebuild down logs ps smoke db migrate rollback psql test test-fast test-db lint fmt front check bundles night transit transit-dry transit-error graph
+.PHONY: help up rebuild down logs ps smoke db migrate rollback psql test test-fast test-db lint typecheck fmt front check \
+	bundles night transit transit-dry transit-error graph
 
 help:  ## показать этот список
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t 16
@@ -79,13 +80,16 @@ test-db:  ## всё, что ходит в Postgres (маркер db): своя �
 lint:  ## ruff: проверка стиля и форматирования
 	cd backend && $(UV) run ruff check app tests scripts && $(UV) run ruff format --check app tests scripts
 
+typecheck:  ## mypy: типы бэкенда (app, scripts, tests; настройки в backend/pyproject.toml)
+	cd backend && $(UV) run mypy
+
 fmt:  ## ruff: отформатировать
 	cd backend && $(UV) run ruff format app tests scripts
 
 front:  ## фронт: тесты, типы, сборка
 	cd frontend && npx vitest run && npx tsc --noEmit && npm run build
 
-check: lint test front  ## всё сразу: то, что гоняется перед коммитом
+check: lint typecheck test front  ## всё сразу: то, что гоняется перед коммитом
 
 ## --- данные ---
 
