@@ -34,7 +34,8 @@ from app.geo.transit import (
 from app.settings import Settings
 
 NO_KEY = (
-    f"Нужен ключ шифрования матриц в переменной окружения {TRANSIT_KEY_ENV} (make transit-encrypt берёт его из .env).\n"
+    f"Нужен ключ шифрования матриц в переменной окружения {TRANSIT_KEY_ENV} "
+    "(make transit-encrypt берёт его из .env).\n"
     "Новый ключ: python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())' — "
     f"его же надо положить в секрет {TRANSIT_KEY_ENV} репозитория на GitHub (infra/github/set_secrets.py)."
 )
