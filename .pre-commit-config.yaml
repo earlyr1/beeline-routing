@@ -14,12 +14,16 @@ repos:
         types_or: [python, pyi]
 
   # mypy — из окружения backend (uv run): ему нужны pydantic, fastapi и прочие зависимости проекта с их типами.
+  # Сам uv хуку ставит pre-commit, той же версии, что в CI и backend/Dockerfile: git из IDE или GUI часто
+  # запускается без ~/.local/bin в PATH, и uv из системы хук бы там не нашёл. --no-active: окружение хука
+  # с этим uv — не окружение проекта, mypy идёт из backend/.venv.
   - repo: local
     hooks:
       - id: mypy
         name: mypy (backend)
-        entry: uv run --directory backend --frozen mypy
-        language: system
+        entry: uv run --no-active --directory backend --frozen mypy
+        language: python
+        additional_dependencies: [uv==0.12.13]
         pass_filenames: false
         files: ^backend/(.*\.py|pyproject\.toml|uv\.lock)$
 
