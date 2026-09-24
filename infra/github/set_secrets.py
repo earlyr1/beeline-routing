@@ -10,7 +10,8 @@
 в аргументах командной строки его нет нигде. Значения не печатаются никогда — только имена.
 
 Откуда что берётся:
-  .env в корне         — YANDEX_MAPS_API_KEY, YANDEX_GEOCODER_API_KEY, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL;
+  .env в корне         — YANDEX_MAPS_API_KEY, YANDEX_GEOCODER_API_KEY, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL,
+                         TRANSIT_KEY (ключ матриц 2ГИС data/transit/*.json.enc; без него выкат не идёт);
   infra/yc/.state.env  — YC_SA_ID, YC_REGISTRY_ID, VM_HOST (пишет infra/yc/create.sh), SITE_HOST (<IP>.nip.io);
   infra/yc/known_hosts — VM_KNOWN_HOSTS (тоже create.sh, ключи хоста из вывода последовательного порта);
   ~/.ssh/beeline_routing_deploy — VM_SSH_KEY, закрытый ключ пользователя deploy;
@@ -41,7 +42,14 @@ from nacl import encoding, public
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REPO = "earlyr1/beeline-routing"
-APP_KEYS = ("YANDEX_MAPS_API_KEY", "YANDEX_GEOCODER_API_KEY", "LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL")
+APP_KEYS = (
+    "YANDEX_MAPS_API_KEY",
+    "YANDEX_GEOCODER_API_KEY",
+    "LLM_BASE_URL",
+    "LLM_API_KEY",
+    "LLM_MODEL",
+    "TRANSIT_KEY",
+)
 # Каждый запрос с неверным паролем Caddy проверяет bcrypt заново (кэш помнит только уже виденные пары), и при
 # цене 12 это четверть-полсекунды ядра машины: перебор паролей съел бы процессор. Цена 10 вчетверо дешевле, а хэш
 # лежит только в секретах GitHub и в .env машины с правами 600 — стойкость к офлайн-перебору тут вторична.
@@ -202,6 +210,15 @@ def read_password(from_stdin: bool) -> str | None:
     return first
 
 
+def transit_key_ok(value: str) -> bool:
+    """TRANSIT_KEY — ключ Fernet: url-safe base64 ровно от 32 байт. Другой backend не примет, и матрицы 2ГИС
+    на сервере не расшифруются."""
+    try:
+        return len(base64.urlsafe_b64decode(value.encode())) == 32
+    except ValueError:
+        return False
+
+
 def env_safe(name: str, value: str) -> None:
     """Деплой пишет значения в .env в одинарных кавычках: одинарную кавычку и перевод строки туда не записать."""
     if "'" in value or "\n" in value or "\r" in value:
@@ -274,6 +291,10 @@ def main() -> None:
             values[name] = value
         else:
             skipped.append(name)
+    if "TRANSIT_KEY" in values and not transit_key_ok(values["TRANSIT_KEY"]):
+        sys.exit(
+            "TRANSIT_KEY в .env не ключ Fernet: нужен url-safe base64 от 32 байт, как у Fernet.generate_key()"
+        )
 
     password = read_password(args.password_stdin)
     if password is not None:
@@ -335,6 +356,14 @@ def main() -> None:
         print("секреты    BASIC_AUTH_* не менялись: пароль жюри не введён")
     for name in skipped:
         print(f"пропущен   {name}: в .env пусто, секрет в GitHub (если был) не тронут")
+    # В пробе GitHub не спрашивается, и про секрет в нём сказать нечего.
+    if "TRANSIT_KEY" in skipped and github is None:
+        print("внимание   TRANSIT_KEY в .env пуст; есть ли он в GitHub, не проверялось (--dry-run)")
+    elif "TRANSIT_KEY" in skipped and "TRANSIT_KEY" not in existing:
+        print(
+            "внимание   TRANSIT_KEY нет ни в .env, ни в GitHub: без него выкат остановится — backend не расшифрует "
+            "матрицы 2ГИС"
+        )
 
 
 if __name__ == "__main__":

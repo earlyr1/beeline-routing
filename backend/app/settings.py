@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
@@ -24,8 +24,8 @@ MAX_DEFAULT_SOLVER_WORKERS = 4
 class Settings:
     data_dir: Path
     cache_path: Path
-    # Матрицы времени на общественном транспорте от 2ГИС: по файлу <регион>.json в каталоге. Каталог лежит
-    # в репозитории (data/transit) и копируется в образ backend, читается при старте.
+    # Матрицы времени на общественном транспорте от 2ГИС: по файлу на регион в каталоге. В репозитории (data/transit)
+    # они лежат зашифрованными (<регион>.json.enc), копируются в образ backend и расшифровываются при старте в памяти.
     transit_dir: Path
     osrm_url: str | None
     yandex_maps_api_key: str | None
@@ -41,6 +41,10 @@ class Settings:
     # Postgres, в котором живёт день диспетчера (postgresql://…). Пусто — день живёт в памяти процесса и
     # уходит с перезапуском: это сегодняшний сервис, так работают тесты и запуск без compose.
     database_url: str | None = None
+    # Ключ Fernet, которым зашифрованы матрицы 2ГИС (TRANSIT_KEY). Без него зашифрованные матрицы не читаются, и
+    # общественный транспорт считает встроенная формула. repr=False: настройки не печатают ключ, даже если их
+    # выведут целиком.
+    transit_key: str | None = field(default=None, repr=False)
 
     @property
     def bundles_dir(self) -> Path:
@@ -91,4 +95,5 @@ class Settings:
             llm_tool_mode=llm_tool_mode,
             solver_workers=solver_workers,
             database_url=optional("DATABASE_URL"),
+            transit_key=optional("TRANSIT_KEY"),
         )

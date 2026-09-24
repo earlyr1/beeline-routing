@@ -2,13 +2,15 @@
 
 Запуск из каталога backend, на ночь — под caffeinate, чтобы Mac не уснул от бездействия посреди поиска (от закрытой
 крышки caffeinate -i не спасает):
-  caffeinate -i ~/.local/bin/uv run python -m scripts.night_plan --region all --minutes 120
+  caffeinate -i ~/.local/bin/uv run --env-file ../.env python -m scripts.night_plan --region all --minutes 120
   ~/.local/bin/uv run python -m scripts.night_plan --region east --minutes 1 --out /tmp/night
 
 День региона собирается тем же кодом, что и в сервисе: бандл data/bundles/<регион>/bundle.json, контекст
-планирования сервиса (app/api/deps.py, planning_context) с OSRM и матрицами 2ГИС из data/transit,
-нагрузка по умолчанию и обед по плану. Поэтому отпечаток задачи в файле совпадает с тем, что посчитает сервис на тех
-же бандлах, OSRM и файлах 2ГИС, и сервис берёт ночной план утренним без поиска (app/planning/night.py).
+планирования сервиса (app/api/deps.py, planning_context) с OSRM и матрицами 2ГИС из data/transit (зашифрованные
+расшифровываются ключом из TRANSIT_KEY, make night берёт его из .env), нагрузка по умолчанию и обед по плану.
+Поэтому отпечаток задачи в файле совпадает с тем, что посчитает сервис на тех же бандлах, OSRM и файлах 2ГИС, и сервис
+берёт ночной план утренним без поиска (app/planning/night.py). Если зашифрованная матрица региона не расшифровалась,
+в data/bundles скрипт не пишет: план на формуле заменил бы хороший ночной план другой задачи.
 
 Перед долгим поиском регион ищется так же, как сервис при загрузке дня: те же стратегии (SOLVER_WORKERS) и лимит
 (SOLVER_TIME_LIMIT_LUNCH_S, 30 с). Это честная точка сравнения на той же задаче, и долгий поиск стартует от лучшего
@@ -37,6 +39,7 @@ from pathlib import Path
 from app.api.deps import planning_context
 from app.domain.models import Bundle, Metrics
 from app.geo.osrm import OsrmClient
+from app.geo.transit import TRANSIT_KEY_ENV, encrypted_regions
 from app.ingest.bundle import load_bundle
 from app.planning.night import (
     NightMetrics,
@@ -61,7 +64,8 @@ DEFAULT_OSRM_URL = "http://localhost:5050"
 OSRM_OFF = "off"
 CAFFEINATE = (
     "Долгий расчёт запускайте под caffeinate, иначе Mac уснёт от бездействия посреди поиска: "
-    "caffeinate -i ~/.local/bin/uv run python -m scripts.night_plan --region all --minutes 120. "
+    "caffeinate -i ~/.local/bin/uv run --env-file ../.env python -m scripts.night_plan --region all "
+    "--minutes 120 (или из корня: make night). "
     "От закрытой крышки caffeinate -i не спасает: на ночь подключите питание и не закрывайте крышку"
 )
 REBUILD = (
@@ -69,7 +73,8 @@ REBUILD = (
     "docker compose up -d --build backend"
 )
 # Строка оптимизированного плана в report.md бандла: её посчитал prepare поиском с лимитом по умолчанию (30 с),
-# с OSRM, но без матриц 2ГИС, то есть на другой задаче: матрицы лежат в репозитории, и у сервиса они есть всегда.
+# с OSRM, но без матриц 2ГИС, то есть на другой задаче: матрицы лежат в репозитории, и у сервиса с ключом
+# TRANSIT_KEY они есть всегда.
 REPORT_ROW = "Оптимизированный"
 # Поиск, который шёл заметно меньше лимита: OR-Tools считает лимит по настенным часам, а монотонные часы
 # в сне Mac стоят. Так видно, что Mac засыпал посреди поиска.
@@ -412,6 +417,21 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         )
         return 2
     out_dir = args.out or settings.bundles_dir
+    # Без кэша OSRM: ночной расчёт берёт матрицу у того OSRM, что работает сейчас, а не из старого кэша.
+    ctx = planning_context(settings, osrm, None)
+    loaded = {matrix.region for matrix in ctx.transit}
+    locked = sorted((set(encrypted_regions(settings.transit_dir)) & set(regions)) - loaded)
+    if locked and args.out is None:
+        # Зашифрованная матрица не прочиталась: день посчитается формулой, отпечаток выйдет не тот, что у сервиса
+        # с ключом, и хороший прежний план в data/bundles был бы заменён бесполезным.
+        print(
+            f"Матрицы 2ГИС регионов {', '.join(locked)} зашифрованы и не расшифровались: нет {TRANSIT_KEY_ENV} "
+            f"или ключ не тот. Без них задача не та, что у сервиса, и ночной план ему не подойдёт, а прежние планы "
+            f"в {settings.bundles_dir} были бы заменены. Задайте {TRANSIT_KEY_ENV} (make night берёт его из .env) "
+            "или укажите каталог явно: --out",
+            file=sys.stderr,
+        )
+        return 2
     limit_s = time_limit_s(args.minutes)
     # Поиск, как у сервиса при загрузке дня: тот же лимит и столько же стратегий, по региону за раз.
     live_limit_s = settings.solver_time_limit_lunch_s
@@ -432,8 +452,6 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         print(f"процессов {workers * parallel} больше, чем ядер ({cpu}): поиски будут мешать друг другу")
     print(f"{osrm_note}; каталог ночных планов: {out_dir}", flush=True)
 
-    # Без кэша OSRM: ночной расчёт берёт матрицу у того OSRM, что работает сейчас, а не из старого кэша.
-    ctx = planning_context(settings, osrm, None)
     # Поиск одного региона в одном процессе идёт прямо здесь: так быстрее на маленьких задачах и в тестах.
     in_process = workers == 1 and parallel == 1
     # Пул живого поиска — как у сервиса (app/api/deps.py, build_deps): при SOLVER_WORKERS 1 поиск идёт на месте.

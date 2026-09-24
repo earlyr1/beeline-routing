@@ -9,6 +9,8 @@ frontend/node_modules
 frontend/dist
 data/cache.sqlite
 data/raw
+# Открытые матрицы 2ГИС не едут в образ даже при локальной сборке: там только <регион>.json.enc.
+data/transit/*.json
 GITHUB_MCP_TOKEN
 infra/yc/.state.env
 infra/yc/known_hosts
