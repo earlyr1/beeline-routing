@@ -914,6 +914,8 @@ def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(api, 
         for request in start["requests"]
     ]
     assert start["morning"] == morning and morning
+    # Итоги утреннего плана: с ними окно «Итоги дня» сравнивает итог дня, пока событий ещё нет — это план на экране.
+    assert start["morning_metrics"] == start["plan"]["metrics"]
 
     before = next(request for request in start["requests"] if request["id"] == "R2")
     edit = {
@@ -931,6 +933,8 @@ def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(api, 
     moved = next(request for request in state["requests"] if request["id"] == "R2")
     assert (moved["window_start"], moved["window_end"]) == ("16:00", "18:00")
     assert state["morning"] == morning
+    assert state["morning_metrics"] == start["morning_metrics"]
+    assert state["plan"]["metrics"] != start["plan"]["metrics"]
 
 
 def test_legacy_events_and_proposals_apply_the_optimal_variant_without_asking(api, solves):

@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
 
 from app.domain.enums import Transport
-from app.domain.models import Engineer, Event, Office, Plan, Request, TimeWindow
+from app.domain.models import Engineer, Event, Metrics, Office, Plan, Request, TimeWindow
 from app.domain.timeutil import HHMM
 from app.domain.windows import TimeSlot
 from app.planning.models import AppliedEvent, EventChoice, EventVariant, PlanDiff, PrecomputedPlan
@@ -178,6 +178,9 @@ class PlanningState(BaseModel):
     # Начало дня (текущее время 00:00, ни одного события шкалы): окно каждой заявки и её утренний визит.
     # С окнами отсюда вкладка «Коммуникации» сравнивает план, когда клиенту ещё не звонили.
     morning: list[MorningRequest] = Field(default_factory=list)
+    # Итоги утреннего плана из той же сессии начала дня: окно «Итоги дня» сравнивает с ними итог дня. Пробега
+    # и нарушений утра из morning не собрать. null — утра нет.
+    morning_metrics: Metrics | None = None
     events: list[AppliedEvent] = Field(default_factory=list)
     matrix_source: Literal["osrm", "haversine"]
     # Текущее время плана. now, events, last_diff и previous_plan относятся к плану на это время.
@@ -265,7 +268,7 @@ def to_planning_state(
 ) -> PlanningState:
     """Состояние на текущее время cursor (по умолчанию время последнего события сессии).
 
-    morning — сессия начала дня: из неё в ответ идут окна заявок и визиты утреннего плана, а не она целиком.
+    morning — сессия начала дня: из неё в ответ идут окна заявок, визиты и итоги утреннего плана, а не она целиком.
     generated — регион сгенерирован нами: об этом говорит вкладка «Сравнение».
     agreed — договорённости с клиентами к текущему времени: что им уже сказали по телефону.
     """
@@ -286,6 +289,7 @@ def to_planning_state(
         control=session.control,
         last_diff=session.last_diff,
         morning=morning_requests(morning),
+        morning_metrics=morning.plan.metrics if morning is not None else None,
         events=session.events,
         matrix_source=session.problem.travel.base.source,
         cursor=session.now if cursor is None else cursor,
