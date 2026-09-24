@@ -35,6 +35,7 @@ describe('time bar', () => {
       restore: 'Возврат',
       request_updated: 'Изменение',
       request_reassigned: 'Назначение',
+      client_agreed: 'Звонок',
     };
     expect(EVENT_SHORT_LABELS).toEqual(labels);
   });

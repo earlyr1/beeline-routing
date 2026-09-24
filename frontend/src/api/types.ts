@@ -7,7 +7,8 @@ export type Transport = 'car' | 'bike' | 'public';
 export type Priority = 'normal' | 'urgent';
 /** Приоритет распределения по роду работ (ответ организаторов, вопрос 15): авария → подключение → ремонт и дозаказ. */
 export type RequestTier = 'emergency' | 'connection' | 'routine';
-export type RequestStatus = 'active' | 'cancelled';
+/** postponed — «сегодня не приедем»: клиенту сказали по телефону, заявка в плане без инженера и в «Не назначено». */
+export type RequestStatus = 'active' | 'cancelled' | 'postponed';
 export type EventType =
   | 'urgent'
   | 'cancel'
@@ -17,13 +18,17 @@ export type EventType =
   | 'engineer_transport_changed'
   | 'request_updated'
   | 'engineer_delayed'
-  | 'request_reassigned';
+  | 'request_reassigned'
+  // «Коммуникация»: диспетчер позвонил клиенту и договорился (отметка ✓ вкладки «Коммуникации»).
+  | 'client_agreed';
 export type ReasonCode =
   | 'no_skill'
   | 'no_transport'
   | 'does_not_fit_window_or_shift'
   | 'no_free_engineer_in_window'
-  | 'address_not_found';
+  | 'address_not_found'
+  // Перенесена: клиенту сказали, что сегодня не приедем.
+  | 'postponed';
 export type GeocodePrecision = 'house' | 'street' | 'locality' | 'none';
 export type DatasetStatusValue = 'processing' | 'ready' | 'failed';
 export type DatasetStage = 'parsing' | 'geocoding' | 'matrix' | 'solving' | 'ready';
@@ -119,6 +124,11 @@ export interface PlanEvent {
    * Заполняет сервер у применённого события, клиентское значение игнорируется.
    */
   previous_engineer_id?: string | null;
+  /**
+   * Окно, которое диспетчер назвал клиенту у client_agreed: оно становится окном заявки.
+   * null — сказал, что сегодня не приедем: заявка переносится.
+   */
+  agreed_window?: TimeWindow | null;
 }
 
 export interface Visit {
@@ -324,21 +334,17 @@ export interface TimeWindow {
 
 /**
  * Что клиент знает про заявку после звонка: окно, которое ему назвали, либо null — ему сказали,
- * что сегодня не приедем.
+ * что сегодня не приедем. Это событие «Коммуникация» (client_agreed) на шкале дня: названное окно
+ * стало окном заявки, поэтому дальше план сравнивается с ним.
  */
-export interface AgreedWindow {
+export interface AgreedCall {
   window: TimeWindow | null;
-  /**
-   * Окно самой заявки в момент разговора: по нему видно, что диспетчер передвинул его уже после звонка.
-   * С окном клиента оно совпадает, пока визит попадает в окно заявки; иначе клиенту назвали новое окно.
-   */
-  request_window?: TimeWindow | null;
-  /** Номер плана, на котором договорились. Отметки, записанные до появления номера, его не знают. */
-  version?: number | null;
+  /** Событие шкалы, которое записало договорённость: удалить его — снять отметку. */
+  entry_id: string;
 }
 
-/** Согласованные окна по номеру заявки: их помнит сервер вместе с днём. */
-export type AgreedWindows = Record<string, AgreedWindow>;
+/** Договорённости по номеру заявки: последние события «Коммуникация», применённые к времени плана. */
+export type AgreedCalls = Record<string, AgreedCall>;
 
 export interface PlanningState {
   dataset_id: string;
@@ -383,11 +389,11 @@ export interface PlanningState {
   /** Утренний план посчитан заранее ночным расчётом; null — найден при загрузке дня. */
   precomputed?: PrecomputedPlan | null;
   /**
-   * Что уже согласовано с клиентами по телефону: номер заявки → окно, которое клиенту назвали.
-   * Живёт на сервере, поэтому приходит с планом в любую вкладку, которая его открыла, и переживает
-   * перезапуск сервиса. Уже открытая вкладка узнаёт о чужой отметке, когда сама сходит за планом.
+   * Что уже согласовано с клиентами по телефону: номер заявки → окно, которое клиенту назвали, и событие шкалы.
+   * Сервер собирает его из событий «Коммуникация», применённых к cursor: часы, отведённые раньше звонка,
+   * снимают и отметку, и то, что звонок сделал с заявкой.
    */
-  agreed?: AgreedWindows;
+  agreed?: AgreedCalls;
 }
 
 /**

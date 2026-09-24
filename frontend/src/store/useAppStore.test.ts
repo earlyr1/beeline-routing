@@ -19,12 +19,12 @@ vi.mock('../api/client', async (importOriginal) => {
     setTimelineVariant: vi.fn(),
     getScenarios: vi.fn(),
     startScenario: vi.fn(),
-    setAgreedWindow: vi.fn(),
   };
 });
 
 import * as api from '../api/client';
 import type { DatasetStatus, EventChoice, PlanEvent, PlanningState, ReverseGeocode, TimelineItem } from '../api/types';
+import { agreementEvent } from '../lib/communications';
 import { cancelEvent, delayEvent, reassignEvent, transportChangeEvent, unavailableEvent } from '../lib/events';
 import {
   makeDatasetStatus,
@@ -1122,50 +1122,48 @@ describe('events being prepared on the server', () => {
 });
 
 describe('agreed windows of the calls to clients', () => {
-  /** Ответ сервера на отметку: он помнит её вместе с днём и возвращает в составе плана. */
-  const answering = () =>
-    vi.mocked(api.setAgreedWindow).mockImplementation(async (_dataset, requestId, window) => {
-      const state = useAppStore.getState().state!;
-      return { ...state, agreed: { ...(state.agreed ?? {}), [requestId]: window } };
-    });
+  /** Ответ сервера на звонок: событие «Коммуникация» применено, договорённость пришла в составе плана. */
+  const answered = (event: PlanEvent): PlanningState => {
+    const state = useAppStore.getState().state!;
+    const agreed = { window: event.agreed_window ?? null, entry_id: 'tl_7' };
+    return { ...state, agreed: { ...(state.agreed ?? {}), [event.request_id!]: agreed } };
+  };
+  const window = { start: '14:00', end: '16:00', asap: false };
 
-  it('sends the window the client now knows to the server and shows it at once', async () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState() });
-    answering();
-    // Вместе с окном запоминается номер плана: с планом постарше отметку не сравнивают.
-    const mark = {
-      window: { start: '14:00', end: '16:00', asap: false },
-      request_window: { start: '14:00', end: '16:00', asap: false },
-      version: 4,
-    };
+  it('sends the call as an event at the time on the clock and shows it at once', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+    vi.mocked(api.addTimelineEvent).mockImplementation(async (_dataset, event) => answered(event));
+
     const sent = useAppStore.getState().markAgreed('50104');
-    // Строка уходит вниз, не дожидаясь ответа: диспетчер уже положил трубку.
-    expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
+    // Строка уходит вниз, не дожидаясь ответа: диспетчер уже положил трубку. Снять её пока нечем.
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { window, entry_id: null } });
     await sent;
-    expect(api.setAgreedWindow).toHaveBeenCalledWith('d_test', '50104', mark);
-    expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
+    // Без стратегии: нужно ли окно выбора, решит сервер, как у любого события.
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', agreementEvent('50104', window, '13:00'), undefined);
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { window, entry_id: 'tl_7' } });
 
-    // К 18754 сегодня не приедут: отметка значит, что клиенту так и сказали.
+    // К 18754 сегодня не приедут: звонок значит, что клиенту так и сказали, и заявка переносится.
     await useAppStore.getState().markAgreed('18754');
-    expect(useAppStore.getState().agreed['18754']).toMatchObject({ window: null, version: 4 });
+    expect(api.addTimelineEvent).toHaveBeenLastCalledWith('d_test', agreementEvent('18754', null, '13:00'), undefined);
+    expect(useAppStore.getState().agreed['18754']).toEqual({ window: null, entry_id: 'tl_7' });
   });
 
-  it('brings the row back to the calls when the server did not take the mark', async () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState() });
-    vi.mocked(api.setAgreedWindow).mockRejectedValue(new api.ApiError(503, 'Не удалось сохранить: база недоступна.'));
+  it('brings the row back to the calls when the server did not take the call', async () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+    vi.mocked(api.addTimelineEvent).mockRejectedValue(new api.ApiError(422, 'Заявка 50104 уже в работе с 13:00, перенести её нельзя.'));
 
     await useAppStore.getState().markAgreed('50104');
 
     expect(useAppStore.getState().agreed).toEqual({});
-    expect(useAppStore.getState().error).toBe('Не удалось сохранить: база недоступна.');
+    expect(useAppStore.getState().error).toBe('Заявка 50104 уже в работе с 13:00, перенести её нельзя.');
   });
 
   it('shows the marks the server sends with the plan and nothing else', () => {
-    const mark = { window: { start: '14:00', end: '16:00', asap: false }, version: 4 };
+    const mark = { window, entry_id: 'tl_7' };
     useAppStore.getState().setPlanningState(makePlanningState({ agreed: { '50104': mark } }));
     expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
 
-    // День пересчитали или сбросили события: отметки снял сервер, и в ответе их больше нет.
+    // Часы ушли раньше звонка, день пересчитали или сбросили события: в ответе отметки больше нет.
     useAppStore.getState().setPlanningState(at('00:00'));
     expect(useAppStore.getState().agreed).toEqual({});
 
@@ -1175,35 +1173,34 @@ describe('agreed windows of the calls to clients', () => {
   });
 
   it('keeps a mark that is still in flight when an earlier answer arrives without it', async () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
     let answer: (state: PlanningState) => void = () => {};
-    vi.mocked(api.setAgreedWindow).mockReturnValue(new Promise<PlanningState>((resolve) => { answer = resolve; }));
+    vi.mocked(api.addTimelineEvent).mockReturnValue(new Promise<PlanningState>((resolve) => { answer = resolve; }));
 
     const sent = useAppStore.getState().markAgreed('50104');
     expect(useAppStore.getState().agreed['50104']).toBeDefined();
-    // Пока отметка в очереди, приходит ответ запроса, стоявшего раньше неё: отметки в нём ещё нет.
+    // Пока звонок в очереди, приходит ответ запроса, стоявшего раньше него: отметки в нём ещё нет.
     useAppStore.getState().setPlanningState(makePlanningState({ version: 5 }));
-    expect(useAppStore.getState().agreed['50104']).toBeDefined();
+    expect(useAppStore.getState().agreed['50104']).toEqual({ window, entry_id: null });
 
-    answer(makePlanningState({ version: 5, agreed: { '50104': useAppStore.getState().agreed['50104'] } }));
+    await vi.waitFor(() => expect(api.addTimelineEvent).toHaveBeenCalled());
+    answer(makePlanningState({ version: 6, agreed: { '50104': { window, entry_id: 'tl_7' } } }));
     await sent;
-    expect(useAppStore.getState().agreed['50104']).toBeDefined();
+    expect(useAppStore.getState().agreed['50104']).toEqual({ window, entry_id: 'tl_7' });
   });
 
   it('takes back only its own mark when the server did not accept it', async () => {
-    resetStore({ datasetId: 'd_test', state: makePlanningState() });
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
     let refuse: (error: unknown) => void = () => {};
-    vi.mocked(api.setAgreedWindow).mockImplementation((_dataset, requestId, window) => {
-      if (requestId === '50104') return new Promise<PlanningState>((_resolve, reject) => { refuse = reject; });
-      const state = useAppStore.getState().state!;
-      return Promise.resolve({ ...state, agreed: { ...(state.agreed ?? {}), [requestId]: window } });
+    vi.mocked(api.addTimelineEvent).mockImplementation((_dataset, event) => {
+      if (event.request_id === '50104') return new Promise<PlanningState>((_resolve, reject) => { refuse = reject; });
+      return Promise.resolve(answered(event));
     });
 
     const refused = useAppStore.getState().markAgreed('50104');
-    // Пока первая отметка не доехала, диспетчер отмечает соседнюю строку.
+    // Пока первый звонок не доехал, диспетчер отмечает соседнюю строку.
     const kept = useAppStore.getState().markAgreed('18754');
-    // Очередь запросов отпускает первый из них в микрозадаче: до этого отказывать нечему.
-    await Promise.resolve();
+    await vi.waitFor(() => expect(api.addTimelineEvent).toHaveBeenCalled());
     refuse(new api.ApiError(503, 'Не удалось сохранить: база недоступна.'));
     await refused;
 
@@ -1211,7 +1208,7 @@ describe('agreed windows of the calls to clients', () => {
     expect(Object.keys(useAppStore.getState().agreed)).toEqual(['18754']);
     expect(useAppStore.getState().error).toBe('Не удалось сохранить: база недоступна.');
     await kept;
-    expect(Object.keys(useAppStore.getState().agreed)).toEqual(['18754']);
+    expect(useAppStore.getState().agreed).toEqual({ '18754': { window: null, entry_id: 'tl_7' } });
   });
 
   it('sends the cancellation of a client who refused with the chosen strategy', async () => {

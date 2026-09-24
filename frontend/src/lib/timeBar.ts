@@ -16,6 +16,7 @@ export const EVENT_SHORT_LABELS: Record<EventType, string> = {
   restore: 'Возврат',
   request_updated: 'Изменение',
   request_reassigned: 'Назначение',
+  client_agreed: 'Звонок',
 };
 
 /** Статус события языком диспетчера: «применено», «впереди», «ждёт выбора варианта» или «отклонено: причина». */

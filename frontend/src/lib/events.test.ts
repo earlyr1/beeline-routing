@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PlanEvent, ServiceRequest } from '../api/types';
+import { agreementEvent } from './communications';
 import {
   makeAsapRequest,
   makeDataUrgentState,
@@ -290,6 +291,18 @@ describe('events', () => {
     const urgent = makePlanningState().events[2].event;
     expect(describeEvent(urgent, engineers, requests)).toBe('Срочная заявка URG-001 в 13:00');
     expect(describeEvent({ ...urgent, request: makeAsapRequest() }, engineers, requests)).toBe('Срочная заявка URG-002 как можно скорее, 13:00');
+    // Звонок клиенту: что ему сказали и когда.
+    const window = { start: '16:00', end: '18:00', asap: false };
+    expect(describeEvent(agreementEvent('86160', window, '13:05'), engineers, requests)).toBe(
+      'Клиент 86160: окно 16:00–18:00, звонок в 13:05',
+    );
+    expect(describeEvent(agreementEvent('18754', null, '13:05'), engineers, requests)).toBe(
+      'Клиент 18754: сегодня не приедем, звонок в 13:05',
+    );
+    const asap = { start: '13:00', end: '22:00', asap: true };
+    expect(describeEvent(agreementEvent('URG-001', asap, '13:05'), engineers, requests)).toBe(
+      'Клиент URG-001: как можно скорее с 13:00, звонок в 13:05',
+    );
   });
 
   it('names an urgent request of the day with the URG- prefix, while the event keeps the raw number', () => {
@@ -682,6 +695,7 @@ describe('request reassignment', () => {
     expect(eventRequestId(cancelEvent('10135', '09:30'))).toBe('10135');
     expect(eventRequestId(makeRequestUpdateEvent())).toBe('50104');
     expect(eventRequestId(state.events[2].event)).toBe('URG-001');
+    expect(eventRequestId(agreementEvent('86160', null, '13:05'))).toBe('86160');
     expect(eventRequestId(unavailableEvent('E03', '13:00'))).toBeNull();
     expect(eventRequestId(makeDelayEvent())).toBeNull();
   });

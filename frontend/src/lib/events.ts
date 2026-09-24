@@ -8,6 +8,7 @@ import {
   PRIORITY_LABELS,
   requestLabel,
   requestLabelOf,
+  requestWindowPhrase,
   shortAddress,
   SKILL_LABELS,
   toMinutes,
@@ -568,7 +569,10 @@ export function lateVisitsTitle(forecast: DelayForecast, requests: Map<string, S
     .join('\n');
 }
 
-/** Заявка, о которой событие: у срочной заявки — новая заявка, у отмены, возврата, изменения и переназначения — изменённая. */
+/**
+ * Заявка, о которой событие: у срочной заявки — новая заявка, у отмены, возврата, изменения, переназначения
+ * и звонка клиенту — названная.
+ */
 export function eventRequestId(event: PlanEvent): string | null {
   switch (event.type) {
     case 'urgent':
@@ -577,6 +581,7 @@ export function eventRequestId(event: PlanEvent): string | null {
     case 'restore':
     case 'request_updated':
     case 'request_reassigned':
+    case 'client_agreed':
       return event.request_id ?? event.request?.id ?? null;
     default:
       return null;
@@ -630,6 +635,14 @@ export function describeEvent(event: PlanEvent, engineers: Map<string, Engineer>
       if (!event.previous_engineer_id) return `${title} → ${name} с ${event.time}`;
       const previous = engineers.get(event.previous_engineer_id)?.name ?? event.previous_engineer_id;
       return `${title}: ${previous} → ${name} с ${event.time}`;
+    }
+    case 'client_agreed': {
+      // Что клиенту сказали: окно, которое стало окном заявки, или что сегодня не приедем.
+      const told = event.agreed_window;
+      const what = told
+        ? requestWindowPhrase({ asap: told.asap ?? false, window_start: told.start, window_end: told.end })
+        : 'сегодня не приедем';
+      return `Клиент ${eventRequestLabel(event, requests)}: ${what}, звонок в ${event.time}`;
     }
   }
 }

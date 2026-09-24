@@ -1,11 +1,22 @@
-import type { AgreedWindow, AgreedWindows, HHMM, PlanEvent, PlanningState, ServiceRequest, TimeSlot, TimeWindow } from '../api/types';
+import type { AgreedCall, AgreedCalls, HHMM, PlanEvent, PlanningState, ServiceRequest, TimeSlot, TimeWindow } from '../api/types';
 import { fromMinutes, requestLabel, requestWindowPhrase, requestWindowText, shortAddress, toMinutes } from './format';
 import { assignmentIndex, byId } from './planView';
 import { offGrid, slotFor } from './windows';
 
-// Окно клиента (TimeWindow) и отметка разговора (AgreedWindow, AgreedWindows) описаны в контракте API:
-// их помнит сервер вместе с днём, и вкладка получает их в составе плана.
-export type { AgreedWindow, AgreedWindows, TimeWindow };
+// Окно клиента (TimeWindow) и договорённость (AgreedCall, AgreedCalls) описаны в контракте API: отметка звонка —
+// событие «Коммуникация» на шкале дня, и вкладка получает договорённости в составе плана.
+export type { AgreedCall, AgreedCalls, TimeWindow };
+
+/**
+ * Отметка звонка на экране: договорённость с сервера или та, что ещё в пути. У отметки в пути entry_id null:
+ * события на шкале пока нет, и снять её нечем. Строка уходит вниз сразу — диспетчер уже положил трубку.
+ */
+export interface AgreedMark {
+  window: TimeWindow | null;
+  entry_id: string | null;
+}
+
+export type AgreedMarks = Record<string, AgreedMark>;
 
 /** Красный — обещание не выполняется; жёлтый — окно стало другим, и клиент должен узнать новое. */
 export type CallSeverity = 'red' | 'yellow';
@@ -45,6 +56,8 @@ export interface AgreedRow {
   address: string;
   /** Окно, о котором договорились; null — клиенту сказали, что сегодня не приедем. */
   known: TimeWindow | null;
+  /** Событие «Коммуникация» на шкале: его удаление снимает отметку. null — отметка ещё в пути к серверу. */
+  entryId: string | null;
 }
 
 /** Кому звонить и с кем уже договорились. */
@@ -108,14 +121,23 @@ function isUnderway(promise: TimeWindow | null, start: HHMM | null, clock: HHMM)
   return toMinutes(start) <= now && toMinutes(promise.end) <= now;
 }
 
-/** Окно, которое клиент знает после разговора, и окно самой заявки в этот момент: их запоминает отметка «Согласовано». */
-export function agreedWindow(state: PlanningState, requestId: string, grid: TimeSlot[] = []): AgreedWindow {
+/**
+ * Окно, которое клиент узнаёт из разговора: своё окно заявки, если план в него попадает, иначе слот вокруг визита.
+ * null — визита сегодня нет: клиенту говорят, что сегодня не приедем, и заявка переносится.
+ */
+export function agreedWindow(state: PlanningState, requestId: string, grid: TimeSlot[] = []): TimeWindow | null {
   const request = byId(state.requests).get(requestId);
-  // Визита в плане нет — значит клиенту сказали, что сегодня не приедем; окна он не ждёт.
-  if (!request) return { window: null, version: state.version };
-  const window = windowOf(request);
+  if (!request) return null;
   const visit = assignmentIndex(state.plan).get(requestId);
-  return { window: promisedWindow(window, visit?.visit.start ?? null, grid), request_window: window, version: state.version };
+  return promisedWindow(windowOf(request), visit?.visit.start ?? null, grid);
+}
+
+/**
+ * Событие «Коммуникация» для шкалы: что клиенту сказали, во время на часах. Названное окно сервер делает окном
+ * заявки, «сегодня не приедем» (null) — переносит заявку.
+ */
+export function agreementEvent(requestId: string, window: TimeWindow | null, time: HHMM): PlanEvent {
+  return { type: 'client_agreed', time, request: null, request_id: requestId, engineer_id: null, agreed_window: window };
 }
 
 /** Повод для звонка: какое окно план не выполняет и какое окно диспетчер назовёт вместо него. */
@@ -199,13 +221,13 @@ function acceptedWindows(state: PlanningState): Map<string, TimeWindow> {
  * заявка вошла в день (правка окна — такое же событие шкалы, поэтому утреннее окно не меняется вместе с ней).
  * У заявки, принятой среди дня, окно приёма лежит в событии, которым она в день вошла.
  * Сравнивается не последнее событие, а обещание клиенту: часы дня ходят вперёд и назад, и список по событию врал бы.
+ * Отметки — события шкалы, применённые к времени плана: часы, отведённые раньше звонка, снимают его и на сервере.
  *
  * Отменённые заявки в список не попадают: клиент либо сам отказался, либо ему уже сказали. Не попадают и визиты,
- * которые к времени на часах (clock) уже закончились: работа сделана, звонить не о чем. Договорённость, записанную
- * на плане новее текущего (часы отмотали назад), пропускаем целиком: сравнение с прежним планом перевернуло бы
- * строку и позвало отзывать окно, которое никуда не делось.
+ * которые к времени на часах (clock) уже закончились: работа сделана, звонить не о чем. Перенесённая заявка
+ * («сегодня не приедем») стоит в блоке «Согласовано»: ей уже сказали, и звонка она не ждёт.
  */
-export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHMM, grid: TimeSlot[] = []): CallList {
+export function callList(state: PlanningState, agreed: AgreedMarks, clock: HHMM, grid: TimeSlot[] = []): CallList {
   const assigned = assignmentIndex(state.plan);
   const morning = new Map((state.morning ?? []).map((item) => [item.request_id, windowOf(item)]));
   const accepted = acceptedWindows(state);
@@ -218,21 +240,22 @@ export function callList(state: PlanningState, agreed: AgreedWindows, clock: HHM
     // Визит закончился до времени на часах: работа сделана, звонить поздно и незачем.
     if (visit && toMinutes(visit.visit.end) <= now) continue;
     const mark = agreed[request.id];
-    // Договорились на плане новее текущего: сравнивать их нельзя, строка вышла бы перевёрнутой.
-    if (mark && (mark.version ?? 0) > state.version) continue;
     const window = windowOf(request);
     // Окно, с которым заявка вошла в день: утреннее, у принятой среди дня — окно приёма.
     const entered = morning.get(request.id) ?? accepted.get(request.id) ?? window;
     // В отметке записано окно, которое клиенту назвали: null — ему сказали, что сегодня не приедем.
     const known = mark ? (mark.window ?? null) : entered;
-    const base = mark?.request_window ?? entered;
+    // Окно заявки сразу после разговора. Звонок на шкале сделал названное окно окном заявки, поэтому дальше
+    // расхождения считаются от него: передвинул диспетчер окно после звонка — клиент должен узнать новое.
+    // Отметка в пути окна заявки ещё не поменяла, и сравнивать её пока можно только с текущим окном.
+    const base = mark ? (mark.entry_id === null ? window : (mark.window ?? window)) : entered;
     const start = visit?.visit.start ?? null;
     const reason = callReason(known, base, window, start, grid);
     const label = requestLabel(request.id, request.priority);
     const address = shortAddress(request.address);
     if (reason === null) {
       // Клиенту звонили, и с тех пор ничего не разошлось: строка уходит в блок «Согласовано».
-      if (mark) settled.push({ requestId: request.id, label, address, known });
+      if (mark) settled.push({ requestId: request.id, label, address, known, entryId: mark.entry_id });
       continue;
     }
     pending.push({

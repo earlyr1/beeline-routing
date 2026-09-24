@@ -57,6 +57,7 @@ export const EVENT_LABELS: Record<EventType, string> = {
   request_updated: 'Изменение заявки',
   engineer_delayed: 'Задержка инженера',
   request_reassigned: 'Переназначение заявки',
+  client_agreed: 'Коммуникация',
 };
 
 /** Форма русского существительного для числа: одна заявка, две заявки, пять заявок. */
@@ -74,6 +75,7 @@ export const REASON_LABELS: Record<ReasonCode, string> = {
   does_not_fit_window_or_shift: 'Не помещается в окно или смену',
   no_free_engineer_in_window: 'Нет свободных исполнителей',
   address_not_found: 'Адрес не найден',
+  postponed: 'Перенесена',
 };
 
 export const PRECISION_LABELS: Record<GeocodePrecision, string> = {

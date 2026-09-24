@@ -12,14 +12,11 @@ import {
   getScenarios,
   getTimelineVariants,
   moveCursor,
-  setAgreedWindow,
   setTimelineVariant,
   startScenario as startScenarioRequest,
   uploadFile,
 } from '../api/client';
 import type {
-  AgreedWindow,
-  AgreedWindows,
   ClientConfig,
   DatasetStatus,
   EventChoice,
@@ -29,8 +26,9 @@ import type {
   PlanningState,
   ScenarioInfo,
   TimelineItem,
+  TimeWindow,
 } from '../api/types';
-import { agreedWindow } from '../lib/communications';
+import { agreedWindow, agreementEvent, type AgreedMarks } from '../lib/communications';
 import { eventRequestId, type PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, requestLabel, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
@@ -144,10 +142,10 @@ export interface AppData {
   lunchEnabled: boolean;
   /**
    * Что уже согласовано с клиентом: номер заявки → окно, которое ему назвали (null — сказали, что сегодня
-   * не приедем). Приходит с планом от сервера, поэтому есть в любой вкладке, открывшей этот день, и переживает перезапуск сервиса.
-   * С ним вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда окно снова уедет.
+   * не приедем), и событие «Коммуникация» на шкале. Приходит с планом от сервера, поверх — отметки, чьё событие
+   * ещё в пути. С ним вкладка «Коммуникации» сравнивает план.
    */
-  agreed: AgreedWindows;
+  agreed: AgreedMarks;
   /** Отмена заявки в уведомлении «Заявка … отменена»: на сервер она ещё не ушла. */
   pendingCancel: PendingCancel | null;
 }
@@ -213,7 +211,10 @@ export interface AppActions {
   closeWhy(): void;
   setTab(tabId: string): void;
   setUnassignedOnly(value: boolean): void;
-  /** Отметить, что клиенту назвали окно заявки из текущего плана (или сказали, что сегодня не приедем). */
+  /**
+   * Отметить звонок: клиенту назвали окно по текущему плану (или сказали, что сегодня не приедем). Уходит событием
+   * «Коммуникация» на шкалу во время часов; снять отметку — удалить это событие (deleteTimelineEvent).
+   */
   markAgreed(requestId: string): Promise<void>;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
   setWorkloadLevel(level: number): void;
@@ -361,13 +362,19 @@ const isCurrent = (value: number) => value === generation;
 let addressLookup = 0;
 
 /**
- * Отметки «Согласовано», чей запрос ещё не дошёл до сервера: номер заявки → названное окно.
- * Ответы других запросов приходят с прежним словарём отметок, и без этого набора отметка на секунду
- * пропадала бы с экрана. Запись уходит, как только сервер ответил — своим ответом или отказом.
+ * Отметки «Согласовано», чьё событие ещё не дошло до сервера: номер заявки → названное окно.
+ * Звонок проходит план, как любое событие, и ответы других запросов приходят без него: без этого набора
+ * строка на глазах у диспетчера прыгала бы обратно в список звонков. Запись уходит, как только сервер
+ * ответил — своим ответом или отказом.
  */
-const agreedInFlight = new Map<string, AgreedWindow>();
+const agreedInFlight = new Map<string, TimeWindow | null>();
 
-const inFlightAgreed = (): AgreedWindows => Object.fromEntries(agreedInFlight);
+/** Отметки на экране: договорённости из плана сервера и поверх них — те, что ещё в пути (без события на шкале). */
+function shownAgreed(state: PlanningState | null): AgreedMarks {
+  const marks: AgreedMarks = { ...(state?.agreed ?? {}) };
+  for (const [requestId, window] of agreedInFlight) marks[requestId] = { window, entry_id: null };
+  return marks;
+}
 
 /** Запрос ждал очереди, а диспетчер уже открыл другой файл: такой запрос не отправляется. */
 class StaleSession extends Error {}
@@ -460,10 +467,9 @@ export const useAppStore = create<AppState>()((set, get) => {
       // Нагрузка и обед сессии на сервере: «Применить» и восстановленный план продолжают с ними.
       workloadLevel: clampWorkloadLevel(next.workload_level),
       lunchEnabled: lunchEnabledOf(next.lunch_enabled),
-      // Отметки звонков живут на сервере и приходят с планом: их ставит и очищает он. Поверх ответа
-      // остаются отметки, чей запрос ещё в очереди: ответ более раннего запроса о них ещё не знает,
-      // и без этого строка «Согласовано» на глазах у диспетчера прыгала бы обратно в список звонков.
-      agreed: { ...(next.agreed ?? {}), ...inFlightAgreed() },
+      // Отметки звонков — события шкалы: их приносит план сервера. Поверх ответа остаются отметки, чьё событие
+      // ещё в очереди: ответ более раннего запроса о них ещё не знает.
+      agreed: shownAgreed(next),
       ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
     });
     // Время плана остановилось на событии, которое ждёт выбора (у любого типа события: «Ничего не менять» ломает план
@@ -1042,29 +1048,23 @@ export const useAppStore = create<AppState>()((set, get) => {
     },
 
     async markAgreed(requestId) {
-      const { state, datasetId, agreed, config } = get();
+      const { state, datasetId, clock, config } = get();
       if (!state || !datasetId) return;
-      // Запоминаем окно, которое клиент теперь знает (в окно заявки план не попал — то, которое назвали вместо него):
-      // когда обещание снова разойдётся с планом, отметка сама перестанет совпадать. Названное окно — слот сетки.
-      // Какое именно окно назвали, считает вкладка: «клиенту называют слот» — правило разговора, а не модели.
+      // Окно, которое клиент теперь знает (в окно заявки план не попал — то, которое назвали вместо него), сервер
+      // сделает окном заявки. Названное окно — слот сетки: какое именно окно назвали, считает вкладка, потому что
+      // «клиенту называют слот» — правило разговора, а не модели.
       const window = agreedWindow(state, requestId, config?.window_grid ?? []);
       const current = generation;
-      // Строка уходит вниз сразу, не дожидаясь ответа: диспетчер уже положил трубку. Пока запрос в очереди,
-      // отметка держится и поверх ответов других запросов — они о ней ещё не знают.
+      // Строка уходит вниз сразу, не дожидаясь ответа: диспетчер уже положил трубку, а звонок ещё проходит план.
       agreedInFlight.set(requestId, window);
-      set({ agreed: { ...agreed, [requestId]: window } });
+      set({ agreed: shownAgreed(state) });
       try {
-        const next = await enqueue(current, () => setAgreedWindow(datasetId, requestId, window));
+        // Звонок — событие шкалы во время на часах: применяется и открывает окно выбора, как любое событие.
+        // Отказ сервера applyEvent показывает сам; строка тогда возвращается в список звонков.
+        await get().applyEvent(agreementEvent(requestId, window, clock));
+      } finally {
         agreedInFlight.delete(requestId);
-        if (isCurrent(current)) get().setPlanningState(next);
-      } catch (error) {
-        agreedInFlight.delete(requestId);
-        if (!isCurrent(current) || error instanceof StaleSession) return;
-        // Сервер отметку не принял: возвращаем в список звонков только эту строку — соседнюю могли отметить
-        // рядом, и снимок начала запроса её бы потерял. Если отметка у заявки была и раньше, она остаётся.
-        const previous = agreed[requestId];
-        const { [requestId]: _rejected, ...kept } = get().agreed;
-        set({ agreed: previous === undefined ? kept : { ...kept, [requestId]: previous }, error: errorMessage(error) });
+        if (isCurrent(current)) set({ agreed: shownAgreed(get().state) });
       }
     },
 

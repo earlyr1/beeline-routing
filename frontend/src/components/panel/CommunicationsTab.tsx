@@ -1,7 +1,7 @@
 import { useState, type MouseEvent } from 'react';
 import type { PlanEvent } from '../../api/types';
 import { callAgreedText, callChangeText, callList, eventsAhead, type CallKind, type CallRow } from '../../lib/communications';
-import { requestActionState } from '../../lib/events';
+import { isWorkStarted, requestActionState } from '../../lib/events';
 import { brigadeName } from '../../lib/format';
 import { assignmentIndex, byId } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
@@ -23,6 +23,8 @@ const CALL_BADGES: Record<CallKind, { text: string; className: string }> = {
  * Кому звонить после событий дня (ответ организаторов, вопрос 2: новое время клиенту сообщает служба поддержки).
  * Клиент знает окно, а не минуту, поэтому строка появляется, только когда обещанное окно не выполняется:
  * сегодня не приедем, не попадаем в окно или у заявки теперь другое окно. Бригада в строке — справка.
+ * «✓ Согласовано» ставит на шкалу событие «Коммуникация» во время часов: названное окно становится окном заявки,
+ * «сегодня не приедем» переносит её. «Снять отметку» удаляет это событие.
  */
 export function CommunicationsTab() {
   const state = useAppStore((s) => s.state);
@@ -30,6 +32,7 @@ export function CommunicationsTab() {
   const busy = useAppStore((s) => s.busy);
   const clock = useAppStore((s) => s.clock);
   const markAgreed = useAppStore((s) => s.markAgreed);
+  const deleteTimelineEvent = useAppStore((s) => s.deleteTimelineEvent);
   const cancelRequest = useAppStore((s) => s.cancelRequest);
   const selectRequest = useAppStore((s) => s.selectRequest);
   // Сетка окон визита от сервера: окно, которое диспетчер назовёт клиенту, — её слот.
@@ -70,7 +73,9 @@ export function CommunicationsTab() {
           {pending.map((row: CallRow) => {
             const request = requests.get(row.requestId);
             if (!request) return null;
-            const actions = requestActionState(request, assigned.get(row.requestId)?.visit, { busy, clock });
+            const visit = assigned.get(row.requestId)?.visit;
+            const actions = requestActionState(request, visit, { busy, clock });
+            const started = isWorkStarted(request, visit, clock);
             return (
               <li key={row.requestId} className={`call call--${row.severity}`} onClick={() => selectRequest(row.requestId)}>
                 <div className="call__head">
@@ -83,10 +88,13 @@ export function CommunicationsTab() {
                   {row.engineerId !== null && ` · ${brigade(row.engineerId)}`}
                 </p>
                 <div className="call__actions">
+                  {/* Отметка — событие шкалы: оно меняет окно заявки или переносит её. У работы, которая уже идёт,
+                      сервер его не примет: клиенту говорят, что бригада у него, и строка уйдёт с концом визита. */}
                   <button
                     type="button"
                     className="btn btn-small"
-                    disabled={busy}
+                    disabled={busy || started}
+                    title={started ? 'Работа уже началась, отметить звонок нельзя' : undefined}
                     onClick={handle(() => markAgreed(row.requestId))}
                   >
                     ✓ Согласовано
@@ -139,6 +147,19 @@ export function CommunicationsTab() {
                   <span className="muted">{callAgreedText(row)}</span>
                 </div>
                 <div className="muted">{row.address}</div>
+                {/* Отметка — событие «Коммуникация» на шкале: снять её — удалить событие, и заявка вернётся к прежнему. */}
+                <div className="call__actions">
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    disabled={busy || row.entryId === null}
+                    onClick={handle(() => {
+                      if (row.entryId !== null) void deleteTimelineEvent(row.entryId);
+                    })}
+                  >
+                    Снять отметку
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
