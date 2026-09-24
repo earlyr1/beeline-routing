@@ -253,11 +253,12 @@ jobs:
             echo "::notice::В main уже $main_sha: бейджи нарисует его прогон"
             exit 0
           fi
-          # Ветки badges ещё нет (exit 2) — первый коммит станет её началом.
+          # Ветки badges ещё нет (exit 2) — первый коммит станет её началом. Имя ref полное: короткое badges
+          # совпало бы и с веткой вроде feature/badges.
           status=0
-          git ls-remote --exit-code --heads origin badges >/dev/null || status=$?
+          git ls-remote --exit-code origin refs/heads/badges >/dev/null || status=$?
           if ((status == 0)); then
-            git fetch -q --depth 1 origin badges
+            git fetch -q --depth 1 origin refs/heads/badges
             git reset -q --hard FETCH_HEAD
           elif ((status != 2)); then
             exit "$status"
