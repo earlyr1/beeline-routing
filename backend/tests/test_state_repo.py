@@ -140,10 +140,13 @@ def test_the_plan_the_dispatcher_saw_is_not_overwritten(repo, reopen):
 
 
 def test_rejected_step_keeps_the_previous_plan(repo, reopen):
-    """У отклонённого шага своего плана нет: на подъёме он берёт план предыдущего шага."""
+    """У отклонённого шага своего плана нет: на подъёме он берёт план предыдущего шага.
+
+    Стратегия выбрана сразу: у каждого события один шаг, и проход идёт по нему без правила окна выбора.
+    """
     writer, morning = saved_day(repo)
     timeline = Timeline()
-    first = timeline.create(cancel("R2", "09:00"))
+    first = timeline.create(cancel("R2", "09:00"), variant="optimal")
     timeline.insert(first)
     writer.add_entry(first, revision=1, expect=0)
     walk = timeline.walk(morning)
@@ -151,7 +154,7 @@ def test_rejected_step_keeps_the_previous_plan(repo, reopen):
     timeline.store(walk, first, step)
     writer.add_step((walk.prefix, entry_token(first)), step, last_version=2)
     # Второе событие отклонено: заявку уже отменили.
-    second = timeline.create(cancel("R2", "10:00"))
+    second = timeline.create(cancel("R2", "10:00"), variant="optimal")
     timeline.insert(second)
     writer.add_entry(second, revision=2, expect=1)
     walk = timeline.walk(morning)
@@ -216,17 +219,18 @@ def test_an_orphan_continuation_does_not_pass_for_a_step_of_the_new_plan(repo, r
     """Продолжение шага, которого в базе не оказалось, не выдаёт себя за продолжение пересчитанного.
 
     Решатель недетерминирован: пересчитанный шаг — другой план, и цепочка от прежнего к нему не относится.
+    Стратегия выбрана сразу: у каждого события один шаг.
     """
     writer, morning = saved_day(repo)
     timeline = Timeline()
-    first = timeline.create(cancel("R2", "09:00"))
+    first = timeline.create(cancel("R2", "09:00"), variant="optimal")
     timeline.insert(first)
     writer.add_entry(first, revision=1, expect=0)
     walk = timeline.walk(morning)
     step = replay_step(morning, first, context(), 2)
     timeline.store(walk, first, step)
     key = (walk.prefix, entry_token(first))
-    second = timeline.create(cancel("R3", "10:00"))
+    second = timeline.create(cancel("R3", "10:00"), variant="optimal")
     timeline.insert(second)
     writer.add_entry(second, revision=2, expect=1)
     child = timeline.walk(morning, 2)

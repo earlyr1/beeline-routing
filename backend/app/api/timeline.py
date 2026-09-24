@@ -15,8 +15,9 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.api.registry import DatasetRecord
 from app.api.schemas import PlanningState, TimelineItem, to_planning_state
-from app.domain.models import Event
+from app.domain.models import Event, Plan
 from app.domain.timeutil import fmt_hhmm
+from app.planning.facts import assignable
 from app.planning.models import BaseVariant, EventChoice, EventVariant
 from app.planning.session import PlanningContext
 from app.planning.timeline import TimelineEntry, TimelineStep, Walk, replay_step
@@ -26,9 +27,7 @@ from app.planning.variants import (
     assign_variant,
     assigned_engineer,
     build_choice,
-    is_assignable,
-    is_choosable,
-    takes_variant,
+    needs_choice,
 )
 from app.state.repo import StateConflict, StateUnavailable
 
@@ -38,8 +37,9 @@ RunBackground = Callable[[Callable[[], None]], None]
 
 # Пауза фонового предподсчёта между шагами: запрос, который ждёт timeline_lock, успевает его взять.
 PRECOMPUTE_PAUSE_S = 0.05
-NOT_CHOOSABLE_TEXT = "Для этого события варианты не предлагаются."
-NOT_ASSIGNABLE_TEXT = "Бригаду можно выбрать только для срочной заявки."
+NOT_ASSIGNABLE_TEXT = (
+    "Бригаду можно выбрать только для события об одной заявке, которая после него остаётся в плане."
+)
 
 
 class VariantUnavailable(Exception):
@@ -53,21 +53,40 @@ class VariantUnavailable(Exception):
 def check_variant(record: DatasetRecord, event: Event, variant: EventVariant) -> None:
     """Под record.lock: проверяет стратегию из запроса для события. Бросает VariantUnavailable.
 
-    По порядку: незнакомая строка — 422 у любого события, событие без стратегий — 409, «отдать бригаде» не
-    на срочной заявке или с бригадой не из этого дня — 422. Базовые стратегии подходят любому событию со
-    стратегией: «ломающему» и отмене заявки, у которой окна выбора нет, а стратегия есть.
+    Базовые стратегии подходят любому событию. Незнакомая строка — 422, «отдать бригаде» у события не об одной
+    заявке (или о заявке, которую оно снимает, как отмена) или с бригадой не из этого дня — 422.
     """
     engineer_id = assigned_engineer(variant)
     if variant not in VARIANTS and engineer_id is None:
         raise VariantUnavailable(422, f"Неизвестный вариант «{variant}».")
-    if not takes_variant(event):
-        raise VariantUnavailable(409, NOT_CHOOSABLE_TEXT)
     if engineer_id is None:
         return
-    if not is_assignable(event):
+    if not assignable(event):
         raise VariantUnavailable(422, NOT_ASSIGNABLE_TEXT)
     if record.base is None or record.base.engineer(engineer_id) is None:
         raise VariantUnavailable(422, f"Инженер {engineer_id} не найден.")
+
+
+def check_not_rejected(record: DatasetRecord, entry: TimelineEntry) -> None:
+    """Под record.lock: у отклонённого события вариантов нет — 409 с причиной отказа. Непосчитанное проходит."""
+    walk = record.timeline.walk(record.day_base())
+    position = record.timeline.entries.index(entry)
+    reason = walk.steps[position].reason if position < walk.done else None
+    if reason is not None:
+        raise VariantUnavailable(409, f"Событие отклонено: {reason}")
+
+
+def _current(entry: TimelineEntry, outcomes: list[Outcome]) -> EventVariant | None:
+    """Стратегия, с которой событие проходит план: выбранная, а без выбора — «keep», если выбирать не из чего.
+
+    То же решение, что принимает проход шкалы (Timeline.walk): None — событие ждёт выбора.
+    """
+    if entry.variant is not None:
+        return entry.variant
+    plans: dict[str, Plan] = {
+        outcome.variant: outcome.plan for outcome in outcomes if outcome.variant in VARIANTS
+    }
+    return "keep" if len(plans) == len(VARIANTS) and not needs_choice(plans) else None
 
 
 def _choice(
@@ -83,7 +102,7 @@ def _choice(
         if step is not None and step.applied is not None and step.session.last_diff is not None:
             outcomes.append(Outcome(variant, step.session.plan, step.session.last_diff))
     names = {engineer.id: engineer.name for engineer in walk.session.engineers}
-    return build_choice(entry.id, entry.event, walk.session.plan, outcomes, entry.variant, names)
+    return build_choice(entry.id, entry.event, walk.session.plan, outcomes, _current(entry, outcomes), names)
 
 
 def planning_state(record: DatasetRecord) -> PlanningState:
@@ -96,8 +115,10 @@ def planning_state(record: DatasetRecord) -> PlanningState:
                 event=view.event,
                 status=view.status,
                 reason=view.reason,
-                variant=view.entry.variant,
-                choosable=is_choosable(view.entry.event),
+                variant=view.variant,
+                variant_auto=view.auto,
+                # Варианты можно открыть у любого события, кроме отклонённого.
+                choosable=view.status != "rejected",
             )
             for view in views
         ]
@@ -178,7 +199,8 @@ def _replay_assign(
 def compute_steps(record: DatasetRecord, ctx: PlanningContext, count: int) -> Walk:
     """Под record.timeline_lock: досчитывает шаги первых count событий по порядку и возвращает проход по ним.
 
-    На «ломающем» событии без выбора считаются все его стратегии, и проход останавливается на нём.
+    У события без выбора считаются все три базовые стратегии; если по ним нужен выбор, проход останавливается
+    на событии.
     """
     while True:
         with record.lock:
@@ -186,7 +208,7 @@ def compute_steps(record: DatasetRecord, ctx: PlanningContext, count: int) -> Wa
             if walk.awaiting is not None or walk.done >= min(count, len(record.timeline.entries)):
                 return walk
             entry = record.timeline.entries[walk.done]
-        if is_choosable(entry.event) and entry.variant is None:
+        if entry.variant is None:
             _replay_variants(record, ctx, walk, entry)
         else:
             _replay_next(record, ctx, walk, entry)
@@ -195,7 +217,7 @@ def compute_steps(record: DatasetRecord, ctx: PlanningContext, count: int) -> Wa
 def move_cached(record: DatasetRecord, cursor: int) -> bool:
     """Под record.lock: переносит текущее время, если шаги до него посчитаны, и ставит план на это время.
 
-    Время не проходит «ломающее» событие без выбора: оно встаёт на время события, план — план до него.
+    Время не проходит событие, которое ждёт выбора: оно встаёт на время события, план — план до него.
     """
     count = record.timeline.applied_count(cursor)
     walk = record.timeline.walk(record.day_base(), count)
@@ -240,16 +262,14 @@ def event_choice(
 ) -> EventChoice:
     """Варианты события шкалы для окна выбора: считает недостающие стратегии. Бросает VariantUnavailable.
 
-    assign — номер бригады: к трём вариантам добавляется четвёртый, «отдать заявку этой бригаде». Его план
-    считается здесь же, по одному запросу, и остаётся в кэше шагов.
+    Варианты есть у любого события, кроме отклонённого. assign — номер бригады: к трём вариантам добавляется
+    четвёртый, «отдать заявку этой бригаде». Его план считается здесь же, по одному запросу, и остаётся в кэше шагов.
     """
     with record.timeline_lock:
         with record.lock:
             entry = record.timeline.find(entry_id)
             if entry is None:
                 raise VariantUnavailable(404, f"Событие {entry_id} не найдено.")
-            if not is_choosable(entry.event):
-                raise VariantUnavailable(409, NOT_CHOOSABLE_TEXT)
             variant = assign_variant(assign) if assign is not None else None
             if variant is not None:
                 check_variant(record, entry.event, variant)
@@ -339,7 +359,7 @@ def precompute(
                     # тогда не хватало, теперь посчитан.
                     settle(record, ctx, record.take_resume())
                     return
-                if is_choosable(entry.event) and entry.variant is None:
+                if entry.variant is None:
                     _replay_variants(record, ctx, walk, entry)
                 else:
                     _replay_next(record, ctx, walk, entry)

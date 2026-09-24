@@ -253,7 +253,7 @@ class DatasetRecord:
             return entry
 
     def choose_variant(self, entry_id: str, variant: EventVariant) -> TimelineEntry | None:
-        """Выбор или смена стратегии «ломающего» события."""
+        """Выбор или смена стратегии события."""
         with self.lock, self._saved():
             revision = self.timeline.revision
             entry = self.timeline.set_variant(entry_id, variant)
@@ -441,7 +441,7 @@ def _restore_plan(record: DatasetRecord) -> None:
         record.cursor = walk.awaiting.event.time
     elif walk.done < count:
         # Шага не хватает: перезапуск застал солвер за работой. Часы встают на время последнего посчитанного
-        # шага, как move_cached делает на «ломающем» событии без выбора, иначе на экране были бы часы на 11:00
+        # шага, как move_cached делает на событии, которое ждёт выбора, иначе на экране были бы часы на 11:00
         # и план на 10:00 — с заявкой, которую диспетчер только что отменил. Досчёт вернёт часы обратно.
         record.resume_cursor = record.cursor
         record.cursor = record.timeline.entries[walk.done - 1].event.time if walk.done else 0

@@ -5,8 +5,11 @@
 в кэше по ключу «принятые события до шага, событие шага»: отклонённое событие план не меняет и в ключ не входит,
 поэтому его добавление или удаление не сбрасывает следующие шаги, а принятое событие сбрасывает все шаги после себя.
 
-Стратегия «ломающего» события (app/planning/variants.py) входит в ключ шага: у события с выбором номер в ключе вида
-tl_3@keep. Событие без выбора останавливает проход, пока диспетчер не выберет.
+Стратегия события (app/planning/variants.py) входит в ключ шага: номер в ключе вида tl_3@keep. Все события идут
+одним путём. У события, стратегию которого диспетчер не выбирал, считаются три базовые стратегии, и проход решает
+по результату (variants.needs_choice): если «Ничего не менять» ломает больше, чем лучший из пересчётов, событие ждёт
+выбора и останавливает проход; иначе проход идёт по шагу «Ничего не менять». Решение принимается заново при каждом
+проходе, поэтому после события раньше по времени оно может поменяться.
 
 Модуль без блокировок и потоков: порядок вычислений и хранение в датасете задаёт app/api/timeline.py.
 """
@@ -18,20 +21,21 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from app.domain.enums import EventType, request_label
-from app.domain.models import Event, Request
+from app.domain.enums import request_label
+from app.domain.models import Event, Plan, Request
 from app.domain.timeutil import DAY_MIN
 from app.ingest.geocode import GeoResult
-from app.planning.models import AppliedEvent, EventVariant
-from app.planning.session import (
+from app.planning.facts import (
     EventRejected,
-    PlanningContext,
-    PlanningSession,
-    apply_event,
+    named_engineer,
+    named_request,
+    new_request,
     offline_context,
     replay_checked_event,
 )
-from app.planning.variants import VARIANTS, is_choosable
+from app.planning.models import AppliedEvent, EventVariant
+from app.planning.session import PlanningContext, PlanningSession, apply_event
+from app.planning.variants import VARIANTS, needs_choice
 
 # Последняя минута дня: событие таймлайна и текущее время плана не позже неё.
 LAST_MINUTE = DAY_MIN - 1
@@ -40,19 +44,6 @@ CURSOR_RANGE_TEXT = "время должно быть от 00:00 до 23:59"
 
 TimelineStatus = Literal["applied", "pending", "rejected", "awaiting"]
 
-# Переназначение заявки называет и заявку, и бригаду: проверяются оба номера.
-_ENGINEER_EVENTS = frozenset(
-    {
-        EventType.ENGINEER_UNAVAILABLE,
-        EventType.ENGINEER_TRANSPORT_CHANGED,
-        EventType.ENGINEER_DELAYED,
-        EventType.REQUEST_REASSIGNED,
-    }
-)
-_REQUEST_EVENTS = frozenset(
-    {EventType.CANCEL, EventType.RESTORE, EventType.REQUEST_UPDATED, EventType.REQUEST_REASSIGNED}
-)
-
 
 @dataclass(frozen=True)
 class TimelineEntry:
@@ -60,8 +51,8 @@ class TimelineEntry:
 
     event — событие как его прислали, без полей, которые заполняет backend (previous_*); у срочной заявки уже есть
     координаты. geo — ответы геокодера на новые адреса, полученные при добавлении. checked — событие из подтверждённого
-    предложения помощника: его координаты дал геокодер при проверке (replay_checked_event). variant — выбранная
-    стратегия «ломающего» события, None — не выбрана или событие не «ломающее».
+    предложения помощника: его координаты дал геокодер при проверке (replay_checked_event). variant — стратегия,
+    которую выбрал диспетчер или назвал запрос; None — не выбирал: тогда её решает проход по результату.
     """
 
     id: str
@@ -109,7 +100,8 @@ class Walk:
     """Проход по событиям через кэш шагов от начала дня до первого непосчитанного шага.
 
     session — план после посчитанных шагов, prefix — принятые события в нём, steps и keys — посчитанные шаги по
-    порядку событий. awaiting — «ломающее» событие без выбора, на котором проход остановился; его варианты посчитаны.
+    порядку событий. awaiting — событие, которое ждёт выбора диспетчера и на котором проход остановился; его
+    варианты посчитаны.
     """
 
     session: PlanningSession
@@ -125,12 +117,18 @@ class Walk:
 
 @dataclass(frozen=True)
 class TimelineView:
-    """Событие на шкале для ответа API: применённое событие, если оно применено, иначе запланированное."""
+    """Событие на шкале для ответа API: применённое событие, если оно применено, иначе запланированное.
+
+    variant — стратегия, с которой событие проходит план; auto — её выбрал проход, а не диспетчер: выбирать было
+    не из чего, и событие применено с «Ничего не менять».
+    """
 
     entry: TimelineEntry
     event: Event
     status: TimelineStatus
     reason: str | None = None
+    variant: EventVariant | None = None
+    auto: bool = False
 
 
 def replay_step(
@@ -154,18 +152,15 @@ def replay_step(
     return TimelineStep(session=session, applied=session.events[-1])
 
 
-def _urgent_requests(entries: Sequence[TimelineEntry]) -> list[tuple[TimelineEntry, Request]]:
-    return [
-        (entry, entry.event.request)
-        for entry in entries
-        if entry.event.type == EventType.URGENT and entry.event.request is not None
-    ]
+def _new_requests(entries: Sequence[TimelineEntry]) -> list[tuple[TimelineEntry, Request]]:
+    """Заявки, которые добавляют события таймлайна (срочные заявки), с их событиями."""
+    return [(entry, request) for entry in entries if (request := new_request(entry.event)) is not None]
 
 
 def known_requests(base: PlanningSession, entries: Sequence[TimelineEntry]) -> dict[str, Request]:
     """Заявки дня и срочные заявки из событий таймлайна по номеру."""
     known = {request.id: request for request in base.requests}
-    for _, request in _urgent_requests(entries):
+    for _, request in _new_requests(entries):
         known.setdefault(request.id, request)
     return known
 
@@ -177,20 +172,22 @@ def check_known(base: PlanningSession, entries: Sequence[TimelineEntry], event: 
     добавляет срочная заявка, которая стоит на шкале раньше нового события. Номер срочной заявки не должен
     повторять ни заявку дня, ни срочную заявку из любого события таймлайна.
     """
-    urgent = _urgent_requests(entries)
-    if event.type in _ENGINEER_EVENTS and base.engineer(event.engineer_id or "") is None:
-        raise EventRejected(f"Инженер {event.engineer_id} не найден.")
-    if event.type == EventType.URGENT and event.request is not None:
-        new_id = event.request.id
-        taken = base.request(new_id) or next((request for _, request in urgent if request.id == new_id), None)
+    urgent = _new_requests(entries)
+    engineer_id, request_id, added = named_engineer(event), named_request(event), new_request(event)
+    if engineer_id is not None and base.engineer(engineer_id) is None:
+        raise EventRejected(f"Инженер {engineer_id} не найден.")
+    if added is not None:
+        taken = base.request(added.id) or next(
+            (request for _, request in urgent if request.id == added.id), None
+        )
         if taken is not None:
             raise EventRejected(
                 f"Заявка с номером {request_label(taken.id, taken.priority)} уже есть в плане."
             )
-    if event.type in _REQUEST_EVENTS:
+    if request_id is not None:
         earlier = {request.id for entry, request in urgent if entry.event.time <= event.time}
-        if base.request(event.request_id or "") is None and event.request_id not in earlier:
-            raise EventRejected(f"Заявка {event.request_id} не найдена.")
+        if base.request(request_id) is None and request_id not in earlier:
+            raise EventRejected(f"Заявка {request_id} не найдена.")
 
 
 @dataclass
@@ -272,8 +269,10 @@ class Timeline:
     def walk(self, base: PlanningSession, count: int | None = None) -> Walk:
         """Проходит первые count событий (все, если count не задан) по кэшу, пока шаги посчитаны.
 
-        «Ломающее» событие без выбора останавливает проход: если его шаги посчитаны для всех стратегий, оно
-        становится awaiting. Событие, отклонённое при optimal, выбора не требует и проходится как отклонённое.
+        Событие со стратегией проходится по её шагу. У события без выбора нужны шаги всех трёх базовых стратегий:
+        пока их нет, проход стоит на нём. Посчитав, проход решает по результату (needs_choice): событие ждёт выбора
+        (awaiting) или проходится по шагу «Ничего не менять». Событие, отклонённое при optimal, выбора не требует
+        и проходится как отклонённое.
         """
         limit = len(self.entries) if count is None else min(count, len(self.entries))
         session = base
@@ -282,19 +281,28 @@ class Timeline:
         keys: list[StepKey] = []
         awaiting: TimelineEntry | None = None
         for entry in self.entries[:limit]:
-            if is_choosable(entry.event) and entry.variant is None:
+            variant = entry.variant
+            if variant is None:
                 probe_key = (prefix, entry_token(entry, "optimal"))
                 probe = self.steps.get(probe_key)
                 if probe is not None and probe.reason is not None:
                     steps.append(probe)
                     keys.append(probe_key)
                     continue
-                if probe is not None and all(
-                    (prefix, entry_token(entry, variant)) in self.steps for variant in VARIANTS
-                ):
+                counted = {
+                    base_variant: self.steps.get((prefix, entry_token(entry, base_variant)))
+                    for base_variant in VARIANTS
+                }
+                plans: dict[str, Plan] = {
+                    name: step.session.plan for name, step in counted.items() if step is not None
+                }
+                if len(plans) < len(VARIANTS):
+                    break
+                if needs_choice(plans):
                     awaiting = entry
-                break
-            key = (prefix, entry_token(entry))
+                    break
+                variant = "keep"
+            key = (prefix, entry_token(entry, variant))
             step = self.steps.get(key)
             if step is None:
                 break
@@ -343,20 +351,23 @@ class Timeline:
         """События для ответа API и признак, что считать больше нечего.
 
         Отклонённое событие видно сразу, как только посчитан его шаг, даже если оно позже текущего времени.
-        Принятое событие не позже cursor применено; «ломающее» событие без выбора, до которого дошло время,
-        ждёт выбора; остальные ждут своего времени или пересчёта. Остановка на выборе считается готовностью:
-        дальше считать нельзя, пока диспетчер не выберет.
+        Принятое событие не позже cursor применено; событие, которое ждёт выбора и до которого дошло время,
+        остаётся awaiting; остальные ждут своего времени или пересчёта. Остановка на выборе считается готовностью:
+        дальше считать нельзя, пока диспетчер не выберет. Событие без выбора, которое проход провёл по «Ничего
+        не менять», получает эту стратегию с признаком auto — и применённое, и ещё впереди.
         """
         walk = self.walk(base)
         items: list[TimelineView] = []
         for k, entry in enumerate(self.entries):
             step = walk.steps[k] if k < walk.done else None
+            auto = entry.variant is None and step is not None and step.applied is not None
+            chosen = "keep" if auto else entry.variant
             if step is not None and step.reason is not None:
-                items.append(TimelineView(entry, entry.event, "rejected", step.reason))
+                items.append(TimelineView(entry, entry.event, "rejected", step.reason, chosen))
             elif step is not None and step.applied is not None and entry.event.time <= cursor:
-                items.append(TimelineView(entry, step.applied.event, "applied"))
+                items.append(TimelineView(entry, step.applied.event, "applied", None, chosen, auto))
             elif entry is walk.awaiting and entry.event.time <= cursor:
-                items.append(TimelineView(entry, entry.event, "awaiting"))
+                items.append(TimelineView(entry, entry.event, "awaiting", None, chosen))
             else:
-                items.append(TimelineView(entry, entry.event, "pending"))
+                items.append(TimelineView(entry, entry.event, "pending", None, chosen, auto))
         return items, walk.done == len(self.entries) or walk.awaiting is not None

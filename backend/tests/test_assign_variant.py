@@ -1,11 +1,12 @@
-"""Вариант «отдать заявку конкретной бригаде» у срочной заявки: токены стратегии, закрепление и честный план."""
+"""Вариант «отдать заявку конкретной бригаде» у события об одной заявке: токены стратегии, закрепление и честный план."""
 
 import pytest
 
 from app.domain.enums import EventType, Skill
 from app.domain.models import Event
+from app.planning.facts import assignable
 from app.planning.session import apply_event
-from app.planning.variants import ASSIGN_PREFIX, VARIANTS, assign_variant, assigned_engineer, is_assignable
+from app.planning.variants import ASSIGN_PREFIX, VARIANTS, assign_variant, assigned_engineer
 from tests.helpers import eng, req
 from tests.planning_helpers import context, new_session, other_engineer, routes
 from tests.timeline_helpers import cancel, fcfs_solves
@@ -24,11 +25,22 @@ def owner(plan, request_id):
     return next((engineer_id for engineer_id, visits in routes(plan).items() if request_id in visits), None)
 
 
-def test_only_an_urgent_request_can_be_given_to_a_chosen_brigade():
-    """Остальные «ломающие» события двигают целую пачку заявок: «отдать заявку бригаде» там бессмысленно."""
+def test_a_request_event_can_be_given_to_a_chosen_brigade_unless_it_takes_the_request_away():
+    """Отдать бригаде можно заявку события об одной заявке, которая после события остаётся в плане.
+
+    События об инженере двигают целую пачку заявок, а отменённую заявку отдавать некому.
+    """
+    assignable_types = {
+        EventType.URGENT,
+        EventType.REQUEST_UPDATED,
+        EventType.REQUEST_REASSIGNED,
+        EventType.RESTORE,
+    }
     for event_type in EventType:
-        event = Event.model_construct(type=event_type, time=780)
-        assert is_assignable(event) is (event_type == EventType.URGENT)
+        event = Event.model_construct(
+            type=event_type, time=780, request_id="R1", request=req("R1", 0, 0, "13:00", "17:00")
+        )
+        assert assignable(event) is (event_type in assignable_types), event_type
 
 
 def test_assign_tokens_name_the_brigade_and_the_three_strategies_stay_as_they_were():
@@ -52,6 +64,23 @@ def test_the_request_goes_to_the_chosen_brigade_even_though_the_optimum_wanted_a
     assert owner(given.plan, "U1") == chosen
     assert given.request("U1").fixed_engineer_id == chosen
     assert base.request("U1") is None  # исходная сессия не изменилась
+
+
+def test_an_edited_request_can_be_given_to_a_chosen_brigade(solves):
+    """Правка заявки — тоже событие об одной заявке: её можно отдать названной бригаде, а отмену — нет."""
+    ctx = context()
+    base = new_session(ctx)
+    assert owner(base.plan, "R3") == "E1"
+    edited = base.request("R3").model_copy(update={"duration_min": 45})
+    event = Event(type=EventType.REQUEST_UPDATED, time="12:00", request_id="R3", request=edited)
+
+    given = apply_event(base, event, ctx, variant=assign_variant("E2"))
+
+    assert (owner(given.plan, "R3"), given.request("R3").fixed_engineer_id) == ("E2", "E2")
+    # У отмены «отдать бригаде» — просто «Оптимально по дню»: закреплять отменённую заявку не за кем.
+    cancelled = apply_event(base, cancel("R3", "12:00"), ctx, variant=assign_variant("E2"))
+    assert cancelled.request("R3").fixed_engineer_id is None
+    assert cancelled.plan == apply_event(base, cancel("R3", "12:00"), ctx).plan
 
 
 def test_the_chosen_brigade_keeps_the_request_at_the_next_event(solves):

@@ -120,7 +120,7 @@ class DayWriter(Protocol):
         """Событие уходит со шкалы вместе с шагами, в которых участвовало; keys — что осталось в кэше."""
 
     def set_variant(self, entry_id: str, variant: EventVariant, *, revision: int, expect: int) -> None:
-        """Выбор или смена стратегии «ломающего» события."""
+        """Выбор или смена стратегии события."""
 
     def bump_number(self, last_number: int) -> None:
         """Номер последнего созданного события: tl_<n> не повторяются и после перезапуска."""

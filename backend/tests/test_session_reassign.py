@@ -1,4 +1,8 @@
-"""Переназначение заявки диспетчером на бригаду посреди дня: закрепление, отказы и варианты."""
+"""Переназначение заявки диспетчером на бригаду посреди дня: закрепление, отказы и варианты.
+
+«Ничего не менять» у переназначения — общее правило закреплённых заявок (app/planning/variants.keep_plan):
+заявка встаёт в маршрут своей бригады, бригада пропускает то, на что не успевает, остальные маршруты как есть.
+"""
 
 from dataclasses import replace
 
@@ -309,7 +313,7 @@ def test_or_tools_drops_even_an_urgent_request_to_keep_the_pinned_one():
         if variant == "keep":
             assert dropped.reason_code == ReasonCode.NO_FREE_ENGINEER
             assert dropped.reason_text == (
-                "Вариант «Вставить в маршрут»: Инженер E1 пропускает заявку, чтобы успеть к заявке B."
+                "Вариант «Ничего не менять»: Инженер E1 пропускает заявку, чтобы успеть к заявке B."
             )
 
 
@@ -351,7 +355,7 @@ def test_insert_skips_only_what_does_not_fit_and_returns_to_the_previous_order(s
         (
             "P2",
             ReasonCode.NO_FREE_ENGINEER,
-            "Вариант «Вставить в маршрут»: Инженер E1 пропускает заявку, чтобы успеть к заявке X.",
+            "Вариант «Ничего не менять»: Инженер E1 пропускает заявку, чтобы успеть к заявке X.",
         )
     ]
     visits = {visit.request_id: visit for visit in inserted.plan.routes[0].visits}
@@ -379,7 +383,7 @@ def test_insert_signs_an_urgent_request_in_the_reason(solves):
     assert [(item.request_id, item.reason_text) for item in inserted.plan.unassigned] == [
         (
             "P2",
-            "Вариант «Вставить в маршрут»: Инженер E1 пропускает заявку, чтобы успеть к заявке URG-X.",
+            "Вариант «Ничего не менять»: Инженер E1 пропускает заявку, чтобы успеть к заявке URG-X.",
         )
     ]
 
@@ -436,7 +440,7 @@ def test_insert_skips_a_normal_request_rather_than_an_urgent_or_pinned_one_later
     assert routes(inserted.plan) == {"E1": ["X", "U"], "E2": []}
     assert inserted.plan.violations == []
     assert [(item.request_id, item.reason_text) for item in inserted.plan.unassigned] == [
-        ("B", "Вариант «Вставить в маршрут»: Инженер E1 пропускает заявку, чтобы успеть к заявке X.")
+        ("B", "Вариант «Ничего не менять»: Инженер E1 пропускает заявку, чтобы успеть к заявке X.")
     ]
 
 

@@ -48,12 +48,15 @@ def body(event):
     return event.model_dump(mode="json")
 
 
-def add(client, base, event):
-    return client.post(f"{base}/timeline/events", json=body(event) if not isinstance(event, dict) else event)
+def add(client, base, event, variant=None):
+    """Событие на шкалу. variant — стратегия сразу; без неё её решает правило окна выбора."""
+    params = {"variant": variant} if variant is not None else None
+    payload = body(event) if not isinstance(event, dict) else event
+    return client.post(f"{base}/timeline/events", json=payload, params=params)
 
 
-def added(client, base, event):
-    response = add(client, base, event)
+def added(client, base, event, variant=None):
+    response = add(client, base, event, variant)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -134,7 +137,8 @@ def test_future_event_is_pending_and_computed_in_background(api, solves):
             "status": "pending",
             "reason": None,
             "variant": None,
-            "choosable": False,
+            "variant_auto": False,
+            "choosable": True,
         }
     ]
     assert (state["cursor"], state["timeline_ready"]) == ("00:00", False)
@@ -143,9 +147,12 @@ def test_future_event_is_pending_and_computed_in_background(api, solves):
 
     background.run()
 
-    assert solves == ["13:00"]
+    # Стратегию диспетчер не выбирал: посчитаны «Оптимально» и «Минимум перестановок» («Ничего не менять» — без
+    # решателя). Отмена ничего не бросает, выбирать не из чего: впереди по времени она пройдёт с «keep».
+    assert solves == ["13:00", "13:00"]
     after = state_of(client, base)
     assert after["timeline_ready"] is True and statuses(after) == [("tl_1", "pending")]
+    assert (after["timeline"][0]["variant"], after["timeline"][0]["variant_auto"]) == ("keep", True)
     assert plan_part(after) == plan_part(initial)
 
 
@@ -166,7 +173,8 @@ def test_cursor_before_and_after_events_recomputes_only_when_the_applied_set_cha
     assert [applied["id"] for applied in after["events"]] == ["ev_1", "ev_2"]
     assert (after["now"], after["version"]) == ("13:00", 3)
     assert [item["event"] for item in after["timeline"]] == [applied["event"] for applied in after["events"]]
-    assert solves == ["13:00", "13:00"]
+    # Две стратегии с решателем на каждое событие.
+    assert solves == ["13:00"] * 4
     solves.clear()
 
     assert plan_part(at(client, base, "12:00")) == plan_part(initial)
@@ -177,6 +185,7 @@ def test_cursor_before_and_after_events_recomputes_only_when_the_applied_set_cha
 
 
 def test_timeline_replay_equals_sequential_events(api, solves):
+    """/events применяет событие с «Оптимально по дню»: на шкале та же стратегия даёт тот же день."""
     client, deps, legacy, _ = dataset(api, solves)
     replayed, _ = ready(client, deps, solves)
     events = [cancel("R3", "11:00"), cancel("R2", "14:00")]
@@ -184,7 +193,7 @@ def test_timeline_replay_equals_sequential_events(api, solves):
         assert client.post(f"{legacy}/events", json=body(event)).status_code == 200
     sequential = state_of(client, legacy)
     for event in reversed(events):
-        added(client, replayed, event)
+        added(client, replayed, event, "optimal")
 
     state = at(client, replayed, "15:00")
 
@@ -195,14 +204,15 @@ def test_timeline_replay_equals_sequential_events(api, solves):
 
 
 def test_event_added_before_the_cursor_recomputes_only_later_snapshots(api, solves):
+    """Стратегия выбрана сразу: у каждого события один шаг и одно решение."""
     client, _, base, _ = dataset(api, solves)
-    added(client, base, cancel("R3", "11:00"))
-    added(client, base, cancel("R2", "14:00"))
+    added(client, base, cancel("R3", "11:00"), "optimal")
+    added(client, base, cancel("R2", "14:00"), "optimal")
     at(client, base, "15:00")
     assert solves == ["11:00", "14:00"]
     solves.clear()
 
-    state = added(client, base, restore("R3", "12:00"))
+    state = added(client, base, restore("R3", "12:00"), "optimal")
 
     assert solves == ["12:00", "14:00"]
     assert statuses(state) == [("tl_1", "applied"), ("tl_3", "applied"), ("tl_2", "applied")]
@@ -221,7 +231,7 @@ def test_delete_pending_and_applied_events(api, solves):
     added(client, base, cancel("R2", "14:00"))
     at(client, base, "12:00")
     background.run()
-    assert solves == ["11:00", "14:00"]
+    assert solves == ["11:00", "11:00", "14:00", "14:00"]
     solves.clear()
 
     missing = client.delete(f"{base}/timeline/events/tl_9")
@@ -248,7 +258,7 @@ def test_deleting_an_applied_event_recomputes_later_applied_events(api, solves):
 
     assert response.status_code == 200, response.text
     state = response.json()
-    assert solves == ["14:00"]
+    assert solves == ["14:00", "14:00"]
     assert statuses(state) == [("tl_2", "applied")]
     assert (request_status(state, "R3"), request_status(state, "R2")) == ("active", "cancelled")
     assert [applied["id"] for applied in state["events"]] == ["ev_1"] and state["version"] == 4
@@ -259,7 +269,8 @@ def test_rejected_event_gets_status_and_reason_and_is_skipped(api, solves):
     added(client, base, cancel("R2", "11:00"))
     added(client, base, cancel("R2", "12:00"))
     background.run()
-    assert solves == ["11:00"]
+    # Отклонённое событие решателя не ждёт: отказ известен до пересчёта.
+    assert solves == ["11:00", "11:00"]
 
     state = state_of(client, base)
     assert state["timeline_ready"] is True
@@ -271,10 +282,12 @@ def test_rejected_event_gets_status_and_reason_and_is_skipped(api, solves):
 
     applied = at(client, base, "13:00")
     assert statuses(applied) == [("tl_1", "applied"), ("tl_2", "rejected")]
-    assert len(applied["events"]) == 1 and solves == ["11:00"]
+    assert len(applied["events"]) == 1 and solves == ["11:00", "11:00"]
+    # У отклонённого события вариантов нет.
+    assert [item["choosable"] for item in applied["timeline"]] == [True, False]
 
     deleted = client.delete(f"{base}/timeline/events/tl_2").json()
-    assert statuses(deleted) == [("tl_1", "applied")] and solves == ["11:00"]
+    assert statuses(deleted) == [("tl_1", "applied")] and solves == ["11:00", "11:00"]
     assert plan_part(deleted) == plan_part(applied)
 
 
@@ -347,7 +360,7 @@ def test_timeline_event_checks_ids_and_time_range(api, solves):
     assert statuses(state_of(client, base)) == [("tl_1", "pending"), ("tl_2", "pending")]
     assert solves == []
 
-    # Срочная заявка — «ломающее» событие: без выбора варианта время на ней остановится.
+    # «Ничего не менять» оставляет срочную заявку без инженера: без выбора варианта время на ней остановится.
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "optimal"}).status_code == 200
     evening = at(client, base, "17:00")
     assert statuses(evening) == [("tl_1", "applied"), ("tl_2", "applied")]
@@ -398,7 +411,7 @@ def test_legacy_events_use_the_cursor_and_keep_their_texts(api, solves):
     solves.clear()
     rejected = client.post(f"{base}/events", json=body(cancel("R3", "17:00")))
     assert rejected.status_code == 422 and rejected.json()["detail"] == "Заявка R3 уже отменена."
-    assert solves == ["14:45"]
+    assert solves == ["14:45", "14:45"]
     state = state_of(client, base)
     assert (state["cursor"], state["version"]) == ("13:45", 2)
     assert statuses(state) == [("tl_1", "applied"), ("tl_2", "pending")]
@@ -522,10 +535,10 @@ def test_background_precompute_stops_when_the_timeline_changes(api, solves):
     assert solves == [] and state_of(client, base)["timeline_ready"] is False
 
     background.run()
-    assert solves == ["11:00", "14:00"] and state_of(client, base)["timeline_ready"] is True
+    assert solves == ["11:00", "11:00", "14:00", "14:00"] and state_of(client, base)["timeline_ready"] is True
 
     at(client, base, "15:00")
-    assert solves == ["11:00", "14:00"] and background == []
+    assert solves == ["11:00", "11:00", "14:00", "14:00"] and background == []
 
 
 def test_cursor_request_during_precompute_waits_for_the_step_and_reuses_it(api, solves):
@@ -565,7 +578,8 @@ def test_cursor_request_during_precompute_waits_for_the_step_and_reuses_it(api, 
     state = response.json()
     assert statuses(state) == [("tl_1", "applied"), ("tl_2", "applied")]
     assert (request_status(state, "R3"), request_status(state, "R2")) == ("cancelled", "cancelled")
-    assert (solves.count("11:00"), solves.count("14:00")) == (1, 1)
+    # Каждая стратегия с решателем посчитана один раз: запрос дождался фонового шага и взял его.
+    assert (solves.count("11:00"), solves.count("14:00")) == (2, 2)
     assert state_of(client, base)["timeline_ready"] is True
 
 
@@ -586,12 +600,12 @@ def test_timeline_edit_is_geocoded_once_when_added(api, solves):
     moved = {**before, "address": "Город Москва, ул.Таганская, д. 7", "lat": None, "lon": None}
     edit = {"type": "request_updated", "time": "12:00", "request_id": "R2", "request": moved}
 
-    added(client, base, edit)
+    added(client, base, edit, "optimal")
     looked_up = len(geocoder.queries)
     assert looked_up > 0
-    added(client, base, cancel("R3", "11:00"))
+    added(client, base, cancel("R3", "11:00"), "optimal")
     at(client, base, "13:00")
-    state = added(client, base, restore("R3", "11:30"))
+    state = added(client, base, restore("R3", "11:30"), "optimal")
 
     assert len(geocoder.queries) == looked_up
     assert statuses(state) == [("tl_2", "applied"), ("tl_3", "applied"), ("tl_1", "applied")]
@@ -614,7 +628,8 @@ def cursor_to(client, base, time):
     return response.json()
 
 
-def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(api, solves, restarted):
+def test_time_stops_at_an_event_that_needs_a_choice_until_a_variant_is_chosen(api, solves, restarted):
+    """Недоступность занятого инженера: «Ничего не менять» бросает его заявки, пересчёт отдаёт их второму."""
     client, _, base, background = dataset(api, solves)
     busy = busy_of(client, base)
     added(client, base, unavailable(busy, "13:00"))
@@ -622,9 +637,10 @@ def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(api, solves, r
     background.run()
     ahead = state_of(client, base)
     assert ahead["timeline_ready"] is True and ahead["pending_choice"] is None
+    # Проход стоит на первом событии: отмену после него не считали, её стратегия ещё не решена.
     assert [(item["status"], item["choosable"], item["variant"]) for item in ahead["timeline"]] == [
         ("pending", True, None),
-        ("pending", False, None),
+        ("pending", True, None),
     ]
 
     stopped = cursor_to(client, base, "17:00")
@@ -658,10 +674,19 @@ def test_time_stops_at_a_breaking_event_until_a_variant_is_chosen(api, solves, r
     }
 
     later = cursor_to(client, base, "17:00")
-    assert [item["status"] for item in later["timeline"]] == ["applied", "applied"]
+    # После «Ничего не менять» R2 брошена, а пересчёт на отмене R3 отдал бы её второй бригаде: теперь и отмена
+    # ждёт выбора. Правило смотрит на результат, а не на тип события.
+    assert (later["cursor"], later["pending_choice"]["entry_id"]) == ("14:30", "tl_2")
+    assert [item["status"] for item in later["timeline"]] == ["applied", "awaiting"]
 
     changed = client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "optimal"}).json()
-    assert (changed["cursor"], changed["timeline"][0]["variant"]) == ("17:00", "optimal")
+    # С «Оптимально по дню» в 13:00 заявки выбывшей бригады уже у второй: отмене выбирать не из чего, и решение
+    # о ней принято заново — «Ничего не менять» без окна.
+    assert (changed["cursor"], changed["pending_choice"]) == ("14:30", None)
+    assert [(item["status"], item["variant"], item["variant_auto"]) for item in changed["timeline"]] == [
+        ("applied", "optimal", False),
+        ("applied", "keep", True),
+    ]
     assert changed["plan"] != later["plan"]
     again = client.get(f"{base}/timeline/events/tl_1/variants")
     assert again.status_code == 200 and again.json()["current"] == "optimal"
@@ -692,7 +717,7 @@ def test_with_a_solver_pool_both_variants_of_an_event_are_solved_at_once(api, so
     assert len(stopped["pending_choice"]["variants"]) == 3
 
 
-def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(api, solves):
+def test_an_event_at_the_cursor_that_needs_a_choice_asks_for_a_variant_at_once(api, solves):
     client, _, base, _ = dataset(api, solves)
     busy = busy_of(client, base)
     cursor_to(client, base, "12:00")
@@ -704,28 +729,32 @@ def test_breaking_event_at_the_cursor_asks_for_a_variant_at_once(api, solves):
 
 def test_variant_errors(api, solves):
     client, _, base, background = dataset(api, solves)
-    added(client, base, cancel("R1", "16:00"))
+    added(client, base, cancel("R2", "13:00"))
     added(client, base, restore("R1", "16:30"))
     background.run()
-    # У отмены стратегия есть, а окна выбора нет: выбор проходит, а вариантов для окна сервер не предлагает.
+    # Варианты есть у любого события: у отмены их можно и открыть, и сменить.
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "keep"}).status_code == 200
-    assert client.get(f"{base}/timeline/events/tl_1/variants").status_code == 409
-    # У возврата заявки стратегий нет вовсе.
-    assert client.put(f"{base}/timeline/events/tl_2/variant", json={"variant": "keep"}).status_code == 409
-    assert client.get(f"{base}/timeline/events/tl_2/variants").status_code == 409
+    assert client.get(f"{base}/timeline/events/tl_1/variants").status_code == 200
+    # Кроме отклонённого: R1 не отменена, возвращать нечего.
+    rejected = "Событие отклонено: Заявка R1 не отменена, возвращать нечего."
+    for response in (
+        client.put(f"{base}/timeline/events/tl_2/variant", json={"variant": "keep"}),
+        client.get(f"{base}/timeline/events/tl_2/variants"),
+    ):
+        assert (response.status_code, response.json()["detail"]) == (409, rejected)
     assert client.put(f"{base}/timeline/events/tl_9/variant", json={"variant": "keep"}).status_code == 404
     assert client.get(f"{base}/timeline/events/tl_9/variants").status_code == 404
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "best"}).status_code == 422
     # Строка без номера бригады тоже неизвестна: до решателя она не доходит.
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:"}).status_code == 422
-    # Бригаду выбирают только у срочной заявки, отмене её не назначить.
+    # Отменённую заявку отдавать некому.
     assert (
         client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:E1"}).status_code == 422
     )
 
 
 def test_a_cancelled_request_can_be_added_with_its_own_strategy(api, solves):
-    """Клиент отказался: диспетчер сам говорит, трогать ли маршруты. Часы на отмене не встают, окна выбора нет."""
+    """Клиент отказался: диспетчер сам говорит, трогать ли маршруты. Стратегия дана сразу: окна выбора нет."""
     client, _, base, _ = dataset(api, solves)
     before = at(client, base, "13:00")
     owner = next(route["engineer_id"] for route in before["plan"]["routes"] if route["visits"])
@@ -739,22 +768,93 @@ def test_a_cancelled_request_can_be_added_with_its_own_strategy(api, solves):
     assert response.status_code == 200, response.text
     state = response.json()
     assert state["pending_choice"] is None
-    assert [(item["status"], item["variant"], item["choosable"]) for item in state["timeline"]] == [
-        ("applied", "keep", False)
-    ]
+    assert [
+        (item["status"], item["variant"], item["variant_auto"], item["choosable"])
+        for item in state["timeline"]
+    ] == [("applied", "keep", False, True)]
     assert route_ids(state, owner) == [rid for rid in route_ids(before, owner) if rid != request_id]
     # «Маршруты не трогать»: остаток дня не пересчитывается, решатель не запускается.
     assert solves == []
 
 
-def test_a_strategy_for_an_event_without_strategies_is_409_and_the_event_is_not_added(api, solves):
+def edit_of(client, base, request_id, time, **changes):
+    """Изменение заявки request_id, как его шлёт диалог: заявка целиком с новыми значениями."""
+    before = next(request for request in state_of(client, base)["requests"] if request["id"] == request_id)
+    return {
+        "type": "request_updated",
+        "time": time,
+        "request_id": request_id,
+        "request": {**before, **changes},
+    }
+
+
+def test_any_event_takes_a_strategy_given_with_it(api, solves):
+    """Стратегию сразу принимает любое событие, и правка заявки тоже: окна выбора нет, вариант — диспетчера."""
     client, _, base, _ = dataset(api, solves)
-    response = client.post(
-        f"{base}/timeline/events", params={"variant": "keep"}, json=body(restore("R1", "12:00"))
+    at(client, base, "12:00")
+
+    state = added(client, base, edit_of(client, base, "R3", "12:00", duration_min=45), "stable")
+
+    assert state["pending_choice"] is None
+    assert [(item["status"], item["variant"], item["variant_auto"]) for item in state["timeline"]] == [
+        ("applied", "stable", False)
+    ]
+    assert solves.variants == ["stable"]
+
+
+def test_a_small_edit_the_route_survives_goes_without_a_choice_and_is_marked_auto(api, solves):
+    """Правка, которую маршрут переживает без опозданий: пересчёт ничего не спасает, окна нет — «Ничего не менять»."""
+    client, _, base, _ = dataset(api, solves)
+    before = at(client, base, "12:00")
+
+    state = added(client, base, edit_of(client, base, "R3", "12:00", duration_min=45))
+
+    assert (state["cursor"], state["pending_choice"]) == ("12:00", None)
+    item = state["timeline"][0]
+    assert (item["status"], item["variant"], item["variant_auto"], item["choosable"]) == (
+        "applied",
+        "keep",
+        True,
+        True,
     )
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Для этого события варианты не предлагаются."
-    assert state_of(client, base)["timeline"] == []
+    assert route_ids(state, "E1") == route_ids(before, "E1") == ["R1", "R2", "R3"]
+    assert next(request for request in state["requests"] if request["id"] == "R3")["duration_min"] == 45
+    # Оба пересчёта посчитаны для сравнения, и сменить вариант можно без решателя.
+    assert solves.variants == ["optimal", "stable"]
+    solves.clear()
+    choice = client.get(f"{base}/timeline/events/tl_1/variants").json()
+    assert (choice["current"], [option["variant"] for option in choice["variants"]]) == (
+        "keep",
+        ["optimal", "stable", "keep"],
+    )
+    chosen = choose(client, base, "tl_1", "optimal")
+    assert [(item["variant"], item["variant_auto"]) for item in chosen["timeline"]] == [("optimal", False)]
+    assert solves == []
+
+
+def test_an_edited_request_can_be_given_to_a_brigade_and_a_cancelled_one_cannot(api, solves):
+    client, _, base, _ = dataset(api, solves)
+    at(client, base, "12:00")
+    added(client, base, edit_of(client, base, "R3", "12:00", duration_min=45))
+    added(client, base, cancel("R2", "12:00"))
+
+    response = client.get(f"{base}/timeline/events/tl_1/variants", params={"assign": "E2"})
+
+    assert response.status_code == 200, response.text
+    choice = response.json()
+    assert choice["assignable"] is True
+    assert [(option["variant"], option["request_engineer_id"]) for option in choice["variants"]] == [
+        ("optimal", "E1"),
+        ("stable", "E1"),
+        ("keep", "E1"),
+        ("assign:E2", "E2"),
+    ]
+    refused = client.get(f"{base}/timeline/events/tl_2/variants", params={"assign": "E2"})
+    assert (refused.status_code, refused.json()["detail"]) == (
+        422,
+        "Бригаду можно выбрать только для события об одной заявке, которая после него остаётся в плане.",
+    )
+    assert client.get(f"{base}/timeline/events/tl_2/variants").json()["assignable"] is False
 
 
 def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(api, solves):
@@ -827,45 +927,37 @@ def route_ids(state, engineer_id):
     return [visit["request_id"] for visit in route["visits"]]
 
 
-def test_request_reassignment_waits_for_a_variant_and_pins_the_request(api, solves):
+def test_request_reassignment_goes_into_the_chosen_brigade_route_when_nothing_breaks(api, solves):
+    """Переназначение без поломок: «Ничего не менять» ставит заявку в маршрут выбранной бригады (общее правило
+    закреплённых заявок), пересчёт ничего не спасает — окна выбора нет, вариант выбран сам."""
     client, _, base, background = dataset(api, solves)
     assert route_ids(state_of(client, base), "E1") == ["R1", "R2", "R3"]
     added(client, base, reassigned("R3", "E2", "12:00"))
     background.run()
 
-    stopped = cursor_to(client, base, "17:00")
+    state = cursor_to(client, base, "17:00")
 
-    assert (stopped["cursor"], stopped["timeline"][0]["status"], stopped["timeline"][0]["choosable"]) == (
-        "12:00",
-        "awaiting",
-        True,
+    assert (state["cursor"], state["pending_choice"]) == ("17:00", None)
+    item = state["timeline"][0]
+    assert (item["status"], item["variant"], item["variant_auto"]) == ("applied", "keep", True)
+    assert item["event"]["previous_engineer_id"] == "E1"
+    assert (
+        next(request for request in state["requests"] if request["id"] == "R3")["fixed_engineer_id"] == "E2"
     )
-    choice = stopped["pending_choice"]
+    assert (route_ids(state, "E1"), route_ids(state, "E2")) == (["R1", "R2"], ["R3"])
+
+    # Варианты открываются и у события, которое прошло без окна: названия общие для всех событий.
+    choice = client.get(f"{base}/timeline/events/tl_1/variants").json()
     assert [(option["variant"], option["title"]) for option in choice["variants"]] == [
         ("optimal", "Оптимально по дню"),
         ("stable", "Минимум перестановок"),
-        ("keep", "Вставить в маршрут"),
+        ("keep", "Ничего не менять"),
     ]
-    assert (
-        choice["variants"][2]["summary"]
-        == "Бригада пропускает, на что не успевает, остальные маршруты как есть"
-    )
-    # Бригаду называет само событие, четвёртого варианта у него нет.
-    assert choice["assignable"] is False
+    assert choice["variants"][2]["summary"] == "Только само событие, остальные маршруты как есть"
+    assert choice["current"] == "keep"
     assert [option["request_engineer_id"] for option in choice["variants"]] == ["E2", "E2", "E2"]
-
-    chosen = choose(client, base, "tl_1", "keep")
-
-    assert (chosen["cursor"], chosen["timeline"][0]["status"], chosen["timeline"][0]["variant"]) == (
-        "12:00",
-        "applied",
-        "keep",
-    )
-    assert chosen["timeline"][0]["event"]["previous_engineer_id"] == "E1"
-    assert (
-        next(request for request in chosen["requests"] if request["id"] == "R3")["fixed_engineer_id"] == "E2"
-    )
-    assert (route_ids(chosen, "E1"), route_ids(chosen, "E2")) == (["R1", "R2"], ["R3"])
+    # Заявка события остаётся в плане: её можно отдать и другой бригаде.
+    assert choice["assignable"] is True
 
     # Отказ одинаков для всех вариантов: выбора не требует, на шкале событие не остаётся.
     rejected = add(client, base, reassigned("R3", "E2", "12:00"))
@@ -887,7 +979,7 @@ def cached_steps(deps, base):
     return set(deps.registry.get(base.rsplit("/", 1)[1]).timeline.steps)
 
 
-def test_background_precompute_stops_at_the_first_event_without_a_choice(api, solves):
+def test_background_precompute_stops_at_the_first_event_that_needs_a_choice(api, solves):
     client, deps, base, background = dataset(api, solves)
     added(client, base, unavailable(busy_of(client, base), "13:00"))
     added(client, base, cancel("R3", "14:30"))
@@ -899,7 +991,7 @@ def test_background_precompute_stops_at_the_first_event_without_a_choice(api, so
     assert (solves, solves.variants) == (["13:00", "13:00"], ["optimal", "stable"])
 
 
-def test_changing_an_earlier_choice_replays_a_later_breaking_event_with_its_own_choice(api, solves):
+def test_changing_an_earlier_choice_replays_a_later_event_with_its_own_choice(api, solves):
     client, deps, base, background = dataset(api, solves)
     busy = busy_of(client, base)
     other = next(
@@ -972,7 +1064,8 @@ def test_urgent_request_can_be_given_to_a_named_brigade_and_that_plan_is_counted
     assert "U1" in route_ids(chosen, "E2")
 
 
-def test_a_brigade_can_be_named_only_for_an_urgent_request_and_only_from_this_day(api, solves):
+def test_a_brigade_can_be_named_only_for_an_event_about_one_request_and_only_from_this_day(api, solves):
+    """Недоступность инженера двигает пачку заявок: отдать бригаде нечего."""
     client, _, base, background = dataset(api, solves)
     added(client, base, unavailable(busy_of(client, base), "13:00"))
     added(client, base, urgent("14:00"))
@@ -984,7 +1077,7 @@ def test_a_brigade_can_be_named_only_for_an_urgent_request_and_only_from_this_da
     ):
         assert (response.status_code, response.json()["detail"]) == (
             422,
-            "Бригаду можно выбрать только для срочной заявки.",
+            "Бригаду можно выбрать только для события об одной заявке, которая после него остаётся в плане.",
         )
     for response in (
         client.get(f"{base}/timeline/events/tl_2/variants", params={"assign": "E9"}),

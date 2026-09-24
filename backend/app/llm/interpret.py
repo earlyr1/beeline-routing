@@ -26,14 +26,8 @@ from app.domain.timeutil import HHMM, fmt_hhmm
 from app.domain.validation_text import validation_text
 from app.domain.windows import slot_for, slots_text
 from app.llm.client import LlmResult, ToolCall
-from app.planning.session import (
-    EDITABLE_REQUEST_FIELDS,
-    EventRejected,
-    PlanningContext,
-    PlanningSession,
-    check_event,
-    window_order_text,
-)
+from app.planning.facts import EDITABLE_REQUEST_FIELDS, EventRejected, window_order_text
+from app.planning.session import PlanningContext, PlanningSession, check_event
 
 NOTHING_FOUND = (
     "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена заявки, "

@@ -6,23 +6,12 @@ pin_problem уже закрепил начатую работу и визит в
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import replace
 
-from app.domain.enums import EventType
-from app.domain.models import Event, Plan, Visit
+from app.domain.models import Plan, Visit
 from app.planning.models import DelayForecast, LateVisit
 from app.solvers.problem import EngineerState, Problem
 from app.solvers.simulate import simulate_route
-
-
-def delayed_until(events: Iterable[Event]) -> dict[str, int]:
-    """Для каждого задержанного инженера самое позднее время T + N среди его задержек."""
-    until: dict[str, int] = {}
-    for event in events:
-        if event.type == EventType.ENGINEER_DELAYED and event.engineer_id and event.delay_min is not None:
-            until[event.engineer_id] = max(until.get(event.engineer_id, 0), event.time + event.delay_min)
-    return until
 
 
 def _ready_from(state: EngineerState, time: int) -> EngineerState:
@@ -33,6 +22,8 @@ def _ready_from(state: EngineerState, time: int) -> EngineerState:
 
 def keep_delays(problem: Problem, until: dict[str, int]) -> Problem:
     """Задержки прежних событий продолжают действовать: новый выезд инженера не раньше T + N.
+
+    until — инженер и самое позднее T + N среди его задержек (app/planning/facts.delayed_until).
 
     pin_problem отпускает визиты, к которым инженер ещё не выехал. Без этой поправки следующее событие дня
     (например, отмена чужой заявки) вернуло бы задержанному инженеру доступность с текущего времени.

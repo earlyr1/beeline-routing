@@ -16,7 +16,6 @@ from app.llm.interpret import interpret, nothing_found
 from app.llm.prompt import build_messages
 from app.llm.schemas import STATUS_DONE_RU, ChatRequest, ChatResponse, Proposal
 from app.planning.timeline import known_requests
-from app.planning.variants import is_choosable
 
 router = APIRouter(prefix="/api/datasets/{dataset_id}")
 
@@ -52,7 +51,7 @@ def _refreshed(event: Event, cursor: int) -> Event:
 def _approve(deps: AppDeps, record: DatasetRecord, proposal: Proposal) -> Proposal:
     """Применяет одно предложение через таймлайн: событие встаёт на шкалу, текущее время переходит к нему.
 
-    «Ломающее» событие сразу получает стратегию optimal. Вызывать под record.timeline_lock.
+    Событие сразу получает стратегию optimal, окна выбора у него нет. Вызывать под record.timeline_lock.
 
     Окно проверяется сеткой ровно так же, как у события из диалога: подтверждение диспетчера — такой же выбор
     окна, и путь «чат → одобрить» не должен быть дырой в правиле «клиенту называют слот».
@@ -68,7 +67,7 @@ def _approve(deps: AppDeps, record: DatasetRecord, proposal: Proposal) -> Propos
             failed = proposal.model_copy(update={"status": "failed", "event": event, "error": off_grid})
             deps.proposals.save(record.dataset_id, failed)
             return failed
-    entry = record.new_entry(event, checked=True, variant="optimal" if is_choosable(event) else None)
+    entry = record.new_entry(event, checked=True, variant="optimal")
     step = insert_and_replay(record, ctx, entry)
     if step is None:
         record.drop_entry(entry.id)

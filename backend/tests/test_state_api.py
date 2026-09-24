@@ -198,7 +198,8 @@ def test_a_restart_that_caught_the_solver_keeps_clock_and_plan_together(api):
     dataset_id = base.rsplit("/", 1)[-1]
     with deps.state.cursor() as cur:
         cur.execute("DELETE FROM plans WHERE dataset_id = %s AND token LIKE 'tl_2%%'", (dataset_id,))
-        assert cur.rowcount == 1
+        # Стратегию отмены диспетчер не выбирал: в базе шаги всех трёх, и пропадают все.
+        assert cur.rowcount == 3
 
     fresh, _, fresh_background = reopen(api)
     caught = fresh.get(f"{base}/state").json()

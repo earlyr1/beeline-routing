@@ -23,6 +23,7 @@ from app.api.schemas import (
 )
 from app.api.timeline import (
     VariantUnavailable,
+    check_not_rejected,
     check_variant,
     ensure_precompute,
     event_choice,
@@ -31,21 +32,15 @@ from app.api.timeline import (
     planning_state,
     settle,
 )
-from app.domain.enums import EventType, Priority, request_label
+from app.domain.enums import Priority, request_label
 from app.domain.models import Event, Request
 from app.domain.timeutil import fmt_hhmm
 from app.domain.windows import is_slot, off_grid_text
 from app.planning.explain import build_explanation
+from app.planning.facts import EventRejected, edited_request, geocode_entry, new_request
 from app.planning.models import EventChoice, Explanation
-from app.planning.session import (
-    EventRejected,
-    PlanningSession,
-    early_event_text,
-    geocode_entry,
-    start_session,
-)
+from app.planning.session import PlanningSession, early_event_text, start_session
 from app.planning.timeline import EVENT_TIME_RANGE_TEXT, LAST_MINUTE, check_known, known_requests
-from app.planning.variants import is_choosable
 from app.synth.work_types import urgent_work_types
 
 router = APIRouter(prefix="/api")
@@ -96,14 +91,13 @@ def window_grid_problem(deps: AppDeps, event: Event, known: dict[str, Request]) 
     должна и дальше и планироваться, и редактироваться; поэтому изменение с тем же окном сетку не задевает.
     """
     grid = deps.ingest.synth_config.window_grid
-    request = event.request
+    added, edited = new_request(event), edited_request(event)
+    request = added or edited
     if not grid or request is None or request.asap:
-        return None
-    if event.type not in (EventType.URGENT, EventType.REQUEST_UPDATED):
         return None
     stored = known.get(event.request_id or request.id)
     if (
-        event.type == EventType.REQUEST_UPDATED
+        edited is not None
         and stored is not None
         and not stored.asap
         and (stored.window_start, stored.window_end) == (request.window_start, request.window_end)
@@ -112,7 +106,7 @@ def window_grid_problem(deps: AppDeps, event: Event, known: dict[str, Request]) 
     if is_slot(grid, request.window_start, request.window_end):
         return None
     # Срочная заявка у диспетчера всегда «URG-<номер>»: приоритет ей ставит сервер, что бы ни прислал клиент.
-    priority = Priority.URGENT if event.type == EventType.URGENT else (stored or request).priority
+    priority = Priority.URGENT if added is not None else (stored or request).priority
     label = request_label(request.id, priority)
     return off_grid_text(label, request.window_start, request.window_end, grid)
 
@@ -245,8 +239,8 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
     """Событие в текущее время плана или позже: встаёт на шкалу, и текущее время переходит к нему.
 
     Событие раньше текущего времени отклоняется. События на шкале между текущим временем и новым событием
-    применяются по пути. Отклонённое событие на шкале не остаётся, текущее время не меняется. «Ломающее» событие
-    сразу получает стратегию optimal; если по пути есть «ломающее» событие без выбора, ответ 409.
+    применяются по пути. Отклонённое событие на шкале не остаётся, текущее время не меняется. Событие сразу
+    получает стратегию optimal, окна выбора у него нет; если по пути есть событие, которое ждёт выбора, ответ 409.
     """
     record = _record(deps, dataset_id)
     ctx = deps.ingest.planning
@@ -265,7 +259,7 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
                 cursor = record.cursor
                 if event.time < cursor:
                     raise HTTPException(status_code=422, detail=early_event_text(event.time, cursor))
-            entry = record.new_entry(event, geo, variant="optimal" if is_choosable(event) else None)
+            entry = record.new_entry(event, geo, variant="optimal")
             step = insert_and_replay(record, ctx, entry)
             if step is None:
                 record.drop_entry(entry.id)
@@ -291,8 +285,10 @@ def add_timeline_event(
     применяется, на шкале его нет, а ответ 422 с причиной. Событие позже текущего времени ждёт своего времени, его
     шаг считается в фоне.
 
-    variant — стратегия события сразу, без окна выбора: так диспетчер отменяет заявку отказавшегося клиента,
-    выбирая между пересчётом остатка дня и «маршруты не трогать». Событию без стратегий ответ 409.
+    Без variant стратегию решает результат: если «Ничего не менять» ломает больше, чем лучший из пересчётов,
+    событие ждёт выбора (pending_choice, часы встают на нём), иначе применяется с «Ничего не менять». variant —
+    стратегия сразу, без окна выбора: так диспетчер отменяет заявку отказавшегося клиента, выбирая между
+    пересчётом остатка дня и «маршруты не трогать».
     """
     record = _record(deps, dataset_id)
     ctx = deps.ingest.planning
@@ -361,9 +357,9 @@ def clear_timeline(dataset_id: str, deps: Deps) -> PlanningState:
 def get_timeline_variants(
     dataset_id: str, entry_id: str, deps: Deps, assign: str | None = None
 ) -> EventChoice:
-    """Варианты исправления для «ломающего» события шкалы: для окна выбора и смены выбора.
+    """Варианты исправления для события шкалы: для окна выбора и смены выбора. У отклонённого события — 409.
 
-    assign — номер бригады: у срочной заявки к трём вариантам добавляется четвёртый, «отдать ей заявку».
+    assign — номер бригады: у события об одной заявке к трём вариантам добавляется четвёртый, «отдать ей заявку».
     Такой вариант считается только по этому запросу, поэтому окно открывается без него.
     """
     record = _record(deps, dataset_id)
@@ -388,6 +384,7 @@ def put_timeline_variant(dataset_id: str, entry_id: str, body: VariantRequest, d
                 if entry is None:
                     raise VariantUnavailable(404, f"Событие {entry_id} не найдено.")
                 check_variant(record, entry.event, body.variant)
+                check_not_rejected(record, entry)
                 record.choose_variant(entry_id, body.variant)
             settle(record, ctx)
             return planning_state(record)
