@@ -356,7 +356,10 @@ def main() -> None:
         print("секреты    BASIC_AUTH_* не менялись: пароль жюри не введён")
     for name in skipped:
         print(f"пропущен   {name}: в .env пусто, секрет в GitHub (если был) не тронут")
-    if "TRANSIT_KEY" in skipped and "TRANSIT_KEY" not in existing:
+    # В пробе GitHub не спрашивается, и про секрет в нём сказать нечего.
+    if "TRANSIT_KEY" in skipped and github is None:
+        print("внимание   TRANSIT_KEY в .env пуст; есть ли он в GitHub, не проверялось (--dry-run)")
+    elif "TRANSIT_KEY" in skipped and "TRANSIT_KEY" not in existing:
         print(
             "внимание   TRANSIT_KEY нет ни в .env, ни в GitHub: без него выкат остановится — backend не расшифрует "
             "матрицы 2ГИС"
