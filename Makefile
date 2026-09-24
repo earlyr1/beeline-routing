@@ -13,9 +13,12 @@ POSTGRES_DB ?= routing
 PG_TEST_PORT ?= 55432
 TEST_DATABASE_URL ?= postgresql://routing:routing@localhost:$(PG_TEST_PORT)/routing
 PG_TEST_NAME ?= routing-test-db
+# Ключ матриц 2ГИС (TRANSIT_KEY) для команд, которые их читают или шифруют: из окружения, а если там пусто — строка
+# TRANSIT_KEY= из .env. Значение подставляет shell при запуске: make печатает только эту заготовку, ключ — никогда.
+WITH_TRANSIT_KEY = [ -n "$$TRANSIT_KEY" ] || TRANSIT_KEY=$$(sed -n 's/^TRANSIT_KEY=//p' .env 2>/dev/null | tail -n 1 | tr -d "\"' \r"); export TRANSIT_KEY;
 
 .DEFAULT_GOAL := help
-.PHONY: help up rebuild down logs ps smoke db migrate rollback psql test test-fast test-db lint fmt front check bundles night transit transit-dry transit-error graph
+.PHONY: help up rebuild down logs ps smoke db migrate rollback psql test test-fast test-db lint fmt front check bundles night transit transit-dry transit-encrypt transit-error graph
 
 help:  ## показать этот список
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t 16
@@ -62,11 +65,11 @@ smoke:  ## проверить живой сервис: регионы, план 
 ## --- проверки ---
 
 test:  ## полный прогон бэкенда без базы (~6.5 мин): половины [postgres] уходят в skipped
-	cd backend && $(UV) run pytest -o addopts= -q
+	$(WITH_TRANSIT_KEY) cd backend && $(UV) run pytest -o addopts= -q
 	@echo "Тесты базы (маркер db) пропущены — зелёный прогон тут не полный. Прогнать их: make test-db"
 
 test-fast:  ## бэкенд без тестов солвера и API (быстрая обратная связь)
-	cd backend && $(UV) run pytest -o addopts= -q --ignore=tests/test_api.py --ignore=tests/test_timeline_api.py
+	$(WITH_TRANSIT_KEY) cd backend && $(UV) run pytest -o addopts= -q --ignore=tests/test_api.py --ignore=tests/test_timeline_api.py
 
 test-db:  ## всё, что ходит в Postgres (маркер db): своя база на PG_TEST_PORT, убирается за собой
 	@docker rm -f $(PG_TEST_NAME) >/dev/null 2>&1 || true
@@ -93,13 +96,17 @@ bundles:  ## пересобрать бандлы регионов (нужен OS
 	cd backend && OSRM_URL=$(OSRM_URL) $(UV) run python -m app.synth.prepare --region $(REGION) --geocoder cache-only
 
 night:  ## ночной поиск утренних планов: make night MINUTES=120 REGION=all
-	cd backend && caffeinate -i $(UV) run python -m scripts.night_plan --region $(REGION) --minutes $(MINUTES)
+	$(WITH_TRANSIT_KEY) cd backend && caffeinate -i $(UV) run python -m scripts.night_plan --region $(REGION) --minutes $(MINUTES)
 
 transit-dry:  ## сколько запросов демо-ключа 2ГИС стоит пересчёт матриц
-	cd backend && $(UV) run python -m scripts.transit_matrix --region $(REGION) --dry-run
+	$(WITH_TRANSIT_KEY) cd backend && $(UV) run python -m scripts.transit_matrix --region $(REGION) --dry-run
 
-transit:  ## пересчитать матрицы 2ГИС (нужен TWOGIS_API_KEY в .env; после — make rebuild)
-	cd backend && $(UV) run python -m scripts.transit_matrix --region $(REGION)
+transit:  ## пересчитать матрицы 2ГИС и зашифровать их (нужны TWOGIS_API_KEY и TRANSIT_KEY; после — make rebuild)
+	$(WITH_TRANSIT_KEY) cd backend && $(UV) run python -m scripts.transit_matrix --region $(REGION)
+	@$(MAKE) --no-print-directory transit-encrypt
+
+transit-encrypt:  ## зашифровать data/transit/*.json в *.json.enc ключом TRANSIT_KEY из .env: в git идут только .enc
+	$(WITH_TRANSIT_KEY) cd backend && $(UV) run python -m scripts.transit_encrypt
 
 transit-error:  ## ошибка встроенной формулы против матриц 2ГИС
-	cd backend && $(UV) run python -m scripts.transit_error
+	$(WITH_TRANSIT_KEY) cd backend && $(UV) run python -m scripts.transit_error
