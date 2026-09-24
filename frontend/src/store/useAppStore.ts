@@ -28,7 +28,7 @@ import type {
   TimelineItem,
   TimeWindow,
 } from '../api/types';
-import { agreedWindow, agreementEvent, type AgreedMarks } from '../lib/communications';
+import { agreedMarks, agreedWindow, agreementEvent, type AgreedMarks } from '../lib/communications';
 import { eventRequestId, type PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, requestLabel, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
@@ -369,10 +369,13 @@ let addressLookup = 0;
  */
 const agreedInFlight = new Map<string, TimeWindow | null>();
 
-/** Отметки на экране: договорённости из плана сервера и поверх них — те, что ещё в пути (без события на шкале). */
+/**
+ * Отметки на экране: договорённости и звонки, ждущие выбора варианта, из плана сервера, и поверх них — те, что
+ * ещё в пути (без события на шкале).
+ */
 function shownAgreed(state: PlanningState | null): AgreedMarks {
-  const marks: AgreedMarks = { ...(state?.agreed ?? {}) };
-  for (const [requestId, window] of agreedInFlight) marks[requestId] = { window, entry_id: null };
+  const marks = agreedMarks(state);
+  for (const [requestId, window] of agreedInFlight) marks[requestId] = { window, entry_id: null, applied: false };
   return marks;
 }
 

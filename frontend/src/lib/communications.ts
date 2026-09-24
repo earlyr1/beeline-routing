@@ -1,5 +1,6 @@
 import type { AgreedCall, AgreedCalls, HHMM, PlanEvent, PlanningState, ServiceRequest, TimeSlot, TimeWindow } from '../api/types';
 import { fromMinutes, requestLabel, requestWindowPhrase, requestWindowText, shortAddress, toMinutes } from './format';
+import { isWorkStarted } from './events';
 import { assignmentIndex, byId } from './planView';
 import { offGrid, slotFor } from './windows';
 
@@ -8,12 +9,18 @@ import { offGrid, slotFor } from './windows';
 export type { AgreedCall, AgreedCalls, TimeWindow };
 
 /**
- * Отметка звонка на экране: договорённость с сервера или та, что ещё в пути. У отметки в пути entry_id null:
- * события на шкале пока нет, и снять её нечем. Строка уходит вниз сразу — диспетчер уже положил трубку.
+ * Отметка звонка на экране: договорённость с сервера, звонок на шкале, который ждёт выбора варианта, или отметка,
+ * что ещё в пути. У отметки в пути entry_id null: события на шкале пока нет, и снять её нечем. Строка уходит вниз
+ * сразу — диспетчер уже положил трубку.
  */
 export interface AgreedMark {
   window: TimeWindow | null;
   entry_id: string | null;
+  /**
+   * Звонок применён к плану на часах: названное окно уже стало окном заявки. У отметки в пути и у звонка, который
+   * ждёт выбора варианта, окно заявки ещё прежнее.
+   */
+  applied: boolean;
 }
 
 export type AgreedMarks = Record<string, AgreedMark>;
@@ -41,8 +48,6 @@ export interface CallRow {
   missed: TimeWindow | null;
   /** Окно, которое диспетчер назовёт клиенту: слот сетки, если окно новое. null — сегодня к нему не приедут. */
   promise: TimeWindow | null;
-  /** Окно называть поздно: визит уже идёт, а слот вокруг него к времени на часах закончился. */
-  underway: boolean;
   /** Начало визита в плане; null — сегодня к клиенту не приедут. Клиенту эту минуту не называют. */
   start: HHMM | null;
   /** Бригада плана: справка для диспетчера, а не причина звонка. */
@@ -58,6 +63,25 @@ export interface AgreedRow {
   known: TimeWindow | null;
   /** Событие «Коммуникация» на шкале: его удаление снимает отметку. null — отметка ещё в пути к серверу. */
   entryId: string | null;
+}
+
+/**
+ * Отметки звонков по плану сервера: договорённости, применённые к часам, и поверх них звонки, которые уже были, но
+ * план до них ещё не дошёл, — часы стоят на событии, которое ждёт выбора варианта, на самом звонке или раньше
+ * него. Такой звонок тоже отметка: иначе, пока ждёт окно выбора, строка вернулась бы в список с ✓, и повторный
+ * клик поставил бы на шкалу второй звонок по той же заявке. По заявке берётся последний: клиент мог перезвонить.
+ */
+export function agreedMarks(state: PlanningState | null): AgreedMarks {
+  const marks: AgreedMarks = {};
+  if (!state) return marks;
+  for (const [requestId, call] of Object.entries(state.agreed ?? {})) marks[requestId] = { ...call, applied: true };
+  const cursor = toMinutes(state.cursor);
+  for (const item of state.timeline ?? []) {
+    const held = item.status === 'awaiting' || (item.status === 'pending' && toMinutes(item.event.time) <= cursor);
+    if (!held || item.event.type !== 'client_agreed' || !item.event.request_id) continue;
+    marks[item.event.request_id] = { window: item.event.agreed_window ?? null, entry_id: item.id, applied: false };
+  }
+  return marks;
 }
 
 /** Кому звонить и с кем уже договорились. */
@@ -108,17 +132,6 @@ function promisedWindow(window: TimeWindow, start: HHMM | null, grid: TimeSlot[]
   if (start === null) return null;
   const named = window.asap === true || !offGrid(grid, window.start, window.end);
   return named && fits(window, start) ? window : suggestedWindow(window, start, grid);
-}
-
-/**
- * Окно называть поздно: визит уже идёт, а слот вокруг его начала к времени на часах закончился.
- * Слот берётся по началу визита, а оно в прошлом, поэтому к моменту звонка такой слот может уже кончиться:
- * клиенту в этом случае говорят не про окно, а что бригада у него.
- */
-function isUnderway(promise: TimeWindow | null, start: HHMM | null, clock: HHMM): boolean {
-  if (promise === null || start === null) return false;
-  const now = toMinutes(clock);
-  return toMinutes(start) <= now && toMinutes(promise.end) <= now;
 }
 
 /**
@@ -224,8 +237,9 @@ function acceptedWindows(state: PlanningState): Map<string, TimeWindow> {
  * Отметки — события шкалы, применённые к времени плана: часы, отведённые раньше звонка, снимают его и на сервере.
  *
  * Отменённые заявки в список не попадают: клиент либо сам отказался, либо ему уже сказали. Не попадают и визиты,
- * которые к времени на часах (clock) уже закончились: работа сделана, звонить не о чем. Перенесённая заявка
- * («сегодня не приедем») стоит в блоке «Согласовано»: ей уже сказали, и звонка она не ждёт.
+ * которые к времени на часах (clock) уже закончились: работа сделана, звонить не о чем. Начатая работа не зовёт
+ * звонить: бригада у клиента, и звонок о такой заявке сервер не примет. Перенесённая заявка («сегодня не
+ * приедем») стоит в блоке «Согласовано»: ей уже сказали, и звонка она не ждёт.
  */
 export function callList(state: PlanningState, agreed: AgreedMarks, clock: HHMM, grid: TimeSlot[] = []): CallList {
   const assigned = assignmentIndex(state.plan);
@@ -247,8 +261,8 @@ export function callList(state: PlanningState, agreed: AgreedMarks, clock: HHMM,
     const known = mark ? (mark.window ?? null) : entered;
     // Окно заявки сразу после разговора. Звонок на шкале сделал названное окно окном заявки, поэтому дальше
     // расхождения считаются от него: передвинул диспетчер окно после звонка — клиент должен узнать новое.
-    // Отметка в пути окна заявки ещё не поменяла, и сравнивать её пока можно только с текущим окном.
-    const base = mark ? (mark.entry_id === null ? window : (mark.window ?? window)) : entered;
+    // Звонок в пути или в ожидании выбора окна заявки ещё не поменял, и сравнивать его можно только с текущим окном.
+    const base = mark ? (mark.applied ? (mark.window ?? window) : window) : entered;
     const start = visit?.visit.start ?? null;
     const reason = callReason(known, base, window, start, grid);
     const label = requestLabel(request.id, request.priority);
@@ -258,6 +272,9 @@ export function callList(state: PlanningState, agreed: AgreedMarks, clock: HHMM,
       if (mark) settled.push({ requestId: request.id, label, address, known, entryId: mark.entry_id });
       continue;
     }
+    // Работа уже идёт: бригада у клиента, называть окно поздно, а ✓ и отмену по ней сервер не примет. В списке
+    // только строки, по которым диспетчер может что-то сделать: их и считает бейдж вкладки.
+    if (isWorkStarted(request, visit?.visit, clock)) continue;
     pending.push({
       requestId: request.id,
       label,
@@ -267,7 +284,6 @@ export function callList(state: PlanningState, agreed: AgreedMarks, clock: HHMM,
       known,
       missed: reason.missed,
       promise: reason.promise,
-      underway: isUnderway(reason.promise, start, clock),
       start,
       engineerId: visit?.engineerId ?? null,
     });
@@ -313,13 +329,7 @@ export function callChangeText(row: CallRow): string {
   if (row.promise === null) {
     return row.known === null ? 'сегодня не приедем' : `сегодня не приедем, обещали ${windowPhrase(row.known)}`;
   }
-  // Слот вокруг визита уже кончился: называть его нечестно, и клиенту говорят, что бригада у него.
-  const arrived = 'бригада уже у клиента';
-  if (row.known === null) {
-    return `сказали, что сегодня не приедем → ${row.underway ? arrived : `приедем ${inWindow(row.promise)}`}`;
-  }
-  if (row.missed !== null) {
-    return `не попадаем ${inWindow(row.missed)} — ${row.underway ? arrived : `назовите ${windowPhrase(row.promise)}`}`;
-  }
+  if (row.known === null) return `сказали, что сегодня не приедем → приедем ${inWindow(row.promise)}`;
+  if (row.missed !== null) return `не попадаем ${inWindow(row.missed)} — назовите ${windowPhrase(row.promise)}`;
   return changedText(row.known, row.promise);
 }

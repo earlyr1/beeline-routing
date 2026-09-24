@@ -1,7 +1,7 @@
 import { useState, type MouseEvent } from 'react';
 import type { PlanEvent } from '../../api/types';
 import { callAgreedText, callChangeText, callList, eventsAhead, type CallKind, type CallRow } from '../../lib/communications';
-import { isWorkStarted, requestActionState } from '../../lib/events';
+import { requestActionState } from '../../lib/events';
 import { brigadeName } from '../../lib/format';
 import { assignmentIndex, byId } from '../../lib/planView';
 import { useAppStore } from '../../store/useAppStore';
@@ -75,7 +75,6 @@ export function CommunicationsTab() {
             if (!request) return null;
             const visit = assigned.get(row.requestId)?.visit;
             const actions = requestActionState(request, visit, { busy, clock });
-            const started = isWorkStarted(request, visit, clock);
             return (
               <li key={row.requestId} className={`call call--${row.severity}`} onClick={() => selectRequest(row.requestId)}>
                 <div className="call__head">
@@ -88,13 +87,12 @@ export function CommunicationsTab() {
                   {row.engineerId !== null && ` · ${brigade(row.engineerId)}`}
                 </p>
                 <div className="call__actions">
-                  {/* Отметка — событие шкалы: оно меняет окно заявки или переносит её. У работы, которая уже идёт,
-                      сервер его не примет: клиенту говорят, что бригада у него, и строка уйдёт с концом визита. */}
+                  {/* Отметка — событие шкалы: оно меняет окно заявки или переносит её. Начатой работы в списке нет:
+                      бригада у клиента, и такое событие сервер не примет. */}
                   <button
                     type="button"
                     className="btn btn-small"
-                    disabled={busy || started}
-                    title={started ? 'Работа уже началась, отметить звонок нельзя' : undefined}
+                    disabled={busy}
                     onClick={handle(() => markAgreed(row.requestId))}
                   >
                     ✓ Согласовано

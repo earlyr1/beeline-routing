@@ -192,6 +192,15 @@ describe('BrigadePicker', () => {
     else expect(trigger()).not.toHaveAttribute('title');
   });
 
+  it('disables the trigger for a postponed request', () => {
+    // Клиенту сказали, что сегодня не приедем: бригаду такой заявке сервер не назначит.
+    const state = makePlanningState();
+    const requests = state.requests.map((request) => (request.id === '18754' ? { ...request, status: 'postponed' as const } : request));
+    renderPicker('18754', {}, { ...state, requests });
+    expect(trigger()).toBeDisabled();
+    expect(trigger()).toHaveAttribute('title', 'Заявка перенесена: клиенту сказали, что сегодня не приедем');
+  });
+
   it('disables the trigger for a request without a map point', () => {
     const state = makePlanningState();
     const requests = state.requests.map((request) => (request.id === '18754' ? { ...request, lat: null, lon: null, geocode_precision: 'none' as const } : request));

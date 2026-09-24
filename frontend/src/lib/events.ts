@@ -272,11 +272,13 @@ export interface ReassignState {
 }
 
 /**
- * Правило выбора бригады: как у кнопок заявки, и ещё отменённую заявку и заявку без точки на карте
- * сервер никому не назначит.
+ * Правило выбора бригады: как у кнопок заявки, и ещё отменённую, перенесённую и заявку без точки на карте
+ * сервер никому не назначит. Перенесённую вернёт в работу дня только новый звонок: клиенту сказали, что сегодня
+ * не приедем.
  */
 export function reassignState(request: ServiceRequest, visit: Visit | undefined, context: RequestActionContext): ReassignState {
   if (request.status === 'cancelled') return { disabled: true, title: 'Заявка отменена' };
+  if (request.status === 'postponed') return { disabled: true, title: 'Заявка перенесена: клиенту сказали, что сегодня не приедем' };
   if (isWorkStarted(request, visit, context.clock)) return { disabled: true, title: 'Работа уже началась, переназначить нельзя' };
   if (request.lat === null || request.lon === null) return { disabled: true, title: 'Адрес не найден на карте, назначить бригаду нельзя' };
   return { disabled: requestActionState(request, visit, context).disabled, title: undefined };

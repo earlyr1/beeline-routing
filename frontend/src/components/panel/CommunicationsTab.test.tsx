@@ -13,13 +13,15 @@ import { CANCEL_UNDO_MS, useAppStore } from '../../store/useAppStore';
 import { makeConfig, makePlanningState, makeTimeline } from '../../test/fixtures';
 import { resetStore } from '../../test/store';
 import { CommunicationsTab } from './CommunicationsTab';
+import { PANEL_TABS } from './tabs';
 
 const rows = () => screen.getAllByRole('listitem');
 const rowOf = (label: string) => rows().find((item) => within(item).queryByText(label) !== null)!;
 
 /**
- * День фикстуры, в котором есть все три повода для звонка: 86160 не успеваем в окно (визит уехал на 15:10),
- * 18754 осталась без визита, а окно 46393 диспетчер подвинул на 16:00–18:00, и визит переехал в него.
+ * День фикстуры, в котором есть все три повода для звонка: 86160 не успеваем в окно (визит уехал на 15:10, и работа
+ * по нему ещё не началась), 18754 осталась без визита, а окно 46393 диспетчер подвинул на 16:00–18:00, и визит
+ * переехал в него.
  */
 function callingDay(): PlanningState {
   const state = makePlanningState();
@@ -36,7 +38,7 @@ function callingDay(): PlanningState {
       ...state.plan,
       routes: state.plan.routes.map((route) => ({
         ...route,
-        visits: route.visits.map((visit) => ({ ...visit, ...moved[visit.request_id] })),
+        visits: route.visits.map((visit) => (moved[visit.request_id] ? { ...visit, ...moved[visit.request_id], pinned: false } : visit)),
       })),
     },
   };
@@ -105,7 +107,7 @@ describe('CommunicationsTab', () => {
         undefined,
       ),
     );
-    await waitFor(() => expect(useAppStore.getState().agreed).toEqual({ '46393': { window, entry_id: 'tl_7' } }));
+    await waitFor(() => expect(useAppStore.getState().agreed).toEqual({ '46393': { window, entry_id: 'tl_7', applied: true } }));
     const agreed = rowOf('46393');
     expect(agreed).toHaveClass('call--agreed');
     expect(within(agreed).getByText('договорились на окно 16:00–18:00')).toBeInTheDocument();
@@ -137,14 +139,20 @@ describe('CommunicationsTab', () => {
     await waitFor(() =>
       expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', expect.objectContaining({ request_id: '18754', agreed_window: null }), undefined),
     );
-    await waitFor(() => expect(useAppStore.getState().agreed).toEqual({ '18754': { window: null, entry_id: 'tl_7' } }));
+    await waitFor(() => expect(useAppStore.getState().agreed).toEqual({ '18754': { window: null, entry_id: 'tl_7', applied: true } }));
     expect(within(rowOf('18754')).getByText('сказали, что сегодня не приедем')).toBeInTheDocument();
   });
 
   it('takes the mark back by deleting its event from the time bar', async () => {
     const state = callingDay();
-    const agreed = { '46393': { window: { start: '16:00', end: '18:00', asap: false }, entry_id: 'tl_7' } };
-    resetStore({ datasetId: 'd_test', state: { ...state, agreed }, agreed, clock: '13:00', config: makeConfig() });
+    const told = { window: { start: '16:00', end: '18:00', asap: false }, entry_id: 'tl_7' };
+    resetStore({
+      datasetId: 'd_test',
+      state: { ...state, agreed: { '46393': told } },
+      agreed: { '46393': { ...told, applied: true } },
+      clock: '13:00',
+      config: makeConfig(),
+    });
     vi.mocked(api.deleteTimelineEvent).mockResolvedValue(state);
     render(<CommunicationsTab />);
 
@@ -186,15 +194,21 @@ describe('CommunicationsTab', () => {
     expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('46393', '13:00'), 'keep');
   });
 
-  it('does not offer to cancel or to agree about a request that is already being worked on', () => {
-    // 86160 начали в 12:00 и закрепили: отменять её поздно, хотя в окно клиента бригада уже не успевает. И звонок
-    // окна ей не поменяет — сервер такое событие не примет, клиенту говорят, что бригада у него.
+  it('lets go of a request that is already being worked on: there is nothing left to do about it', () => {
+    // В 15:30 бригада уже у клиента 86160: окно называть поздно, а ни звонка, ни отмены сервер по ней не примет.
+    // Строка не висит с выключенными кнопками и не считается в бейдже вкладки.
+    const badge = PANEL_TABS.find((tab) => tab.id === 'communications')!.badge!;
+    useAppStore.setState({ clock: '15:05' });
+    const { unmount } = render(<CommunicationsTab />);
+    expect(within(rowOf('86160')).getByRole('button', { name: '✓ Согласовано' })).toBeEnabled();
+    expect(badge(useAppStore.getState())).toBe(3);
+    unmount();
+
+    useAppStore.setState({ clock: '15:30' });
     render(<CommunicationsTab />);
-    expect(within(rowOf('86160')).getByRole('button', { name: '✕ Клиент отказался' })).toBeDisabled();
-    const agree = within(rowOf('86160')).getByRole('button', { name: '✓ Согласовано' });
-    expect(agree).toBeDisabled();
-    expect(agree).toHaveAttribute('title', 'Работа уже началась, отметить звонок нельзя');
-    expect(within(rowOf('46393')).getByRole('button', { name: '✓ Согласовано' })).toBeEnabled();
+    expect(screen.queryByText('86160')).toBeNull();
+    expect(rows()).toHaveLength(2);
+    expect(badge(useAppStore.getState())).toBe(2);
   });
 
   it('opens the request of a clicked row', () => {

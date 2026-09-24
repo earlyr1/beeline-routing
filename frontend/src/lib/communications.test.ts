@@ -30,7 +30,8 @@ const withVisit =
       state,
       state.plan.routes.map((route) => ({
         ...route,
-        visits: route.visits.map((visit) => (visit.request_id === requestId ? { ...visit, start, end } : visit)),
+        // Переехавший визит — не начатая работа: закрепления прежнего времени у него нет.
+        visits: route.visits.map((visit) => (visit.request_id === requestId ? { ...visit, start, end, pinned: false } : visit)),
       })),
     );
 
@@ -117,12 +118,12 @@ const calls = (planning: PlanningState, agreed: AgreedMarks = {}, clock: HHMM = 
  * поэтому день к ней — с этим окном (withWindow).
  */
 const told = (requestId: string, window: { start: HHMM; end: HHMM } | null): AgreedMarks => ({
-  [requestId]: { window: window && { ...window, asap: false }, entry_id: 'tl_9' },
+  [requestId]: { window: window && { ...window, asap: false }, entry_id: 'tl_9', applied: true },
 });
 
 /** Отметка, чьё событие ещё в пути: окна заявки оно пока не поменяло, снять её нечем. */
 const inFlight = (requestId: string, window: { start: HHMM; end: HHMM } | null): AgreedMarks => ({
-  [requestId]: { window: window && { ...window, asap: false }, entry_id: null },
+  [requestId]: { window: window && { ...window, asap: false }, entry_id: null, applied: false },
 });
 
 const ids = (rows: { requestId: string }[]) => rows.map((row) => row.requestId);
@@ -306,17 +307,24 @@ describe('callList', () => {
     expect(calls(applied, told('86160', named)).agreed.map(callAgreedText)).toEqual(['договорились на окно 14:00–16:00']);
   });
 
-  it('does not name a window that ran out while the brigade was already at the client', () => {
-    // Визит 13:50–15:00 ещё идёт, а слот вокруг его начала (12:00–14:00) к 14:20 уже кончился.
+  it('lets go of the work that has already started: the brigade is at the client', () => {
+    // До начала визита диспетчер называет слот вокруг него как обычно.
     const late = day(withVisit('46393', '13:50', '15:00'));
-    const underway = row(calls(late, {}, '14:20').pending, '46393');
-    expect(underway).toMatchObject({ kind: 'outside', underway: true, promise: { start: '12:00', end: '14:00' } });
-    expect(callChangeText(underway)).toBe('не попадаем в окно 15:00–17:00 — бригада уже у клиента');
-
-    // Пока слот идёт, диспетчер называет его как обычно.
-    expect(callChangeText(row(calls(late, {}, '13:55').pending, '46393'))).toBe(
+    expect(callChangeText(row(calls(late, {}, '13:45').pending, '46393'))).toBe(
       'не попадаем в окно 15:00–17:00 — назовите окно 12:00–14:00',
     );
+    // Работа началась: называть окно поздно, а звонок о ней сервер не примет — строки нет, хотя визит ещё идёт.
+    expect(ids(calls(late, {}, '13:55').pending)).not.toContain('46393');
+    // Закреплённая работа тоже начатая, какое бы время ни стояло на часах.
+    const pinned = withRoutes(late, late.plan.routes.map((route) => ({
+      ...route,
+      visits: route.visits.map((visit) => (visit.request_id === '46393' ? { ...visit, pinned: true } : visit)),
+    })));
+    expect(ids(calls(pinned, {}, '13:45').pending)).not.toContain('46393');
+    // С клиентом уже договорились — отметка остаётся на месте до конца визита, её ещё можно снять.
+    const agreed = told('46393', { start: '12:00', end: '14:00' });
+    const settled = day(withWindow('46393', '12:00', '14:00'), withVisit('46393', '13:50', '15:00'));
+    expect(ids(calls(settled, agreed, '14:20').agreed)).toEqual(['46393']);
   });
 
   it('sorts the calls: the broken promises first, then by the time of the day', () => {
@@ -328,8 +336,8 @@ describe('callList', () => {
   it('lets go of the visits that are already over', () => {
     // К девяти вечера все визиты плана закончились: звонить остаётся только тому, к кому сегодня не приедут.
     expect(ids(calls(day(), {}, '21:00').pending)).toEqual(['18754']);
-    // И до конца визита строка на месте: 86160 не успевает в окно и идёт до 16:10.
-    expect(ids(calls(day(withVisit('86160', '15:10', '16:10')), {}, '15:30').pending)).toContain('86160');
+    // А до начала визита строка на месте: 86160 не успевает в окно и начнётся в 15:10.
+    expect(ids(calls(day(withVisit('86160', '15:10', '16:10')), {}, '15:05').pending)).toContain('86160');
   });
 
   it('takes the window of a request accepted during the day from the event that brought it in', () => {

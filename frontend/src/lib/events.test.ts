@@ -736,6 +736,11 @@ describe('request reassignment', () => {
     expect(lockOf(requestOf('74198'))).toEqual({ disabled: true, title: 'Работа уже началась, переназначить нельзя' });
     expect(lockOf(requestOf('50104'), { clock: '14:30' })).toEqual({ disabled: true, title: 'Работа уже началась, переназначить нельзя' });
     expect(lockOf(requestOf('10135'))).toEqual({ disabled: true, title: 'Заявка отменена' });
+    // Клиенту сказали, что сегодня не приедем: переназначение такой заявки сервер отклонит всегда.
+    expect(lockOf({ ...requestOf('18754'), status: 'postponed' })).toEqual({
+      disabled: true,
+      title: 'Заявка перенесена: клиенту сказали, что сегодня не приедем',
+    });
     expect(lockOf({ ...requestOf('18754'), lat: null, lon: null })).toEqual({
       disabled: true,
       title: 'Адрес не найден на карте, назначить бригаду нельзя',

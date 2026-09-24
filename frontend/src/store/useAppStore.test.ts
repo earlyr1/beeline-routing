@@ -1136,16 +1136,16 @@ describe('agreed windows of the calls to clients', () => {
 
     const sent = useAppStore.getState().markAgreed('50104');
     // Строка уходит вниз, не дожидаясь ответа: диспетчер уже положил трубку. Снять её пока нечем.
-    expect(useAppStore.getState().agreed).toEqual({ '50104': { window, entry_id: null } });
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { window, entry_id: null, applied: false } });
     await sent;
     // Без стратегии: нужно ли окно выбора, решит сервер, как у любого события.
     expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', agreementEvent('50104', window, '13:00'), undefined);
-    expect(useAppStore.getState().agreed).toEqual({ '50104': { window, entry_id: 'tl_7' } });
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { window, entry_id: 'tl_7', applied: true } });
 
     // К 18754 сегодня не приедут: звонок значит, что клиенту так и сказали, и заявка переносится.
     await useAppStore.getState().markAgreed('18754');
     expect(api.addTimelineEvent).toHaveBeenLastCalledWith('d_test', agreementEvent('18754', null, '13:00'), undefined);
-    expect(useAppStore.getState().agreed['18754']).toEqual({ window: null, entry_id: 'tl_7' });
+    expect(useAppStore.getState().agreed['18754']).toEqual({ window: null, entry_id: 'tl_7', applied: true });
   });
 
   it('brings the row back to the calls when the server did not take the call', async () => {
@@ -1161,7 +1161,7 @@ describe('agreed windows of the calls to clients', () => {
   it('shows the marks the server sends with the plan and nothing else', () => {
     const mark = { window, entry_id: 'tl_7' };
     useAppStore.getState().setPlanningState(makePlanningState({ agreed: { '50104': mark } }));
-    expect(useAppStore.getState().agreed).toEqual({ '50104': mark });
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { ...mark, applied: true } });
 
     // Часы ушли раньше звонка, день пересчитали или сбросили события: в ответе отметки больше нет.
     useAppStore.getState().setPlanningState(at('00:00'));
@@ -1181,12 +1181,31 @@ describe('agreed windows of the calls to clients', () => {
     expect(useAppStore.getState().agreed['50104']).toBeDefined();
     // Пока звонок в очереди, приходит ответ запроса, стоявшего раньше него: отметки в нём ещё нет.
     useAppStore.getState().setPlanningState(makePlanningState({ version: 5 }));
-    expect(useAppStore.getState().agreed['50104']).toEqual({ window, entry_id: null });
+    expect(useAppStore.getState().agreed['50104']).toEqual({ window, entry_id: null, applied: false });
 
     await vi.waitFor(() => expect(api.addTimelineEvent).toHaveBeenCalled());
     answer(makePlanningState({ version: 6, agreed: { '50104': { window, entry_id: 'tl_7' } } }));
     await sent;
-    expect(useAppStore.getState().agreed['50104']).toEqual({ window, entry_id: 'tl_7' });
+    expect(useAppStore.getState().agreed['50104']).toEqual({ window, entry_id: 'tl_7', applied: true });
+  });
+
+  it('keeps the mark of a call that waits for a choice of the variant', async () => {
+    // Сервер остановил часы на самом звонке: он ждёт выбора и ещё не применён, договорённости в плане нет.
+    // Отметка остаётся, и снять её можно, удалив событие; повторный ✓ второй звонок на шкалу не поставит.
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '13:00' });
+    const call = agreementEvent('50104', window, '13:00');
+    const waiting = makeTimelineItem({ id: 'tl_8', event: call, status: 'awaiting', variant: null });
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(makePlanningState({ version: 5, cursor: '13:00', timeline: [waiting] }));
+
+    await useAppStore.getState().markAgreed('50104');
+    expect(useAppStore.getState().agreed).toEqual({ '50104': { window, entry_id: 'tl_8', applied: false } });
+
+    // Звонок встал за чужим событием, которое ждёт выбора: он тоже уже был.
+    const blocked = makeTimelineItem({ id: 'tl_9', event: { ...call, request_id: '18754', agreed_window: null }, status: 'pending' });
+    const ahead = makeTimelineItem({ id: 'tl_10', event: { ...call, time: '15:00', request_id: '46393' }, status: 'pending' });
+    useAppStore.getState().setPlanningState(makePlanningState({ version: 6, cursor: '13:00', timeline: [blocked, ahead] }));
+    // А звонок впереди часов ещё не случился: отметки у него нет.
+    expect(useAppStore.getState().agreed).toEqual({ '18754': { window: null, entry_id: 'tl_9', applied: false } });
   });
 
   it('takes back only its own mark when the server did not accept it', async () => {
@@ -1208,7 +1227,7 @@ describe('agreed windows of the calls to clients', () => {
     expect(Object.keys(useAppStore.getState().agreed)).toEqual(['18754']);
     expect(useAppStore.getState().error).toBe('Не удалось сохранить: база недоступна.');
     await kept;
-    expect(useAppStore.getState().agreed).toEqual({ '18754': { window: null, entry_id: 'tl_7' } });
+    expect(useAppStore.getState().agreed).toEqual({ '18754': { window: null, entry_id: 'tl_7', applied: true } });
   });
 
   it('sends the cancellation of a client who refused with the chosen strategy', async () => {
