@@ -1,21 +1,34 @@
-"""Бейджи README: покрытие backend и frontend и число прошедших тестов — SVG в стиле shields.io (flat).
+"""Бейджи README: число тестов и покрытие backend и frontend — SVG в стиле shields.io (flat).
 
 Репозиторий закрытый, и shields.io до его прогонов не достать, поэтому числа считает сам CI: job badges
-в .github/workflows/ci.yml запускает этот скрипт после зелёного прогона верхушки main и кладёт SVG в ветку
-badges, откуда их берёт README. Только стандартная библиотека: в job нет ни uv, ни окружения backend. Лежит
-в backend/scripts, чтобы его проверяли те же ruff и mypy, что и остальной backend.
+в .github/workflows/ci.yml запускает этот скрипт на каждом пуше в main, чем бы ни кончились тесты, и кладёт
+SVG в ветку badges, откуда их берёт README. Только стандартная библиотека: в job нет ни uv, ни окружения
+backend. Лежит в backend/scripts, чтобы его проверяли те же ruff, mypy и тесты (tests/test_badges.py), что
+и весь backend.
 
     python3 backend/scripts/badges.py OUT_DIR \\
-        --backend-coverage backend/coverage.json \\
-        --frontend-coverage frontend/coverage/coverage-summary.json \\
-        --junit junit-backend.xml junit-backend-db.xml junit-frontend.xml
+        --backend-coverage reports/coverage-backend.json \\
+        --frontend-coverage reports/coverage-frontend/coverage-summary.json \\
+        --junit backend=reports/junit-backend.xml frontend=reports/junit-frontend.xml \\
+        --status backend=success frontend=failure backend-coverage=success frontend-coverage=failure
 
-Каждый вход необязателен: чего не дали, того бейджа и не будет.
     --backend-coverage   отчёт `coverage json` (уже сложенный из прогона без базы и прогона на Postgres);
     --frontend-coverage  json-summary от vitest --coverage;
-    --junit              отчёты JUnit XML pytest и vitest: тест в нескольких отчётах считается в каждом.
+    --junit              отчёты JUnit XML pytest и vitest, ИМЯ=ПУТЬ, где ИМЯ — шаг, который пишет отчёт;
+    --status             чем кончился шаг, давший вход, ИМЯ=success|failure|cancelled|skipped, где ИМЯ — имя
+                         из --junit, backend-coverage или frontend-coverage. Без --status все шаги считаются
+                         успешными (запуск руками), с ним итог нужен каждому входу.
+Чего не дали, того бейджа и не будет.
 
-Процент покрытия — по строкам и округлён вниз до десятых: 89,96% не станет «90.0%».
+Зелёным бейдж бывает, только если за ним успешный шаг и настоящие данные:
+- отчёта нет, он не читается или в нём ноль (ни строки кода, ни одного теста) — серый «unknown»;
+- покрытие упавшего шага (ниже порога, упавший тест) — измеренный процент, но красный;
+- тесты красные, если в отчёте есть упавший или сломанный тест, если шаг с тестами не оставил отчёта или если
+  он упал, хотя в отчёте всё прошло;
+- шаг пропущен или отменён — его отчёту не верят, даже если файл есть: он мог остаться от прошлой попытки.
+
+Процент покрытия — по строкам, округлён вниз до десятых: 89,96% не станет «90.0%». Тест, попавший в несколько
+отчётов, считается в каждом.
 """
 
 from __future__ import annotations
@@ -25,6 +38,9 @@ import json
 import math
 import sys
 import xml.etree.ElementTree as ET
+from collections.abc import Callable
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -48,8 +64,33 @@ _COLORS = {
     "yellow": "#dfb317",
     "orange": "#fe7d37",
     "red": "#e05d44",
+    "lightgrey": "#9f9f9f",
 }
 _COVERAGE_SCALE = ((95, "brightgreen"), (90, "green"), (80, "yellowgreen"), (70, "yellow"), (60, "orange"))
+
+# Итоги job и шагов в GitHub Actions: needs.<job>.result и steps.<id>.outcome.
+SUCCESS = "success"
+RESULTS = frozenset({SUCCESS, "failure", "cancelled", "skipped"})
+UNKNOWN = "unknown"
+BACKEND_COVERAGE = "backend-coverage"
+FRONTEND_COVERAGE = "frontend-coverage"
+
+# Чем может кончиться чтение отчёта, которого нет, который обрезан или не того формата.
+_BROKEN = (OSError, ValueError, KeyError, TypeError, ET.ParseError)
+
+
+@dataclass(frozen=True)
+class Badge:
+    label: str
+    value: str
+    color: str
+
+    def svg(self) -> str:
+        return render(self.label, self.value, self.color)
+
+
+def unknown(label: str) -> Badge:
+    return Badge(label, UNKNOWN, "lightgrey")
 
 
 def text_width(text: str) -> float:
@@ -87,77 +128,180 @@ def render(label: str, value: str, color: str) -> str:
     )
 
 
-def coverage_color(percent: float) -> str:
+def warn(message: str) -> None:
+    """Предупреждение в сводку прогона GitHub Actions; при запуске руками — просто строка в выводе."""
+    print(f"::warning::{message}")
+
+
+def coverage_color(percent: Fraction) -> str:
     return next((color for bound, color in _COVERAGE_SCALE if percent >= bound), "red")
 
 
-def coverage_badge(label: str, percent: float) -> str:
-    shown = math.floor(percent * 10) / 10
-    return render(label, f"{shown:.1f}%", coverage_color(percent))
+def coverage_badge(label: str, covered: int, total: int, *, failed: bool = False) -> Badge:
+    """Процент строк: считается точной дробью, показывается округлённым вниз до десятых.
+
+    Шаг упал — процент тот же, но красный. Строк с кодом ноль — серый «unknown», а не 100%: так выглядит,
+    например, опечатка в списке файлов покрытия, и зелёным её не показать.
+    """
+    if total <= 0:
+        warn(f"{label}: в отчёте ни одной строки кода")
+        return unknown(label)
+    percent = Fraction(100 * covered, total)
+    tenths = math.floor(percent * 10)
+    return Badge(label, f"{tenths // 10}.{tenths % 10}%", "red" if failed else coverage_color(percent))
 
 
-def backend_percent(path: Path) -> float:
-    """Процент строк из отчёта `coverage json`: покрытые строки к строкам с кодом."""
+def backend_lines(path: Path) -> tuple[int, int]:
+    """Покрытые строки и строки с кодом из отчёта `coverage json`."""
     totals = json.loads(path.read_text(encoding="utf-8"))["totals"]
-    statements = totals["num_statements"]
-    return 100.0 * totals["covered_lines"] / statements if statements else 100.0
+    return int(totals["covered_lines"]), int(totals["num_statements"])
 
 
-def frontend_percent(path: Path) -> float:
-    """Процент строк из json-summary vitest (v8)."""
+def frontend_lines(path: Path) -> tuple[int, int]:
+    """Покрытые строки и строки с кодом из json-summary vitest (v8)."""
     lines = json.loads(path.read_text(encoding="utf-8"))["total"]["lines"]
-    return 100.0 * lines["covered"] / lines["total"] if lines["total"] else 100.0
+    return int(lines["covered"]), int(lines["total"])
 
 
-def count_tests(paths: list[Path]) -> tuple[int, int]:
-    """Прошедшие и упавшие тесты по отчётам JUnit: пропущенные не идут ни туда, ни туда.
+def ran(result: str) -> bool:
+    """Шаг дошёл до конца, успешно или нет. У пропущенного или отменённого шага отчёта этого прогона нет, а файл
+    с тем же именем может остаться от прошлой попытки (Re-run): такому не верить."""
+    return result in (SUCCESS, "failure")
+
+
+def coverage_from_report(
+    label: str, path: Path, read: Callable[[Path], tuple[int, int]], result: str
+) -> Badge:
+    if not ran(result):
+        warn(f"{label}: шаг покрытия {result}, отчёта этого прогона нет")
+        return unknown(label)
+    try:
+        covered, total = read(path)
+    except _BROKEN as error:
+        warn(f"{label}: отчёт {path} не прочитать: {error}")
+        return unknown(label)
+    return coverage_badge(label, covered, total, failed=result != SUCCESS)
+
+
+def count_tests(path: Path) -> tuple[int, int]:
+    """Прошедшие и упавшие тесты отчёта JUnit: пропущенные не идут ни туда, ни туда.
 
     У pytest и vitest отчёты устроены одинаково: <testcase> на тест, внутри <failure> или <error> — упал,
     <skipped> — пропущен (у pytest так же пишется xfail), пусто — прошёл.
     """
     passed = failed = 0
-    for path in paths:
-        for case in ET.parse(path).getroot().iter("testcase"):
-            tags = {child.tag for child in case}
-            if tags & {"failure", "error"}:
-                failed += 1
-            elif "skipped" not in tags:
-                passed += 1
+    for case in ET.parse(path).getroot().iter("testcase"):
+        tags = {child.tag for child in case}
+        if tags & {"failure", "error"}:
+            failed += 1
+        elif "skipped" not in tags:
+            passed += 1
     return passed, failed
 
 
-def tests_badge(passed: int, failed: int) -> str:
-    if failed:
-        return render("tests", f"{passed} passed, {failed} failed", "red")
-    return render("tests", f"{passed} passed", "brightgreen")
+def tests_badge(reports: dict[str, Path], results: dict[str, str]) -> Badge:
+    """Сумма по отчётам JUnit всех шагов с тестами; results — итоги этих шагов.
+
+    Зелёный — только если каждый шаг успешен и его отчёт прочитан без упавших тестов.
+    """
+    passed = failed = 0
+    no_report: list[str] = []  # шаг не успешен, а отчёта нет: тесты не запускались или оборвались на полпути
+    silent: list[str] = []  # шаг упал, а в отчёте ни одного упавшего теста: ошибка вне тестов
+    in_doubt = False  # шаг успешен, а отчёта нет или он битый: сумме всё равно не верить
+    for name, path in reports.items():
+        result = results[name]
+        if not ran(result):
+            warn(f"tests: шаг {name} {result}, отчёта этого прогона нет")
+            no_report.append(name)
+            continue
+        try:
+            step_passed, step_failed = count_tests(path)
+        except _BROKEN as error:
+            warn(f"tests: отчёт {name} ({path}) не прочитать: {error}")
+            if result == SUCCESS:
+                in_doubt = True
+            else:
+                no_report.append(name)
+            continue
+        passed += step_passed
+        failed += step_failed
+        if result != SUCCESS and not step_failed:
+            silent.append(name)
+    if failed or no_report or silent:
+        parts = [f"{passed} passed"] if passed else []
+        if failed:
+            parts.append(f"{failed} failed")
+        if silent:
+            parts.append(f"{', '.join(silent)} failed")
+        if no_report:
+            parts.append(f"no report from {', '.join(no_report)}")
+        return Badge("tests", ", ".join(parts), "red")
+    if in_doubt:
+        return unknown("tests")
+    if not passed:
+        warn("tests: в отчётах ни одного прошедшего теста")
+        return unknown("tests")
+    return Badge("tests", f"{passed} passed", "brightgreen")
+
+
+def _pair(text: str) -> tuple[str, str]:
+    name, sep, value = text.partition("=")
+    if not sep or not name:
+        raise argparse.ArgumentTypeError(f"нужно ИМЯ=ЗНАЧЕНИЕ, а не {text!r}")
+    return name, value
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="SVG-бейджи покрытия и тестов для README.")
+    parser = argparse.ArgumentParser(description="SVG-бейджи тестов и покрытия для README.")
     parser.add_argument("out_dir", type=Path, help="куда положить SVG")
     parser.add_argument("--backend-coverage", type=Path, help="отчёт `coverage json`")
     parser.add_argument("--frontend-coverage", type=Path, help="json-summary от vitest --coverage")
-    parser.add_argument("--junit", type=Path, nargs="+", default=[], help="отчёты JUnit XML")
+    parser.add_argument(
+        "--junit", type=_pair, nargs="+", default=[], metavar="ИМЯ=ПУТЬ", help="отчёты JUnit XML"
+    )
+    parser.add_argument(
+        "--status", type=_pair, nargs="+", metavar="ИМЯ=ИТОГ", help="итоги шагов, давших входы"
+    )
     args = parser.parse_args(argv)
 
-    badges: dict[str, str] = {}
+    reports = {name: Path(path) for name, path in args.junit}
+    if len(reports) != len(args.junit):
+        parser.error("имена в --junit повторяются")
+    inputs = list(reports)
     if args.backend_coverage:
-        badges["coverage-backend.svg"] = coverage_badge(
-            "backend coverage", backend_percent(args.backend_coverage)
-        )
+        inputs.append(BACKEND_COVERAGE)
     if args.frontend_coverage:
-        badges["coverage-frontend.svg"] = coverage_badge(
-            "frontend coverage", frontend_percent(args.frontend_coverage)
-        )
-    if args.junit:
-        badges["tests.svg"] = tests_badge(*count_tests(args.junit))
-    if not badges:
+        inputs.append(FRONTEND_COVERAGE)
+    if not inputs:
         parser.error("не дано ни одного входа: нечего рисовать")
 
+    if args.status is None:
+        results = dict.fromkeys(inputs, SUCCESS)
+    else:
+        results = dict(args.status)
+        # Итог, которого не дали, не додумывается: опечатка в workflow не должна красить бейдж зелёным.
+        if len(results) != len(args.status) or sorted(results) != sorted(inputs):
+            given = ", ".join(name for name, _ in args.status)
+            parser.error(f"--status нужен ровно по разу для {', '.join(inputs)}, а дан для {given}")
+        if wrong := sorted(f"{name}={value}" for name, value in results.items() if value not in RESULTS):
+            parser.error(f"итог шага — {', '.join(sorted(RESULTS))}, а не {', '.join(wrong)}")
+
+    badges: dict[str, Badge] = {}
+    if reports:
+        badges["tests.svg"] = tests_badge(reports, results)
+    if args.backend_coverage:
+        badges["coverage-backend.svg"] = coverage_from_report(
+            "backend coverage", args.backend_coverage, backend_lines, results[BACKEND_COVERAGE]
+        )
+    if args.frontend_coverage:
+        badges["coverage-frontend.svg"] = coverage_from_report(
+            "frontend coverage", args.frontend_coverage, frontend_lines, results[FRONTEND_COVERAGE]
+        )
+
     args.out_dir.mkdir(parents=True, exist_ok=True)
-    for name, svg in badges.items():
-        (args.out_dir / name).write_text(svg, encoding="utf-8")
-        print(f"{name}: {ET.fromstring(svg).get('aria-label')}")
+    for name, badge in badges.items():
+        (args.out_dir / name).write_text(badge.svg(), encoding="utf-8")
+        print(f"{name}: {badge.label}: {badge.value} ({badge.color})")
     return 0
 
 

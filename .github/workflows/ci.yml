@@ -4,7 +4,8 @@
 # main, не выкатывается (job tip): иначе поздно дотестированный старый коммит откатил бы сервер назад.
 #
 # Покрытие и число тестов для бейджей README меряются здесь же, в прогонах тестов: job coverage складывает
-# покрытие двух прогонов backend и держит порог, job badges рисует SVG и кладёт их в ветку badges.
+# покрытие двух прогонов backend и держит порог, job badges рисует SVG и кладёт их в ветку badges — на каждом
+# пуше в main, и на красном тоже.
 #
 # Настройки репозитория (кладёт infra/github/set_secrets.py):
 #   переменные — YC_SA_ID (сервисный аккаунт routing-ci), YC_REGISTRY_ID, VM_HOST (публичный IP),
@@ -47,12 +48,14 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/reports/backend.coverage
         run: make test PYTEST_ARGS="--cov --cov-report= --junitxml=$GITHUB_WORKSPACE/reports/junit-backend.xml"
       # Рядом с backend.coverage могут лежать файлы процессов пула OR-Tools, дописанные уже после pytest:
-      # job coverage сложит и их.
+      # job coverage сложит и их. Отчёты грузятся и после упавшего теста — по ним бейдж tests покажет, сколько
+      # упало; если job упал раньше pytest (ruff, mypy), отчётов нет, и бейдж скажет об этом сам.
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: reports-backend
           path: reports/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
           # Re-run (им же делается откат) грузит отчёты заново под тем же именем.
           overwrite: true
@@ -92,10 +95,11 @@ jobs:
           COVERAGE_FILE: ${{ github.workspace }}/reports/backend-db.coverage
         run: uv run pytest -o addopts= -q -m db --cov --cov-report= --junitxml=../reports/junit-backend-db.xml
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: reports-backend-db
           path: reports/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
           overwrite: true
 
@@ -106,6 +110,10 @@ jobs:
     defaults:
       run:
         working-directory: frontend
+    # Итог самого vitest для бейджей tests и покрытия фронта: они краснеют от упавшего теста или порога,
+    # а не от сборки после них.
+    outputs:
+      vitest: ${{ steps.vitest.outcome }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -120,24 +128,26 @@ jobs:
       - run: npx tsc --noEmit
       # Порог покрытия — thresholds в vite.config.ts: ниже него vitest падает, как на упавшем тесте.
       - name: vitest с покрытием
+        id: vitest
         run: >-
           npx vitest run --coverage --coverage.reportsDirectory=../reports/coverage-frontend
           --reporter=default --reporter=junit --outputFile.junit=../reports/junit-frontend.xml
       - run: npm run build
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: reports-frontend
           path: |
             reports/junit-frontend.xml
             reports/coverage-frontend/coverage-summary.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
           overwrite: true
 
   # Покрытие backend: прогон без базы не проходит код хранилища на Postgres, прогон с базой — всё остальное,
   # поэтому честный процент есть только у суммы двух. Порог — чуть ниже измеренного (24.09.2026: 95,5% строк,
-  # без базы 92,3%): заметное падение покрытия краснит CI и не пускает выкат, и бейдж не может тихо показать
-  # меньше. Выросло — порог можно поднять.
+  # без базы 92,3%): заметное падение покрытия краснит CI и бейдж и не пускает выкат. Выросло — порог можно
+  # поднять.
   coverage:
     name: backend — покрытие двух прогонов вместе
     needs: [backend, backend-db]
@@ -164,25 +174,29 @@ jobs:
       # Для отчёта нужен только coverage: без --only-dev uv ставил бы и OR-Tools со всем backend.
       - name: coverage combine
         run: uv run --frozen --only-dev coverage combine ../reports/*.coverage*
+      # Отчёт для бейджа — до проверки порога: процент ниже порога бейдж тоже покажет, только красным.
+      - run: uv run --frozen --only-dev coverage json -o ../reports/coverage-backend.json
       - name: coverage report
         run: uv run --frozen --only-dev coverage report --sort=cover --fail-under="$FAIL_UNDER"
-      - run: uv run --frozen --only-dev coverage json -o ../reports/coverage-backend.json
       - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
         with:
           name: reports-coverage
           path: reports/coverage-backend.json
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 7
           overwrite: true
 
-  # Бейджи README: покрытие backend и frontend и число прошедших тестов. Репозиторий закрытый, shields.io до его
-  # прогонов не дотянуться, поэтому SVG рисует backend/scripts/badges.py, а README берёт их из ветки badges —
-  # отдельной истории без кода. Только пуш в main, только зелёный прогон и только верхушка main: числа на бейджах
-  # всегда от последнего зелёного main. Упал прогон — краснеет бейдж ci, а числа остаются от предыдущего.
+  # Бейджи README: число тестов и покрытие backend и frontend. Репозиторий закрытый, shields.io до его прогонов
+  # не дотянуться, поэтому SVG рисует backend/scripts/badges.py, а README берёт их из ветки badges — отдельной
+  # истории без кода. Рисуются на каждом пуше в main, чем бы ни кончились тесты, если коммит всё ещё верхушка
+  # main: бейджи всегда про последний main, а не про последний зелёный. Упал тест — tests красный и говорит,
+  # сколько упало; покрытие упавшего шага — красное; отчёта нет (job упал раньше тестов, покрытие не считалось) —
+  # серый unknown. Отменённый прогон бейджи не трогает.
   badges:
     name: бейджи README в ветку badges
-    needs: [coverage, frontend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [backend, backend-db, frontend, coverage]
+    if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Право на запись — только здесь, и пишет job только в ветку badges.
@@ -196,17 +210,29 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      # Каких отчётов нет, те бейджи выйдут серыми: сбой скачивания не должен оставить в ветке старые числа.
       - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           pattern: reports-*
           path: reports
           merge-multiple: true
       - name: SVG
+        env:
+          BACKEND: ${{ needs.backend.result }}
+          BACKEND_DB: ${{ needs.backend-db.result }}
+          COVERAGE: ${{ needs.coverage.result }}
+          # Итог самого vitest; не отдал GitHub выход упавшего job — итог всего frontend (бейджи фронта тогда
+          # красные и при упавшей сборке).
+          VITEST: ${{ needs.frontend.outputs.vitest || needs.frontend.result }}
         run: >-
           python3 backend/scripts/badges.py badges
           --backend-coverage reports/coverage-backend.json
           --frontend-coverage reports/coverage-frontend/coverage-summary.json
-          --junit reports/junit-backend.xml reports/junit-backend-db.xml reports/junit-frontend.xml
+          --junit backend=reports/junit-backend.xml backend-db=reports/junit-backend-db.xml
+          frontend=reports/junit-frontend.xml
+          --status "backend=$BACKEND" "backend-db=$BACKEND_DB" "frontend=$VITEST"
+          "backend-coverage=$COVERAGE" "frontend-coverage=$VITEST"
       - name: В ветку badges
         env:
           GH_TOKEN: ${{ github.token }}
