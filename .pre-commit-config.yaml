@@ -35,7 +35,9 @@ repos:
         args: [--unsafe]
       - id: check-toml
       - id: check-merge-conflict
-      # Самый большой файл в репозитории — адреса OSM в data/sources, около 500 КБ.
+      # Самый большой файл в репозитории — адреса OSM в data/sources, около 500 КБ. Презентация (pptx около
+      # 10 МБ) — исключение; её резервные копии не попадут в git через .gitignore.
       - id: check-added-large-files
         args: [--maxkb=1024]
+        exclude: ^presentation/
       - id: detect-private-key

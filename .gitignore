@@ -15,3 +15,5 @@ infra/yc/.state.env
 infra/yc/known_hosts
 # Токен GitHub для infra/github/set_secrets.py.
 GITHUB_MCP_TOKEN
+# Резервные копии презентации: сама она большая, копия рядом удвоила бы размер репозитория.
+presentation/*.bak-*
