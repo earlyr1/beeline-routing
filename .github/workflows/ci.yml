@@ -3,6 +3,9 @@
 # нужного коммита: он соберёт те же образы из кэша и выкатит их. Пуш, который к концу тестов уже не верхушка
 # main, не выкатывается (job tip): иначе поздно дотестированный старый коммит откатил бы сервер назад.
 #
+# Покрытие и число тестов для бейджей README меряются здесь же, в прогонах тестов: job coverage складывает
+# покрытие двух прогонов backend и держит порог, job badges рисует SVG и кладёт их в ветку badges.
+#
 # Настройки репозитория (кладёт infra/github/set_secrets.py):
 #   переменные — YC_SA_ID (сервисный аккаунт routing-ci), YC_REGISTRY_ID, VM_HOST (публичный IP),
 #   SITE_HOST (имя в nip.io для ключа Яндекс Карт), TLS_MODE;
@@ -38,8 +41,19 @@ jobs:
         run: make lint
       - name: make typecheck
         run: make typecheck
+      # С покрытием и отчётом JUnit: их забирают job coverage и badges.
       - name: make test
-        run: make test
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/reports/backend.coverage
+        run: make test PYTEST_ARGS="--cov --cov-report= --junitxml=$GITHUB_WORKSPACE/reports/junit-backend.xml"
+      # Рядом с backend.coverage могут лежать файлы процессов пула OR-Tools, дописанные уже после pytest:
+      # job coverage сложит и их.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reports-backend
+          path: reports/
+          if-no-files-found: error
+          retention-days: 7
 
   backend-db:
     name: backend — тесты на Postgres (маркер db)
@@ -72,7 +86,15 @@ jobs:
       - run: python -m pip install uv==0.12.13
       - name: pytest -m db
         working-directory: backend
-        run: uv run pytest -o addopts= -q -m db
+        env:
+          COVERAGE_FILE: ${{ github.workspace }}/reports/backend-db.coverage
+        run: uv run pytest -o addopts= -q -m db --cov --cov-report= --junitxml=../reports/junit-backend-db.xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reports-backend-db
+          path: reports/
+          if-no-files-found: error
+          retention-days: 7
 
   frontend:
     name: frontend — tsc, vitest, сборка
@@ -93,15 +115,136 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npx tsc --noEmit
-      - run: npx vitest run
+      # Порог покрытия — thresholds в vite.config.ts: ниже него vitest падает, как на упавшем тесте.
+      - name: vitest с покрытием
+        run: >-
+          npx vitest run --coverage --coverage.reportsDirectory=../reports/coverage-frontend
+          --reporter=default --reporter=junit --outputFile.junit=../reports/junit-frontend.xml
       - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reports-frontend
+          path: |
+            reports/junit-frontend.xml
+            reports/coverage-frontend/coverage-summary.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Покрытие backend: прогон без базы не проходит код хранилища на Postgres, прогон с базой — всё остальное,
+  # поэтому честный процент есть только у суммы двух. Порог — чуть ниже измеренного (24.09.2026: 95,5% строк,
+  # без базы 92,3%): заметное падение покрытия краснит CI и не пускает выкат, и бейдж не может тихо показать
+  # меньше. Выросло — порог можно поднять.
+  coverage:
+    name: backend — покрытие двух прогонов вместе
+    needs: [backend, backend-db]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      FAIL_UNDER: "94"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install uv==0.12.13
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reports-backend*
+          path: reports
+          merge-multiple: true
+      # Для отчёта нужен только coverage: без --only-dev uv ставил бы и OR-Tools со всем backend.
+      - name: coverage combine
+        run: uv run --frozen --only-dev coverage combine ../reports/*.coverage*
+      - name: coverage report
+        run: uv run --frozen --only-dev coverage report --sort=cover --fail-under="$FAIL_UNDER"
+      - run: uv run --frozen --only-dev coverage json -o ../reports/coverage-backend.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reports-coverage
+          path: reports/coverage-backend.json
+          if-no-files-found: error
+          retention-days: 7
+
+  # Бейджи README: покрытие backend и frontend и число прошедших тестов. Репозиторий закрытый, shields.io до его
+  # прогонов не дотянуться, поэтому SVG рисует scripts/badges.py, а README берёт их из ветки badges — отдельной
+  # истории без кода. Только пуш в main, только зелёный прогон и только верхушка main: числа на бейджах всегда
+  # от последнего зелёного main. Упал прогон — краснеет бейдж ci, а числа остаются от предыдущего.
+  badges:
+    name: бейджи README в ветку badges
+    needs: [coverage, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Право на запись — только здесь, и пишет job только в ветку badges.
+    permissions:
+      contents: write
+    # Ветку badges правит один прогон за раз: два пуша не толкаются, и push всегда fast-forward.
+    concurrency:
+      group: badges
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: reports-*
+          path: reports
+          merge-multiple: true
+      - name: SVG
+        run: >-
+          python3 scripts/badges.py badges
+          --backend-coverage reports/coverage-backend.json
+          --frontend-coverage reports/coverage-frontend/coverage-summary.json
+          --junit reports/junit-backend.xml reports/junit-backend-db.xml reports/junit-frontend.xml
+      - name: В ветку badges
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git init -q -b badges "$RUNNER_TEMP/badges"
+          cd "$RUNNER_TEMP/badges"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Токен — в заголовке, как его кладёт actions/checkout: в адресе remote он попадал бы в вывод git.
+          basic=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          echo "::add-mask::$basic"
+          git config http.https://github.com/.extraheader "AUTHORIZATION: basic $basic"
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          # Пока шли тесты, в main мог прийти новый пуш: его прогон и нарисует бейджи, старые числа не нужны.
+          main_sha=$(git ls-remote origin refs/heads/main | cut -f1)
+          if [[ $main_sha != "$GITHUB_SHA" ]]; then
+            echo "::notice::В main уже $main_sha: бейджи нарисует его прогон"
+            exit 0
+          fi
+          # Ветки badges ещё нет (exit 2) — первый коммит станет её началом.
+          status=0
+          git ls-remote --exit-code --heads origin badges >/dev/null || status=$?
+          if ((status == 0)); then
+            git fetch -q --depth 1 origin badges
+            git reset -q --hard FETCH_HEAD
+          elif ((status != 2)); then
+            exit "$status"
+          fi
+          cp "$GITHUB_WORKSPACE"/badges/*.svg .
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Бейджи не изменились"
+            exit 0
+          fi
+          git commit -q -m "Бейджи по коммиту ${GITHUB_SHA::7}"
+          git push -q origin HEAD:refs/heads/badges
 
   # Выкатывается только верхушка main. Тесты двух близких пушей могут закончиться в обратном порядке, и тогда
   # выкат старого коммита встал бы в очередь за новым и откатил бы сервер. Ручной запуск и Re-run (откат на
   # старый коммит нарочно) проходят всегда. Проверка после тестов: к этому времени более новый пуш уже виден.
   tip:
     name: коммит всё ещё верхушка main
-    needs: [backend, backend-db, frontend]
+    needs: [backend, backend-db, frontend, coverage]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 5

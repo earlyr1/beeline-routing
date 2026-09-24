@@ -20,6 +20,7 @@ dependencies = [
 dev = [
     "mypy>=2.3.1",
     "pytest>=8.3",
+    "pytest-cov>=7.1.0",
     # Та же версия — rev хука ruff в .pre-commit-config.yaml: менять вместе, иначе хук и make lint разойдутся в стиле.
     "ruff==0.16.7",
     "types-pyyaml>=6.0.12.20260906",
@@ -34,6 +35,17 @@ pythonpath = ["."]
 addopts = "-q"
 # db — тест идёт на настоящем Postgres; маркер ставит tests/conftest.py, отбирает его `make test-db`.
 markers = ["db: прогон на настоящей базе (нужен TEST_DATABASE_URL)"]
+
+# Покрытие меряет CI (.github/workflows/ci.yml): прогон без базы и прогон на Postgres пишут каждый свои данные,
+# job coverage их складывает и падает, если процент ниже порога. Локально: `make test PYTEST_ARGS=--cov` —
+# без половин [postgres], поэтому процент там ниже, чем в CI.
+[tool.coverage.run]
+source = ["app"]
+# Пути в данных — от каталога backend: данные двух job складываются, где бы ни лежал checkout.
+relative_files = true
+# Поиск OR-Tools идёт и в процессах пула (app/solvers/portfolio.py, spawn): без multiprocessing их строки
+# считались бы непокрытыми. Каждый процесс пишет свой файл данных, прогон pytest-cov их потом объединяет.
+concurrency = ["thread", "multiprocessing"]
 
 [tool.ruff]
 line-length = 110

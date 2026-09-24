@@ -23,6 +23,7 @@
     "@types/react": "18.3.31",
     "@types/react-dom": "18.3.7",
     "@vitejs/plugin-react": "5.2.0",
+    "@vitest/coverage-v8": "3.2.7",
     "@yandex/ymaps3-types": "1.0.21108841",
     "jsdom": "26.1.0",
     "typescript": "5.9.3",
