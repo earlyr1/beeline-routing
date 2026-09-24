@@ -4,8 +4,6 @@ import type {
   Engineer,
   EventChoice,
   EventVariant,
-  PlanEvent,
-  PlanningState,
   TimelineItem,
   VariantOption,
 } from '../api/types';
@@ -85,19 +83,4 @@ export const ALL_SAME_TEXT = 'Все варианты одинаковые: вы
 export function sameAsText(choice: EventChoice, option: VariantOption, engineers: Engineer[] = []): string | undefined {
   if (option.compared_to) return `То же, что «${choiceVariantTitle(choice, option.compared_to, engineers)}»`;
   return option.recommended && choice.variants.length > 1 ? ALL_SAME_TEXT : undefined;
-}
-
-/**
- * Событие окна выбора варианта с прежней бригадой переназначенной заявки: в окне сервер присылает событие без неё.
- * У применённого события прежнюю бригаду записал сервер на шкале дня, а в текущем плане заявка уже у новой.
- * У события, которое ждёт выбора или впереди, прежняя бригада — бригада заявки в текущем плане: он ещё до события.
- */
-export function choiceEvent(choice: EventChoice, state: PlanningState): PlanEvent {
-  const { event } = choice;
-  if (event.type !== 'request_reassigned' || event.previous_engineer_id) return event;
-  const item = (state.timeline ?? []).find((entry) => entry.id === choice.entry_id);
-  if (item?.status === 'applied') return { ...event, previous_engineer_id: item.event.previous_engineer_id ?? null };
-  const owner = state.plan.routes.find((route) => route.visits.some((visit) => visit.request_id === event.request_id))?.engineer_id;
-  // Заявка без бригады или уже у выбранной: прежней бригады нет.
-  return owner && owner !== event.engineer_id ? { ...event, previous_engineer_id: owner } : event;
 }

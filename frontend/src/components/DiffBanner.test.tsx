@@ -1,7 +1,14 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useAppStore } from '../store/useAppStore';
-import { makeDelayedState, makePlanningState, makeRequestUpdateEvent, makeTransportChangeEvent } from '../test/fixtures';
+import {
+  makeDelayedState,
+  makeDelayEvent,
+  makePlanningState,
+  makeRequestUpdateEvent,
+  makeTimelineItem,
+  makeTransportChangeEvent,
+} from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { DiffBanner } from './DiffBanner';
 
@@ -42,6 +49,16 @@ describe('DiffBanner', () => {
     expect(screen.getByText('Задержка: Бригада Арташкин на 150 мин с 13:30')).toBeInTheDocument();
     const line = screen.getByText('Без перепланирования опоздали бы к 2 клиентам на 35–45 мин');
     expect(line).toHaveAttribute('title', '50104: план 14:00, прогноз 16:35, +35 мин\n46393: план 15:10, прогноз 17:45, +45 мин');
+  });
+
+  it('speaks of the lateness as a fact when the delay went with «ничего не менять»', () => {
+    // Пересчёт ничего не спасал: сервер провёл задержку с «Ничего не менять» без окна, и опоздания остались в плане.
+    const state = makeDelayedState();
+    const timeline = [makeTimelineItem({ id: 'tl_4', event: makeDelayEvent(), status: 'applied', variant: 'keep', variant_auto: true })];
+    resetStore({ state: { ...state, timeline } });
+    render(<DiffBanner />);
+    expect(screen.getByText('Опоздаем к 2 клиентам на 35–45 мин')).toBeInTheDocument();
+    expect(screen.queryByText(/Без перепланирования/)).not.toBeInTheDocument();
   });
 
   it('renders every forecast line on its own and says when nobody would be late', () => {

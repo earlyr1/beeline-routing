@@ -89,7 +89,8 @@ describe('events', () => {
   it('warns that an event before the first shift replans the whole day', () => {
     const { engineers } = makePlanningState();
     expect(beforeShiftsHint('09:59', engineers)).toBe(BEFORE_SHIFTS_HINT);
-    expect(BEFORE_SHIFTS_HINT).toBe('Событие до начала смен: план дня пересчитается целиком');
+    // Пересчитает ли сервер план, решает результат: подсказка не обещает пересчёт, а говорит, каким он будет.
+    expect(BEFORE_SHIFTS_HINT).toBe('Событие до начала смен: пересчёт, если понадобится, захватит весь день');
     expect(beforeShiftsHint('10:00', engineers)).toBeNull();
     expect(beforeShiftsHint('9', engineers)).toBeNull();
     expect(beforeShiftsHint('00:00', [])).toBeNull();
@@ -633,6 +634,18 @@ describe('engineer delay', () => {
     expect(forecastLines(makeDelayForecast({ late_without_replan: [], overtime_without_replan_min: 25 }), requests, engineers)).toEqual([
       'Без перепланирования была бы переработка 25 мин',
     ]);
+  });
+
+  it('speaks of the forecast as a fact when the delay went with «ничего не менять»', () => {
+    // План и есть план без перепланирования: опоздания в нём остались, «бы» тут неправда.
+    expect(forecastLines(makeDelayForecast(), requests, engineers, true)).toEqual(['Опоздаем к 2 клиентам на 35–45 мин']);
+    expect(forecastLines(makeDelayForecast({ overtime_without_replan_min: 25 }), requests, engineers, true)).toEqual([
+      'Опоздаем к 2 клиентам на 35–45 мин и переработка 25 мин',
+    ]);
+    expect(forecastLines(makeDelayForecast({ late_without_replan: [], overtime_without_replan_min: 25 }), requests, engineers, true)).toEqual([
+      'Переработка 25 мин',
+    ]);
+    expect(forecastLines(makeDelayForecast({ late_without_replan: [] }), requests, engineers, true)).toEqual(['Задержка не привела к опозданиям']);
   });
 });
 

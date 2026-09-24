@@ -161,9 +161,12 @@ export function TimeBar() {
                 // Заявку события можно открыть, когда она уже есть в плане: срочная заявка впереди ещё не добавлена.
                 const openable = requestId !== null && state.requests.some((request) => request.id === requestId);
                 // Варианты есть у любого события, которое сервер не отклонил: окно выбора решает не тип события,
-                // а результат, и стратегию, выбранную без окна, диспетчер может сменить.
-                const withVariants = item.status !== 'rejected';
-                const variantText = timelineVariantText(item, state.engineers);
+                // а результат, и стратегию, выбранную без окна, диспетчер может сменить. Кроме событий за тем, которое
+                // ждёт выбора: до них сервер не дойдёт, пока диспетчер не выберет (choosable).
+                const withVariants = item.choosable;
+                // Без стратегии событие либо ждёт выбора, либо ещё не посчитано: «не выбран» — только про первое.
+                const variantText =
+                  timelineVariantText(item, state.engineers) ?? (item.status === 'awaiting' ? 'Вариант не выбран' : null);
                 return (
                 <li key={item.id} className="time-bar__event">
                   {openable ? (
@@ -183,7 +186,7 @@ export function TimeBar() {
                   )}
                   <span className={`time-bar__event-status time-bar__event-status--${item.status}`}>{timelineStatusText(item)}</span>
                   {/* У отклонённого события видна только стратегия, которую выбрал диспетчер: варианты он уже не сменит. */}
-                  {(withVariants || variantText) && <span className="muted">{variantText ?? 'Вариант не выбран'}</span>}
+                  {variantText && <span className="muted">{variantText}</span>}
                   {withVariants && (
                     <button
                       type="button"

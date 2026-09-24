@@ -315,6 +315,37 @@ describe('TimeBar', () => {
     expect(within(chosen).queryByRole('button', { name: 'Варианты…' })).not.toBeInTheDocument();
   });
 
+  it('offers no variants behind an event that waits for a choice and does not call an uncounted event unchosen', () => {
+    // Часы встали на недоступности в 13:00; отмену в 14:30 сервер не считал: до неё проход дойдёт после выбора.
+    const timeline = [
+      makeTimelineItem({ id: 'tl_2', event: makeEventChoice().event, status: 'awaiting', variant: null }),
+      makeTimelineItem({
+        id: 'tl_3',
+        event: { type: 'cancel', time: '14:30', request: null, request_id: '74198', engineer_id: null },
+        status: 'pending',
+        choosable: false,
+      }),
+      makeTimelineItem({
+        id: 'tl_4',
+        event: { type: 'cancel', time: '16:30', request: null, request_id: '46393', engineer_id: null },
+        status: 'pending',
+      }),
+    ];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
+    render(<TimeBar />);
+
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 74198/));
+    const behind = screen.getByRole('group', { name: 'События 14:30' });
+    expect(within(behind).queryByRole('button', { name: 'Варианты…' })).not.toBeInTheDocument();
+    expect(within(behind).queryByText(/Вариант/)).not.toBeInTheDocument();
+
+    // Впереди, ещё не посчитано: варианты открыть можно (сервер их посчитает), но «не выбран» — неправда.
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 46393/));
+    const ahead = screen.getByRole('group', { name: 'События 16:30' });
+    expect(within(ahead).getByRole('button', { name: 'Варианты…' })).toBeEnabled();
+    expect(within(ahead).queryByText(/^Вариант( не выбран|:)/)).not.toBeInTheDocument();
+  });
+
   it('blocks play and the slider while the choice is open', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), choice: makeEventChoice() });
     render(<TimeBar />);

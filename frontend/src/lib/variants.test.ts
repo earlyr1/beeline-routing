@@ -9,12 +9,11 @@ import {
   makeUrgentChoice,
   makeVariantOption,
 } from '../test/fixtures';
-import { cancelEvent, reassignEvent } from './events';
+import { cancelEvent } from './events';
 import {
   ALL_SAME_TEXT,
   assignedEngineer,
   assignVariant,
-  choiceEvent,
   choiceHasHolder,
   isAssignVariant,
   sameAsText,
@@ -116,41 +115,6 @@ describe('variants', () => {
     it('says nothing when the window has a single variant', () => {
       const choice = makeEventChoice({ variants: [makeVariantOption('optimal', { recommended: true, compared_to: null })] });
       expect(sameAsText(choice, choice.variants[0])).toBeUndefined();
-    });
-  });
-
-  describe('choiceEvent', () => {
-    // В окне выбора сервер присылает событие без прежней бригады, как его запланировали.
-    const planned = reassignEvent('50104', 'E02', '13:30');
-    const choiceOf = (event = planned) => makeEventChoice({ entry_id: 'tl_7', event });
-
-    it('takes the previous brigade of a reassignment waiting for a choice from the current plan', () => {
-      const state = makePlanningState({ timeline: [makeTimelineItem({ id: 'tl_7', event: planned, status: 'awaiting' })] });
-      expect(choiceEvent(choiceOf(), state)).toEqual({ ...planned, previous_engineer_id: 'E01' });
-      // Событие впереди: план тоже ещё до него.
-      expect(choiceEvent(choiceOf(), makePlanningState())).toEqual({ ...planned, previous_engineer_id: 'E01' });
-    });
-
-    it('leaves the previous brigade empty for a request without a brigade or already with the chosen one', () => {
-      const unassigned = reassignEvent('18754', 'E01', '13:30');
-      expect(choiceEvent(choiceOf(unassigned), makePlanningState())).toBe(unassigned);
-      const same = reassignEvent('50104', 'E01', '13:30');
-      expect(choiceEvent(choiceOf(same), makePlanningState())).toBe(same);
-    });
-
-    it('takes the previous brigade of an applied reassignment recorded by the server, not the plan after it', () => {
-      const applied = (previous: string | null) =>
-        makePlanningState({ timeline: [makeTimelineItem({ id: 'tl_7', event: makeReassignEvent({ previous_engineer_id: previous }), status: 'applied' })] });
-      expect(choiceEvent(choiceOf(), applied('E03'))).toEqual({ ...planned, previous_engineer_id: 'E03' });
-      // Заявка была без бригады: бригаду из плана после события прежней не называем.
-      expect(choiceEvent(choiceOf(), applied(null))).toEqual({ ...planned, previous_engineer_id: null });
-    });
-
-    it('keeps other events and a previous brigade already in the event', () => {
-      const choice = makeEventChoice();
-      expect(choiceEvent(choice, makePlanningState())).toBe(choice.event);
-      const recorded = makeReassignEvent({ previous_engineer_id: 'E03' });
-      expect(choiceEvent(choiceOf(recorded), makePlanningState())).toBe(recorded);
     });
   });
 });

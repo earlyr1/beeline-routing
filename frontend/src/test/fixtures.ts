@@ -265,7 +265,7 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
   };
 }
 
-/** Событие на шкале дня: применённое, впереди или отклонённое. */
+/** Событие на шкале дня: применённое, впереди или отклонённое. Варианты, как у сервера, не открываются у отклонённого. */
 export function makeTimelineItem(overrides: Partial<TimelineItem> = {}): TimelineItem {
   return {
     id: 'tl_1',
@@ -274,6 +274,7 @@ export function makeTimelineItem(overrides: Partial<TimelineItem> = {}): Timelin
     reason: null,
     variant: null,
     variant_auto: false,
+    choosable: overrides.status !== 'rejected',
     ...overrides,
   };
 }

@@ -61,8 +61,8 @@ describe('ChoiceDialog', () => {
   });
 
   it('names the brigade that loses a reassigned request in the title', () => {
-    // Время стоит на переназначении: план ещё до события, заявка 50104 у Бригады Арташкин.
-    const event = reassignEvent('50104', 'E02', '13:00');
+    // Время стоит на переназначении: прежнюю бригаду в событии окна называет сервер — заявка 50104 у Бригады Арташкин.
+    const event = { ...reassignEvent('50104', 'E02', '13:00'), previous_engineer_id: 'E01' };
     const timeline = [makeTimelineItem({ id: 'tl_7', event, status: 'awaiting' })];
     useAppStore.setState({ state: makePlanningState({ timeline }), choice: makeEventChoice({ entry_id: 'tl_7', event }) });
     render(<ChoiceDialog />);
@@ -197,7 +197,8 @@ describe('ChoiceDialog: отдать заявку бригаде', () => {
     const state = makePlanningState({ timeline: [makeTimelineItem({ id: 'tl_9', event, status: 'awaiting' })] });
     resetStore({ datasetId: 'd_test', state: { ...state, engineers: [...state.engineers, ZVEREV] }, choice });
     render(<ChoiceDialog />);
-    const edit = screen.getByRole('dialog', { name: /^Изменена заявка 50104 с 13:00/ });
+    // Событие окна сервер присылает с прежней заявкой: заголовок называет, что изменилось.
+    const edit = screen.getByRole('dialog', { name: /^Изменена заявка 50104 с 13:00: .+/ });
     expect(within(edit).getAllByRole('article').map((item) => item.getAttribute('aria-label'))).toEqual([
       'Оптимально по дню',
       'Минимум перестановок',

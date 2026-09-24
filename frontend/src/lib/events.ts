@@ -101,8 +101,11 @@ export function timeError(time: string): string | null {
   return isValidTime(time) ? null : 'Укажите время в формате ЧЧ:ММ';
 }
 
-/** Подсказка в диалогах события: событие раньше всех смен сервер применяет, пересчитывая весь день. */
-export const BEFORE_SHIFTS_HINT = 'Событие до начала смен: план дня пересчитается целиком';
+/**
+ * Подсказка в диалогах события раньше всех смен. Пересчитает ли сервер план, решает результат (окно выбора
+ * открывается, только если «Ничего не менять» ломает больше пересчёта), а если пересчитает — то весь день.
+ */
+export const BEFORE_SHIFTS_HINT = 'Событие до начала смен: пересчёт, если понадобится, захватит весь день';
 
 /** Подсказка для события раньше самой ранней смены доступных инженеров; null, если событие внутри дня или время неверное. */
 export function beforeShiftsHint(time: string, engineers: Engineer[]): string | null {
@@ -528,18 +531,22 @@ export const delayEvent = (engineerId: string, delayMin: number, time: HHMM): Pl
 });
 
 /**
- * Прогноз задержки без перепланирования языком диспетчера: к скольким клиентам и насколько опоздали бы, и переработка.
+ * Прогноз задержки без перепланирования языком диспетчера: к скольким клиентам и насколько опоздаем, и переработка.
+ * kept — задержка применена с «Ничего не менять» (выбрал диспетчер или проход шкалы, когда пересчёт ничего не
+ * спасал): план и есть план без перепланирования, прогноз в нём сбылся, и говорим о нём как о факте, без «бы».
  * Заявки и инженеры в тексте пока не нужны, параметры оставлены по общему контракту описаний событий.
  */
 export function forecastLines(
   forecast: DelayForecast,
   _requests: Map<string, ServiceRequest>,
   _engineers: Map<string, Engineer>,
+  kept = false,
 ): string[] {
   const late = forecast.late_without_replan;
   const overtime = forecast.overtime_without_replan_min;
   const overtimeText = `переработка ${overtime} мин`;
   if (late.length === 0) {
+    if (kept) return [overtime > 0 ? `Переработка ${overtime} мин` : 'Задержка не привела к опозданиям'];
     return [overtime > 0 ? `Без перепланирования была бы ${overtimeText}` : 'Задержка не привела бы к опозданиям'];
   }
   const minutes = late.map((item) => item.late_min);
@@ -547,7 +554,7 @@ export function forecastLines(
   const most = Math.max(...minutes);
   const range = least === most ? `${least}` : `${least}–${most}`;
   const clients = `${late.length} ${plural(late.length, 'клиенту', 'клиентам', 'клиентам')}`;
-  const line = `Без перепланирования опоздали бы к ${clients} на ${range} мин`;
+  const line = kept ? `Опоздаем к ${clients} на ${range} мин` : `Без перепланирования опоздали бы к ${clients} на ${range} мин`;
   return [overtime > 0 ? `${line} и ${overtimeText}` : line];
 }
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { describeEvent } from '../../lib/events';
 import { byId } from '../../lib/planView';
-import { choiceEvent, choiceHasHolder, isAssignVariant, sameAsText } from '../../lib/variants';
+import { choiceHasHolder, isAssignVariant, sameAsText } from '../../lib/variants';
 import { useAppStore } from '../../store/useAppStore';
 import { AssignCard } from './AssignCard';
 import { VariantCard } from './VariantCard';
@@ -41,9 +41,9 @@ export function ChoiceDialog() {
   if (!open) return null;
   const engineers = byId(state?.engineers ?? []);
   const requests = byId(state?.requests ?? []);
-  const event = choice ? (state ? choiceEvent(choice, state) : choice.event) : null;
-  // У переназначения заголовок называет и бригаду, от которой уходит заявка.
-  const title = event ? describeEvent(event, engineers, requests) : 'Событие дня';
+  // Событие окна сервер присылает таким, каким его сохранил план: с прежней заявкой у правки, прежней бригадой
+  // у переназначения и прежним транспортом. Заголовок называет, что изменилось, и бригаду, от которой уходит заявка.
+  const title = choice ? describeEvent(choice.event, engineers, requests) : 'Событие дня';
   // Событие про одну заявку: каждая карточка называет бригаду, которая её берёт.
   const holder = choice !== null && choiceHasHolder(choice);
 
