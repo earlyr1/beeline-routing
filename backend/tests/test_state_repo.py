@@ -304,3 +304,33 @@ def test_a_day_the_process_still_holds_is_not_pushed_out_of_the_base(repo):
     assert repo.load("d_held") is not None
     # А тот, кого никто не держит, честно уезжает: база не копит дни без счёта.
     assert repo.load("d_new_0") is None
+
+
+def test_steps_of_a_day_saved_before_the_unified_flow_move_under_the_new_keys(repo, reopen):
+    """Миграция 0002: событие без выбора прежняя сборка считала с «Оптимально по дню» под токеном без стратегии
+    («tl_1»). Теперь проход ищет шаги под «tl_1@optimal»: день поднимается с теми же планами, и шкала проходится
+    до конца без пересчёта, а событие получает стратегию, с которой его шаг и был посчитан."""
+    from app.state.migrate import MIGRATIONS_DIR
+
+    writer, morning = saved_day(repo)
+    timeline = Timeline()
+    first, second = timeline.create(cancel("R2", "09:00")), timeline.create(cancel("R3", "10:00"))
+    for number, entry in enumerate((first, second), start=1):
+        timeline.insert(entry)
+        writer.add_entry(entry, revision=number, expect=number - 1)
+    # Так ключи писала прежняя сборка: номер события без стратегии и в токене, и в префиксе.
+    step = replay_step(morning, first, context(), 2)
+    writer.add_step(((), "tl_1"), step, last_version=2)
+    after = replay_step(step.session, second, context(), 3)
+    writer.add_step((("tl_1",), "tl_2"), after, last_version=3)
+
+    with repo.cursor() as cur:
+        cur.execute((MIGRATIONS_DIR / "0002.unified-event-steps.sql").read_text(encoding="utf-8"))
+
+    day = reopen().load("d_pg")
+    assert [(entry.id, entry.variant) for entry in day.entries] == [("tl_1", "optimal"), ("tl_2", "optimal")]
+    assert set(day.steps) == {((), "tl_1@optimal"), (("tl_1@optimal",), "tl_2@optimal")}
+    restored = Timeline(entries=day.entries, steps=day.steps)
+    walk = restored.walk(day.base)
+    assert (walk.done, walk.awaiting) == (2, None)
+    assert walk.session.plan.model_dump_json() == after.session.plan.model_dump_json()

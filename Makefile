@@ -51,7 +51,7 @@ db:  ## поднять только Postgres, в котором живёт де�
 migrate:  ## применить миграции схемы вручную; обычно backend делает это сам на старте
 	$(COMPOSE) exec backend python -m app.state.migrate
 
-rollback:  ## откатить последнюю миграцию; вместе с таблицами уходят все сохранённые дни
+rollback:  ## откатить последнюю миграцию; откат 0001 уносит таблицы со всеми сохранёнными днями
 	$(COMPOSE) exec backend python -m app.state.migrate rollback
 
 psql:  ## заглянуть в базу дня: psql внутри её контейнера

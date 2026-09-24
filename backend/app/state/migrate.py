@@ -11,7 +11,8 @@
 
 Вручную тем же набором файлов: `make migrate` (или `yoyo apply --batch --database … ./migrations`).
 Обратный ход — `make rollback` (`python -m app.state.migrate rollback`): он откатывает последнюю
-применённую миграцию, а вместе с её таблицами уходят все сохранённые дни.
+применённую миграцию. Откат 0001 сносит таблицы, а вместе с ними все сохранённые дни; откат 0002 (ключи шагов
+шкалы) ничего не делает.
 """
 
 from __future__ import annotations
@@ -61,7 +62,8 @@ def migrate(database_url: str, *, retries: int = CONNECT_RETRIES, pause_s: float
 
 
 def rollback(database_url: str, *, retries: int = CONNECT_RETRIES, pause_s: float = CONNECT_PAUSE_S) -> None:
-    """Откатывает последнюю применённую миграцию. Вместе с её таблицами уходят все сохранённые дни."""
+    """Откатывает последнюю применённую миграцию. Что при этом теряется, сказано в её .rollback.sql: откат 0001
+    уносит таблицы вместе со всеми сохранёнными днями."""
     backend = _connect(yoyo_url(database_url), retries, pause_s)
     migrations = read_migrations(str(MIGRATIONS_DIR))
     with backend.lock():
@@ -70,7 +72,7 @@ def rollback(database_url: str, *, retries: int = CONNECT_RETRIES, pause_s: floa
             logger.info("Миграции: откатывать нечего, база пустая")
             return
         last = applied[:1]
-        logger.info("Миграции: откатываем %s — сохранённые дни уйдут вместе с таблицами", last[0].id)
+        logger.info("Миграции: откатываем %s (что теряется — в его .rollback.sql)", last[0].id)
         backend.rollback_migrations(last)
 
 
