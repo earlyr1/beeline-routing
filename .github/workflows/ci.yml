@@ -7,7 +7,9 @@
 #   переменные — YC_SA_ID (сервисный аккаунт routing-ci), YC_REGISTRY_ID, VM_HOST (публичный IP),
 #   SITE_HOST (имя в nip.io для ключа Яндекс Карт), TLS_MODE;
 #   секреты — VM_SSH_KEY, VM_KNOWN_HOSTS, POSTGRES_PASSWORD, BASIC_AUTH_USER, BASIC_AUTH_HASH, BASIC_AUTH_PASSWORD
-#   и ключи приложения YANDEX_MAPS_API_KEY, YANDEX_GEOCODER_API_KEY, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL.
+#   и ключи приложения YANDEX_MAPS_API_KEY, YANDEX_GEOCODER_API_KEY, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL, TRANSIT_KEY.
+# TRANSIT_KEY обязателен: им backend расшифровывает матрицы 2ГИС (data/transit/*.json.enc). Без него выкат не идёт,
+# а тесты на настоящих матрицах пропускаются (в pull request из форка секретов нет, там они тоже пропускаются).
 name: ci
 
 on:
@@ -24,6 +26,9 @@ jobs:
     name: backend — ruff и pytest без базы
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    # Ключ матриц 2ГИС: с ним tests/test_transit_real.py расшифровывает настоящие data/transit/*.json.enc.
+    env:
+      TRANSIT_KEY: ${{ secrets.TRANSIT_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -60,6 +65,7 @@ jobs:
           --health-retries 30
     env:
       TEST_DATABASE_URL: postgresql://routing:routing@localhost:5432/routing
+      TRANSIT_KEY: ${{ secrets.TRANSIT_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -149,6 +155,7 @@ jobs:
         env:
           YC_SA_ID: ${{ vars.YC_SA_ID }}
           YC_REGISTRY_ID: ${{ vars.YC_REGISTRY_ID }}
+          TRANSIT_KEY: ${{ secrets.TRANSIT_KEY }}
         run: |
           missing=()
           for name in YC_SA_ID YC_REGISTRY_ID VM_HOST; do
@@ -156,6 +163,12 @@ jobs:
           done
           if ((${#missing[@]})); then
             echo "::error::Не заданы переменные репозитория: ${missing[*]}. Их кладёт infra/github/set_secrets.py"
+            exit 1
+          fi
+          # До сборки образов: без ключа backend не расшифрует матрицы 2ГИС и молча посчитает общественный
+          # транспорт формулой, а ночные планы перестанут подходить.
+          if [[ -z $TRANSIT_KEY ]]; then
+            echo "::error::Не задан секрет TRANSIT_KEY — ключ матриц 2ГИС data/transit/*.json.enc. Его кладёт infra/github/set_secrets.py из .env"
             exit 1
           fi
 
@@ -217,8 +230,9 @@ jobs:
           LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
           LLM_MODEL: ${{ secrets.LLM_MODEL }}
+          TRANSIT_KEY: ${{ secrets.TRANSIT_KEY }}
         run: |
-          for name in POSTGRES_PASSWORD BASIC_AUTH_USER BASIC_AUTH_HASH; do
+          for name in POSTGRES_PASSWORD BASIC_AUTH_USER BASIC_AUTH_HASH TRANSIT_KEY; do
             if [[ -z ${!name} ]]; then
               echo "::error::Не задан секрет $name"
               exit 1
@@ -254,7 +268,8 @@ jobs:
           }
           env_file=$(
             for name in REGISTRY TAG SITE_ADDRESS DEFAULT_SNI TLS_MODE CADDYFILE_SHA POSTGRES_PASSWORD BASIC_AUTH_USER \
-              BASIC_AUTH_HASH YANDEX_MAPS_API_KEY YANDEX_GEOCODER_API_KEY LLM_BASE_URL LLM_API_KEY LLM_MODEL; do
+              BASIC_AUTH_HASH YANDEX_MAPS_API_KEY YANDEX_GEOCODER_API_KEY LLM_BASE_URL LLM_API_KEY LLM_MODEL \
+              TRANSIT_KEY; do
               env_line "$name" || exit 1
             done
           )
@@ -280,6 +295,14 @@ jobs:
             exit 1
           fi
           compose ps
+          # Матрицы 2ГИС backend расшифровывает на старте. Ключ не подошёл — в его логе предупреждение
+          # app.geo.transit (в нём только регион и имя файла), и сервис считает общественный транспорт формулой.
+          transit=$(compose logs --no-color backend 2>&1 | grep -F 'app.geo.transit:' || true)
+          if [[ -n $transit ]]; then
+            printf '%s\n' "$transit"
+            echo "::error::backend не прочитал матрицы 2ГИС: проверьте секрет TRANSIT_KEY — он должен совпадать с ключом, которым зашифрованы data/transit/*.json.enc"
+            exit 1
+          fi
           EOF
 
       # Проверка идёт на самой машине, но тем же путём, что у жюри: Caddy, TLS, пароль, nginx, backend.
