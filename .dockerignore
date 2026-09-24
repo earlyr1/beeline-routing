@@ -5,6 +5,7 @@
 backend/.venv
 backend/.pytest_cache
 backend/.ruff_cache
+backend/.mypy_cache
 frontend/node_modules
 frontend/dist
 data/cache.sqlite
