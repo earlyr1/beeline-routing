@@ -2,9 +2,10 @@
 
 Репозиторий закрытый, и shields.io до его прогонов не достать, поэтому числа считает сам CI: job badges
 в .github/workflows/ci.yml запускает этот скрипт после зелёного прогона верхушки main и кладёт SVG в ветку
-badges, откуда их берёт README. Только стандартная библиотека: в job нет ни uv, ни окружения backend.
+badges, откуда их берёт README. Только стандартная библиотека: в job нет ни uv, ни окружения backend. Лежит
+в backend/scripts, чтобы его проверяли те же ruff и mypy, что и остальной backend.
 
-    python3 scripts/badges.py OUT_DIR \\
+    python3 backend/scripts/badges.py OUT_DIR \\
         --backend-coverage backend/coverage.json \\
         --frontend-coverage frontend/coverage/coverage-summary.json \\
         --junit junit-backend.xml junit-backend-db.xml junit-frontend.xml

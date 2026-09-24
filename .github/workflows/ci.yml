@@ -176,9 +176,9 @@ jobs:
           overwrite: true
 
   # Бейджи README: покрытие backend и frontend и число прошедших тестов. Репозиторий закрытый, shields.io до его
-  # прогонов не дотянуться, поэтому SVG рисует scripts/badges.py, а README берёт их из ветки badges — отдельной
-  # истории без кода. Только пуш в main, только зелёный прогон и только верхушка main: числа на бейджах всегда
-  # от последнего зелёного main. Упал прогон — краснеет бейдж ci, а числа остаются от предыдущего.
+  # прогонов не дотянуться, поэтому SVG рисует backend/scripts/badges.py, а README берёт их из ветки badges —
+  # отдельной истории без кода. Только пуш в main, только зелёный прогон и только верхушка main: числа на бейджах
+  # всегда от последнего зелёного main. Упал прогон — краснеет бейдж ci, а числа остаются от предыдущего.
   badges:
     name: бейджи README в ветку badges
     needs: [coverage, frontend]
@@ -203,7 +203,7 @@ jobs:
           merge-multiple: true
       - name: SVG
         run: >-
-          python3 scripts/badges.py badges
+          python3 backend/scripts/badges.py badges
           --backend-coverage reports/coverage-backend.json
           --frontend-coverage reports/coverage-frontend/coverage-summary.json
           --junit reports/junit-backend.xml reports/junit-backend-db.xml reports/junit-frontend.xml
