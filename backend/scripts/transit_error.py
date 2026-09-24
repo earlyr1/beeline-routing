@@ -6,8 +6,7 @@
 Сравнивает встроенную модель общественного транспорта с матрицами 2ГИС из data/transit (каталог
 переопределяется TRANSIT_MATRIX_DIR) по регионам и расстояниям, считает ошибку в минутах и процентах. Минуты модели
 берутся из самого сервиса: TravelTimes и TravelModel без матриц 2ГИС и без OSRM, расстояние по прямой. В сеть скрипт
-не ходит: матрицы лежат в репозитории, зашифрованные расшифровываются в памяти ключом из TRANSIT_KEY
-(make transit-error берёт его из .env).
+не ходит: матрицы лежат в репозитории.
 
 В конце отчёта — привязка точек бандлов из data/bundles к матрицам своих регионов (радиус 150 м): сколько точек
 нашлось, самое большое смещение и доля пар дня, которые сервис возьмёт из 2ГИС. На неизменённом бандле привязываются
@@ -46,10 +45,8 @@ DISTANCE_BANDS: tuple[tuple[str, float, float], ...] = (
 WITHIN_PCT = 25.0
 ALL = "все"
 NO_MATRICES = (
-    "В {directory} нет ни одной матрицы 2ГИС, которую можно прочитать: сравнивать не с чем.\n"
-    "Зашифрованные матрицы (<регион>.json.enc) читаются только с ключом в TRANSIT_KEY: make transit-error берёт "
-    "его из .env.\n"
-    "Матриц нет вовсе — посчитайте их: python -m scripts.transit_matrix --region all "
+    "В {directory} нет ни одной матрицы 2ГИС: сравнивать не с чем.\n"
+    "Сначала посчитайте матрицы: python -m scripts.transit_matrix --region all "
     "(нужен ключ в TWOGIS_API_KEY, план расхода — флаг --dry-run)."
 )
 
@@ -279,7 +276,7 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         description="Сравнивает встроенную модель общественного транспорта с матрицами 2ГИС"
     ).parse_args(argv)
     settings = Settings.from_env(env)
-    matrices = load_transit_matrices(settings.transit_dir, settings.transit_key)
+    matrices = load_transit_matrices(settings.transit_dir)
     if not matrices:
         print(NO_MATRICES.format(directory=settings.transit_dir), file=sys.stderr)
         return 2

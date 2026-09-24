@@ -9,22 +9,15 @@
 поэтому ни порядок точек, ни метры расхождения геокодера не важны. После срочной заявки или смены адреса пары прежних
 точек остаются из 2ГИС, а пары с новой точкой, которой рядом в матрице нет, считает встроенная модель.
 
-Посчитанные матрицы лежат в репозитории зашифрованными (data/transit/<регион>.json.enc: Fernet ключом
-TRANSIT_KEY от точных байтов файла <регион>.json) и копируются в образ backend, поэтому минуты 2ГИС у сервиса есть
-без сети. Сервис расшифровывает их при старте в памяти: расшифрованное не пишется на диск и не логируется. Открытый
-<регион>.json остаётся только на машине, где матрицы считали (он в .gitignore и .dockerignore); если .enc рядом нет,
-сервис берёт его как есть. Есть .enc, но нет ключа или ключ не тот — в лог идёт предупреждение, и регион считает
-встроенная модель, как будто матрицы нет.
-
-Ключ 2ГИС нужен только чтобы пересчитать матрицы, берётся он только из переменной окружения TWOGIS_API_KEY: он
-не пишется в файл, не логируется и не попадает в текст ошибки. С TRANSIT_KEY так же.
+Посчитанные матрицы лежат в репозитории (data/transit/) и копируются в образ backend, поэтому минуты 2ГИС
+у сервиса есть и без ключа, и без сети. Ключ нужен только чтобы пересчитать матрицы, берётся он только из
+переменной окружения TWOGIS_API_KEY: он не пишется в файл, не логируется и не попадает в текст ошибки.
 """
 
 from __future__ import annotations
 
 import bisect
 import json
-import logging
 import math
 import time
 from collections.abc import Callable, Sequence
@@ -33,12 +26,9 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
-from cryptography.fernet import Fernet, InvalidToken
 
 from app.geo.haversine import haversine_km
 from app.geo.osrm import LatLon
-
-logger = logging.getLogger(__name__)
 
 TRANSIT_URL = "https://routing.api.2gis.com/get_dist_matrix"
 API_VERSION = "2.0"
@@ -64,10 +54,6 @@ RATE_LIMIT_STATUS = 429
 RATE_LIMIT_WAIT_S = 61.0
 RATE_LIMIT_RETRIES = 3
 KEY_ENV = "TWOGIS_API_KEY"
-# Ключ шифрования файлов матриц в репозитории: ключ Fernet, url-safe base64 от 32 байт (Fernet.generate_key()).
-TRANSIT_KEY_ENV = "TRANSIT_KEY"
-MATRIX_SUFFIX = ".json"
-ENCRYPTED_SUFFIX = ".json.enc"
 
 # Форма запроса и ответа Distance Matrix API 2ГИС собрана в одном месте: если API изменится, правится только этот
 # словарь, остальной код имён полей не знает. Форма проверена живым запросом 16.09.2026: режим задаёт поле transport,
@@ -434,46 +420,8 @@ def build_transit_matrix(
 
 
 def transit_matrix_path(directory: Path, region: str) -> Path:
-    """Открытый файл матрицы региона в каталоге матриц: у каждого региона свой, иначе они затирают друг друга.
-
-    Его пишет scripts/transit_matrix.py. В репозиторий и в образ он не попадает: туда идёт зашифрованный рядом.
-    """
-    return Path(directory) / f"{region}{MATRIX_SUFFIX}"
-
-
-def encrypted_matrix_path(directory: Path, region: str) -> Path:
-    """Зашифрованный файл матрицы региона: он лежит в репозитории и едет в образе backend."""
-    return Path(directory) / f"{region}{ENCRYPTED_SUFFIX}"
-
-
-class TransitKeyError(ValueError):
-    """Файл матрицы не расшифровать: ключ не тот, это не ключ Fernet или файл повреждён. Ключа в сообщении нет."""
-
-
-def _fernet(key: str) -> Fernet:
-    try:
-        return Fernet(key)
-    except (TypeError, ValueError):
-        # Без цепочки исключений: в трассировке не должно быть ничего, что относится к ключу.
-        raise TransitKeyError(
-            f"{TRANSIT_KEY_ENV} не ключ Fernet (нужен url-safe base64 от 32 байт)"
-        ) from None
-
-
-def encrypt_matrix_bytes(data: bytes, key: str) -> bytes:
-    """Точные байты файла матрицы, зашифрованные ключом: токен Fernet (AES-128-CBC и HMAC-SHA256)."""
-    return _fernet(key).encrypt(data)
-
-
-def decrypt_matrix_bytes(token: bytes, key: str) -> bytes:
-    """Байты файла матрицы ровно такими, какими их зашифровали. Ключ не тот или файл повреждён — TransitKeyError."""
-    fernet = _fernet(key)
-    try:
-        return fernet.decrypt(token)
-    except InvalidToken:
-        raise TransitKeyError(
-            f"файл не расшифровывается ключом из {TRANSIT_KEY_ENV}: ключ не тот или файл повреждён"
-        ) from None
+    """Файл матрицы региона в каталоге матриц: у каждого региона свой, иначе они затирают друг друга."""
+    return Path(directory) / f"{region}.json"
 
 
 def save_transit_matrix(matrix: TransitMatrix, path: Path) -> None:
@@ -490,38 +438,13 @@ def save_transit_matrix(matrix: TransitMatrix, path: Path) -> None:
 
 
 def load_transit_matrix(path: Path) -> TransitMatrix | None:
-    """Матрица из открытого файла или None: файла нет, он не читается или формат не тот.
+    """Матрица из файла или None: файла нет, он не читается или формат не тот.
 
     Отсутствие файла — не ошибка: сервис считает общественный транспорт встроенной моделью.
     """
     try:
-        text = Path(path).read_text(encoding="utf-8")
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return None
-    return parse_transit_matrix(text)
-
-
-def load_encrypted_matrix(path: Path, key: str) -> TransitMatrix | None:
-    """Матрица из зашифрованного файла, расшифрованная в памяти, или None: файла нет или внутри не матрица.
-
-    Ключ не тот или файл повреждён — TransitKeyError. Расшифрованное не пишется ни на диск, ни в лог.
-    """
-    try:
-        token = Path(path).read_bytes()
-    except OSError:
-        return None
-    try:
-        text = decrypt_matrix_bytes(token, key).decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    return parse_transit_matrix(text)
-
-
-def parse_transit_matrix(text: str) -> TransitMatrix | None:
-    """Матрица из текста файла или None, если это не JSON матрицы."""
-    try:
-        data = json.loads(text)
-    except ValueError:
         return None
     if not isinstance(data, dict):
         return None
@@ -544,73 +467,15 @@ def parse_transit_matrix(text: str) -> TransitMatrix | None:
     )
 
 
-def load_region_matrix(directory: Path, region: str, key: str | None) -> TransitMatrix | None:
-    """Матрица региона так, как её берёт сервис: зашифрованный файл, если он есть, иначе открытый.
+def load_transit_matrices(directory: Path) -> list[TransitMatrix]:
+    """Все матрицы каталога, по файлу на регион, в порядке имён файлов.
 
-    Есть <регион>.json.enc — берётся только он, расшифрованный в памяти ключом TRANSIT_KEY: открытый файл рядом
-    бывает старше, а в образе его нет вовсе. Ключа нет или он не подходит — предупреждение в лог (ни ключа, ни
-    содержимого в нём нет) и None: регион считает встроенная модель, как без матрицы. Открытый <регион>.json
-    берётся, только когда зашифрованного нет.
-    """
-    sealed = encrypted_matrix_path(directory, region)
-    if not sealed.is_file():
-        return load_transit_matrix(transit_matrix_path(directory, region))
-    if not key:
-        logger.warning(
-            "Матрица 2ГИС региона %s зашифрована (%s), а %s не задан: общественный транспорт региона "
-            "считает встроенная формула",
-            region,
-            sealed.name,
-            TRANSIT_KEY_ENV,
-        )
-        return None
-    try:
-        matrix = load_encrypted_matrix(sealed, key)
-    except TransitKeyError as error:
-        logger.warning(
-            "Матрицу 2ГИС региона %s (%s) не расшифровать — %s. Общественный транспорт региона считает "
-            "встроенная формула",
-            region,
-            sealed.name,
-            error,
-        )
-        return None
-    if matrix is None:
-        logger.warning(
-            "Матрица 2ГИС региона %s (%s) расшифровалась, но это не матрица: общественный транспорт региона "
-            "считает встроенная формула",
-            region,
-            sealed.name,
-        )
-    return matrix
-
-
-def load_transit_matrices(directory: Path, key: str | None = None) -> list[TransitMatrix]:
-    """Все матрицы каталога, по региону на файл, в порядке имён открытых файлов <регион>.json.
-
-    У региона бывает зашифрованный файл, открытый или оба; какой берётся, решает load_region_matrix. Каталога нет,
-    файл не читается, не расшифровывается или формат не тот — регион просто пропускается: сервис посчитает его
-    встроенной моделью. Ошибкой это не считается, но про зашифрованный файл без ключа или с чужим ключом в лог
-    идёт предупреждение.
+    Каталога нет, файл не читается или формат не тот — такой файл просто пропускается: сервис посчитает эти
+    регионы встроенной моделью. Ошибкой это не считается.
     """
     try:
-        plain = {path.name.removesuffix(MATRIX_SUFFIX) for path in Path(directory).glob(f"*{MATRIX_SUFFIX}")}
-        sealed = {
-            path.name.removesuffix(ENCRYPTED_SUFFIX) for path in Path(directory).glob(f"*{ENCRYPTED_SUFFIX}")
-        }
+        paths = sorted(Path(directory).glob("*.json"))
     except OSError:
         return []
-    # Порядок прежний — по именам открытых файлов: от него зависит, какая матрица берётся при равном смещении.
-    regions = sorted(plain | sealed, key=lambda region: f"{region}{MATRIX_SUFFIX}")
-    matrices = (load_region_matrix(directory, region, key) for region in regions)
+    matrices = (load_transit_matrix(path) for path in paths)
     return [matrix for matrix in matrices if matrix is not None]
-
-
-def encrypted_regions(directory: Path) -> list[str]:
-    """Регионы, у которых в каталоге есть зашифрованный файл матрицы."""
-    try:
-        return sorted(
-            path.name.removesuffix(ENCRYPTED_SUFFIX) for path in Path(directory).glob(f"*{ENCRYPTED_SUFFIX}")
-        )
-    except OSError:
-        return []

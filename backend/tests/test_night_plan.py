@@ -7,14 +7,13 @@ from dataclasses import replace
 
 import httpx
 import pytest
-from cryptography.fernet import Fernet
 
 from app.api.deps import planning_context
 from app.domain.enums import EventType, Priority, RequestStatus, RequestTier, Skill, Transport
 from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
 from app.geo.matrix import TrafficProfile, TravelModel
-from app.geo.transit import build_transit_matrix, encrypt_matrix_bytes, encrypted_matrix_path
+from app.geo.transit import build_transit_matrix
 from app.ingest.bundle import save_bundle
 from app.planning import session as session_module
 from app.planning.models import PrecomputedPlan
@@ -728,31 +727,6 @@ def test_script_refuses_an_unknown_region_and_a_silent_osrm(tmp_path, capsys):
     # Без OSRM план по прямой не подойдёт сервису из docker-compose: в data/bundles он пишется только по --out.
     assert cli.main(["--region", REGION, "--osrm", "off"], env={"DATA_DIR": str(tmp_path)}) == 2
     assert "Укажите каталог явно: --out" in capsys.readouterr().err
-    assert not night_plan_path(tmp_path / "bundles", REGION).exists()
-
-
-def test_script_refuses_to_replace_plans_when_an_encrypted_matrix_does_not_open(
-    tmp_path, monkeypatch, capsys
-):
-    save_region(tmp_path)
-    token = encrypt_matrix_bytes(b"{}", Fernet.generate_key().decode())
-    encrypted_matrix_path(tmp_path / "transit", REGION).parent.mkdir(parents=True)
-    encrypted_matrix_path(tmp_path / "transit", REGION).write_bytes(token)
-
-    class HealthyOsrm:
-        def __init__(self, url):
-            self.url = url
-
-        def health(self):
-            return True
-
-    monkeypatch.setattr(cli, "OsrmClient", HealthyOsrm)
-    argv = ["--region", REGION, "--minutes", "0.02", *ONE_PROCESS, "--osrm", "http://osrm"]
-    # Ни без ключа, ни с чужим ключом день не считается формулой поверх ночных планов data/bundles.
-    for env in ({}, {"TRANSIT_KEY": Fernet.generate_key().decode()}):
-        assert cli.main(argv, env={"DATA_DIR": str(tmp_path), **env}) == 2
-        err = capsys.readouterr().err
-        assert f"регионов {REGION} зашифрованы и не расшифровались" in err and "--out" in err
     assert not night_plan_path(tmp_path / "bundles", REGION).exists()
 
 

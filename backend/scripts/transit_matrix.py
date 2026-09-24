@@ -14,11 +14,9 @@
 Посчитанный регион переживает обрыв — его файл остаётся на диске, и следующий запуск такой регион пропускает
 (--force считает заново, --keep-going не останавливается на упавшем регионе).
 
-Скрипт пишет открытые файлы <регион>.json: они остаются на этой машине и в git не идут. В репозитории и в образе
-backend лежат зашифрованные <регион>.json.enc — их делает scripts/transit_encrypt.py ключом TRANSIT_KEY
-(make transit запускает его сам после пересчёта). Чтобы сервис считал по новым матрицам, образ надо пересобрать.
-Регион, у которого открытого файла нет, считается посчитанным, если его зашифрованный файл расшифровывается ключом
-TRANSIT_KEY и посчитан на тех же точках. Ключ 2ГИС читается только из TWOGIS_API_KEY и никуда не печатается.
+Посчитанные матрицы лежат в репозитории (data/transit) и копируются в образ backend: скрипт их перезаписывает,
+и чтобы сервис считал по новым, образ надо пересобрать. Ключ читается только из TWOGIS_API_KEY и никуда
+не печатается.
 """
 
 from __future__ import annotations
@@ -46,11 +44,8 @@ from app.geo.transit import (
     REQUESTS_PER_MONTH,
     TransitClient,
     TransitError,
-    TransitKeyError,
     build_transit_matrix,
     distance_groups,
-    encrypted_matrix_path,
-    load_encrypted_matrix,
     load_transit_matrix,
     request_pairs,
     save_transit_matrix,
@@ -66,8 +61,7 @@ NO_KEY = (
     "Сначала посчитайте расход и время флагом --dry-run: у демо-ключа месячный лимит запросов."
 )
 WHERE_FILES_GO = (
-    "Матрицы записаны открытыми в data/transit/ — в git и в образ идут только зашифрованные. "
-    "Зашифровать: make transit-encrypt (make transit делает это сам). "
+    "Матрицы записаны в data/transit/ — каталог лежит в репозитории и копируется в образ backend. "
     "Чтобы сервис считал по пересчитанным: docker compose up -d --build backend."
 )
 
@@ -116,20 +110,9 @@ class RegionJob:
         return math.ceil(max(self.requests - 1, 0) * pause / 60)
 
 
-def _already_computed(settings: Settings, region: str, points: Sequence[LatLon]) -> bool:
-    """Регион уже посчитан на этих же точках: заново считать нечего.
-
-    Сначала открытый файл — его пишет этот скрипт, и он новее зашифрованного, пока тот не пересобран. Открытого нет
-    (свежий клон) — зашифрованный, если он расшифровывается ключом TRANSIT_KEY.
-    """
-    saved = load_transit_matrix(transit_matrix_path(settings.transit_dir, region))
-    if saved is None and settings.transit_key:
-        try:
-            saved = load_encrypted_matrix(
-                encrypted_matrix_path(settings.transit_dir, region), settings.transit_key
-            )
-        except TransitKeyError:
-            saved = None
+def _already_computed(path: Path, points: Sequence[LatLon]) -> bool:
+    """Файл региона уже посчитан на этих же точках: заново считать нечего."""
+    saved = load_transit_matrix(path)
     return saved is not None and saved.matches(points)
 
 
@@ -156,9 +139,7 @@ def plan_jobs(settings: Settings, region: str, force: bool) -> list[RegionJob]:
     for name in names:
         points = matrix_points(load_bundle(settings.bundles_dir / name / "bundle.json"))
         path = transit_matrix_path(settings.transit_dir, name)
-        jobs.append(
-            RegionJob(name, points, path, done=not force and _already_computed(settings, name, points))
-        )
+        jobs.append(RegionJob(name, points, path, done=not force and _already_computed(path, points)))
     return sorted(jobs, key=lambda job: (len(job.points), job.region))
 
 

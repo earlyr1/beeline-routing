@@ -16,8 +16,6 @@ COPY backend/ ./
 COPY data/bundles /app/data/bundles
 COPY data/geocode_cache.json /app/data/geocode_cache.json
 # Матрицы общественного транспорта от 2ГИС: в образе, чтобы сервис считал одинаково на любой машине и без сети.
-# Только зашифрованные <регион>.json.enc (открытые исключает .dockerignore): их расшифровывает сам backend при
-# старте ключом TRANSIT_KEY из окружения контейнера, в образе ключа нет.
 COPY data/transit /app/data/transit
 
 EXPOSE 8001

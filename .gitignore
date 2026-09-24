@@ -14,5 +14,3 @@ infra/yc/.state.env
 infra/yc/known_hosts
 # Токен GitHub для infra/github/set_secrets.py.
 GITHUB_MCP_TOKEN
-# Открытые матрицы 2ГИС: в репозитории только зашифрованные data/transit/<регион>.json.enc (make transit-encrypt).
-data/transit/*.json

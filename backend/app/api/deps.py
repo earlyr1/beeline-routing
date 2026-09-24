@@ -109,10 +109,9 @@ def planning_context(
         traffic=TrafficProfile.load(BACKEND_DIR / "config" / "traffic_profile.yaml"),
         osrm=osrm,
         cache=cache,
-        # Матрицы 2ГИС по регионам читаются один раз при старте, зашифрованные — ключом TRANSIT_KEY в памяти.
-        # Каталога нет, файл не читается или ключа нет — сервис работает как без матрицы этого региона, а минуты
-        # по парам точек дня из матриц берёт make_problem.
-        transit=load_transit_matrices(settings.transit_dir, settings.transit_key),
+        # Матрицы 2ГИС по регионам читаются один раз при старте. Каталога нет или файл не читается — сервис
+        # работает как без него, а минуты по парам точек дня из матриц берёт make_problem.
+        transit=load_transit_matrices(settings.transit_dir),
         time_limit_s=settings.solver_time_limit_s,
         time_limit_lunch_s=settings.solver_time_limit_lunch_s,
         # Ночные планы лежат рядом с бандлами и попадают в образ вместе с ними.
