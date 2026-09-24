@@ -92,10 +92,11 @@ front:  ## фронт: тесты, типы, сборка
 check: lint typecheck test front  ## всё сразу: то, что гоняется перед коммитом
 
 # pre-commit — отдельный инструмент uv (uv tool): его окружение живёт вне проекта, и путь к нему, записанный в хук,
-# не пропадёт при чистке кэша uv, как пропал бы у разового uvx.
+# не пропадёт при чистке кэша uv, как пропал бы у разового uvx. Хук один на репозиторий, общий для всех его
+# git worktree; --allow-missing-config — чтобы на ветках без .pre-commit-config.yaml коммит не падал, а шёл без проверок.
 pre-commit-install:  ## git-хук на коммит: ruff, mypy и проверки файлов из .pre-commit-config.yaml
 	$(UV) tool install --quiet pre-commit
-	$(UV) tool run pre-commit install
+	$(UV) tool run pre-commit install --allow-missing-config
 
 ## --- данные ---
 
