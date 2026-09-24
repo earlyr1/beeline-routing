@@ -154,6 +154,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
+      # Сравнивается с процентом до сотых: precision в [tool.coverage.report] файла backend/pyproject.toml.
       FAIL_UNDER: "94"
     defaults:
       run:
