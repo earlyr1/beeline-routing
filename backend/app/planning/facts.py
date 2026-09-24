@@ -5,7 +5,8 @@
 заявки и инженеров после события, событие в том виде, в каком его сохранит план, и то, что событие добавляет
 к задаче на остаток дня. Дальше apply_event (app/planning/session.py) идёт одним путём для всех типов: закрепить
 сделанное, посчитать стратегию, собрать разницу планов. Шкала (app/planning/timeline.py) и API спрашивают отсюда
-же, какие номера событие называет, о какой оно заявке и где искать его адрес: сами они тип события не проверяют.
+же, какие номера событие называет, о какой оно заявке, где искать его адрес и о чём договорились с клиентом: сами
+они тип события не проверяют.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from app.domain.enums import (
     RequestTier,
     request_label,
 )
-from app.domain.models import Engineer, Event, Plan, Request, Visit
+from app.domain.models import Engineer, Event, Plan, Request, TimeWindow, Visit
 from app.domain.timeutil import fmt_hhmm
 from app.ingest.geocode import GeoResult
 from app.planning.delay import delay_engineer, forecast_delay, missed_hold
@@ -370,6 +371,10 @@ def _request_reassigned(day: _Day, event: Event, ctx: PlanningContext) -> Facts:
     label = request_label(request.id, request.priority)
     if request.status == RequestStatus.CANCELLED:
         raise EventRejected(f"Заявка {label} отменена, назначить её нельзя.")
+    if request.status == RequestStatus.POSTPONED:
+        raise EventRejected(
+            f"Заявка {label} перенесена, назначить её нельзя: клиенту сказали, что сегодня не приедем."
+        )
     started = day.started_text(request, "переназначить")
     if started is not None:
         raise EventRejected(started)
@@ -480,6 +485,42 @@ def _urgent(day: _Day, event: Event, ctx: PlanningContext) -> Facts:
     return day.facts(event.model_copy(update={"request": new}))
 
 
+def _client_agreed(day: _Day, event: Event, ctx: PlanningContext) -> Facts:
+    """«Коммуникация»: диспетчер позвонил клиенту и договорился.
+
+    Окно, которое клиенту назвали, становится окном заявки: решатель обязан его держать, а вкладка «Коммуникации»
+    дальше сравнивает план с ним. Окна нет — клиенту сказали, что сегодня не приедем: заявка переносится, решатель
+    её не получает, а план держит её среди заявок без инженера (app/solvers/problem.py). Названное окно у
+    перенесённой заявки возвращает её в работу дня: клиент перезвонил, договорились заново. «Клиент отказался» —
+    это не договорённость, а обычная отмена (cancel).
+    """
+    now = event.time
+    request = day.request(event.request_id)
+    label = request_label(request.id, request.priority)
+    if request.status == RequestStatus.CANCELLED:
+        raise EventRejected(f"Заявка {label} отменена, договариваться с клиентом не о чем.")
+    started = day.started_text(request, "перенести")
+    if started is not None:
+        raise EventRejected(started)
+    window = event.agreed_window
+    if window is None:
+        request.status = RequestStatus.POSTPONED
+    else:
+        if window.end < now:
+            raise EventRejected(
+                f"Окно {fmt_hhmm(window.start)}–{fmt_hhmm(window.end)} для заявки {label} заканчивается "
+                f"раньше времени события {fmt_hhmm(now)}."
+            )
+        if window.end <= window.start:
+            raise EventRejected(window_order_text(label))
+        # Окно «как можно скорее» клиенту называют словами, и заявка остаётся такой: часы её ожидания решатель
+        # по-прежнему считает от начала окна.
+        request.window_start, request.window_end, request.asap = window.start, window.end, window.asap
+        request.status = RequestStatus.ACTIVE
+    # С новым окном заявку солвер планирует заново, даже если инженер уже едет к ней, как у изменённой заявки.
+    return day.facts(event, released=[request.id])
+
+
 @dataclass(frozen=True)
 class _Kind:
     """Тип события для всего сервиса: обработчик фактов и то, что событие называет.
@@ -489,7 +530,8 @@ class _Kind:
     заявку с желаемыми значениями. Два случая, когда выбрать бригаду заявке события в окне выбора нельзя:
     ends_request — событие снимает заявку с плана (отдавать некому), pins_request — событие само закрепляет её
     за названной бригадой (переназначение): отдать её другой бригаде значило бы спорить с событием — на шкале
-    заявка ушла бы одной бригаде, а в плане стояла бы у другой.
+    заявка ушла бы одной бригаде, а в плане стояла бы у другой. agreement — событие записывает договорённость
+    с клиентом («Коммуникация»): из таких событий вкладка «Коммуникации» знает, что клиентам уже сказали.
     """
 
     apply: Callable[[_Day, Event, PlanningContext], Facts]
@@ -499,6 +541,7 @@ class _Kind:
     edited_request: bool = False
     ends_request: bool = False
     pins_request: bool = False
+    agreement: bool = False
 
 
 _KINDS: dict[EventType, _Kind] = {
@@ -512,6 +555,9 @@ _KINDS: dict[EventType, _Kind] = {
     EventType.REQUEST_REASSIGNED: _Kind(
         _request_reassigned, names_engineer=True, names_request=True, pins_request=True
     ),
+    # «Сегодня не приедем» снимает заявку с плана, но решает это окно события, а не его тип: «отдать бригаде» у
+    # перенесённой заявки отсекает assignable по заявкам после события.
+    EventType.CLIENT_AGREED: _Kind(_client_agreed, names_request=True, agreement=True),
 }
 
 
@@ -581,3 +627,18 @@ def assignable(event: Event, requests: Iterable[Request]) -> bool:
     return assign_allowed(event) and any(
         request.id == subject and request.status == RequestStatus.ACTIVE for request in requests
     )
+
+
+@dataclass(frozen=True)
+class Agreement:
+    """Что клиенту сказали по телефону: окно по заявке request_id или None — сегодня не приедем."""
+
+    request_id: str
+    window: TimeWindow | None
+
+
+def agreement(event: Event) -> Agreement | None:
+    """Договорённость с клиентом, которую записывает событие («Коммуникация»); None — событие не об этом."""
+    if not _KINDS[event.type].agreement or event.request_id is None:
+        return None
+    return Agreement(event.request_id, event.agreed_window)

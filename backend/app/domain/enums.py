@@ -47,6 +47,9 @@ class RequestTier(StrEnum):
 class RequestStatus(StrEnum):
     ACTIVE = "active"
     CANCELLED = "cancelled"
+    # «Сегодня не приедем»: диспетчер сказал клиенту по телефону (событие «Коммуникация»). Решатель заявку не получает,
+    # но в плане она остаётся без инженера и считается в «Не назначено»: это наш провал, и метрика его показывает.
+    POSTPONED = "postponed"
 
 
 class EventType(StrEnum):
@@ -61,6 +64,9 @@ class EventType(StrEnum):
     REQUEST_UPDATED = "request_updated"
     ENGINEER_DELAYED = "engineer_delayed"
     REQUEST_REASSIGNED = "request_reassigned"
+    # «Коммуникация»: диспетчер позвонил клиенту и договорился — назвал окно или сказал, что сегодня не приедем.
+    # Ставит его отметка ✓ на вкладке «Коммуникации»; помощник такое событие не предлагает.
+    CLIENT_AGREED = "client_agreed"
 
 
 class ReasonCode(StrEnum):
@@ -69,6 +75,7 @@ class ReasonCode(StrEnum):
     DOES_NOT_FIT = "does_not_fit_window_or_shift"
     NO_FREE_ENGINEER = "no_free_engineer_in_window"
     ADDRESS_NOT_FOUND = "address_not_found"
+    POSTPONED = "postponed"
 
 
 SKILL_RU = {

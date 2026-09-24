@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import TYPE_CHECKING
 
-from app.api.schemas import AgreedWindow, UploadReport
+from app.api.schemas import UploadReport
 from app.llm.schemas import Proposal
 from app.planning.models import EventVariant
 from app.planning.session import PlanningSession
@@ -52,10 +52,6 @@ class NullDayWriter:
     def add_step(self, key: StepKey, step: TimelineStep, *, last_version: int) -> None: ...
 
     def keep_steps(self, keys: Collection[StepKey]) -> None: ...
-
-    def save_agreed(self, request_id: str, window: AgreedWindow) -> None: ...
-
-    def drop_agreed(self, request_id: str) -> None: ...
 
     def save_proposals(self, proposals: Collection[Proposal], *, urgent_number: int) -> None: ...
 

@@ -29,17 +29,19 @@ def test_a_request_event_can_be_given_to_a_chosen_brigade_unless_it_takes_the_re
     """Отдать бригаде можно заявку события об одной заявке, которая после события остаётся в плане.
 
     События об инженере двигают целую пачку заявок, отменённую заявку отдавать некому, а переназначение само
-    называет бригаду: в событии осталась бы одна бригада, а в плане заявка стояла бы у другой.
+    называет бригаду: в событии осталась бы одна бригада, а в плане заявка стояла бы у другой. Звонок клиенту
+    («Коммуникация») тоже об одной заявке: перенесённую («сегодня не приедем») отсекают заявки после события.
     """
-    allowed_types = {EventType.URGENT, EventType.REQUEST_UPDATED, EventType.RESTORE}
+    allowed_types = {EventType.URGENT, EventType.REQUEST_UPDATED, EventType.RESTORE, EventType.CLIENT_AGREED}
     request = req("R1", 0, 0, "13:00", "17:00")
     for event_type in EventType:
         event = Event.model_construct(type=event_type, time=780, request_id="R1", request=request)
         assert assign_allowed(event) is (event_type in allowed_types), event_type
         # По заявкам после события: та же проверка и заявка в работе дня.
         assert assignable(event, [request]) is (event_type in allowed_types), event_type
-        cancelled = request.model_copy(update={"status": RequestStatus.CANCELLED})
-        assert assignable(event, [cancelled]) is False, event_type
+        for status in (RequestStatus.CANCELLED, RequestStatus.POSTPONED):
+            ended = request.model_copy(update={"status": status})
+            assert assignable(event, [ended]) is False, event_type
 
 
 def test_an_edit_of_a_request_cancelled_earlier_cannot_be_given_to_a_brigade(solves):

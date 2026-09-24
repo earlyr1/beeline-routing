@@ -74,6 +74,7 @@ class Problem:
     travel: TravelTimes
     states: list[EngineerState]  # в порядке engineers
     open_request_ids: list[str]  # что нужно распределить, в порядке поступления
+    # Заявки вне решателя, которые план показывает без инженера: без точки на карте и перенесённые.
     unplannable: list[Unassigned] = field(default_factory=list)
     pinned: dict[str, list[Visit]] = field(default_factory=dict)
     previous_assignment: dict[str, str] = field(default_factory=dict)
@@ -162,6 +163,27 @@ def problem_points(engineers: Iterable[Engineer], requests: Iterable[Request]) -
     ]
 
 
+# Причина у перенесённой заявки: клиенту сказали, что сегодня не приедем (событие «Коммуникация»).
+POSTPONED_TEXT = "Перенесена, клиенту сообщили."
+
+
+def _unplannable_reason(request: Request, *, located: bool) -> Unassigned | None:
+    """Почему заявка дня не идёт в решатель, но остаётся в плане среди заявок без инженера; None — идёт или её нет.
+
+    Перенесённая заявка — наш провал перед клиентом, поэтому она не пропадает, как отменённая, а считается в «Не
+    назначено» у любого решения задачи: и у пересчёта, и у «Ничего не менять», и у базового FCFS.
+    """
+    if request.status == RequestStatus.POSTPONED:
+        return Unassigned(request_id=request.id, reason_code=ReasonCode.POSTPONED, reason_text=POSTPONED_TEXT)
+    if located or request.status != RequestStatus.ACTIVE:
+        return None
+    return Unassigned(
+        request_id=request.id,
+        reason_code=ReasonCode.ADDRESS_NOT_FOUND,
+        reason_text=f"Адрес не найден на карте: «{request.address}».",
+    )
+
+
 def make_problem(
     requests: list[Request],
     engineers: list[Engineer],
@@ -186,13 +208,9 @@ def make_problem(
     """
     located = [r for r in requests if r.lat is not None and r.lon is not None]
     unplannable = [
-        Unassigned(
-            request_id=r.id,
-            reason_code=ReasonCode.ADDRESS_NOT_FOUND,
-            reason_text=f"Адрес не найден на карте: «{r.address}».",
-        )
+        reason
         for r in requests
-        if (r.lat is None or r.lon is None) and r.status == RequestStatus.ACTIVE
+        if (reason := _unplannable_reason(r, located=r.lat is not None and r.lon is not None)) is not None
     ]
     if travel is None:
         points = problem_points(engineers, located)

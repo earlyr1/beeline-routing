@@ -11,7 +11,6 @@ from app.api.geometry import route_geometry
 from app.api.ingest_service import preprocess_scenario, preprocess_upload, scenario_bundle, scenarios
 from app.api.registry import DatasetRecord
 from app.api.schemas import (
-    AgreedWindow,
     ClientConfig,
     CursorRequest,
     DatasetStatus,
@@ -405,39 +404,6 @@ def post_cursor(dataset_id: str, body: CursorRequest, deps: Deps) -> PlanningSta
     state = planning_state(record)
     ensure_precompute(record, ctx, deps.run_background)
     return state
-
-
-@router.put("/datasets/{dataset_id}/agreed/{request_id}", response_model=PlanningState)
-def put_agreed(dataset_id: str, request_id: str, body: AgreedWindow, deps: Deps) -> PlanningState:
-    """Диспетчер назвал клиенту окно (или сказал, что сегодня не приедем): отметка вкладки «Коммуникации».
-
-    Какое именно окно назвали, считает вкладка по плану, который у неё на экране: «клиенту называют слот
-    сетки» — правило разговора, и живёт оно там же, где разговор. Сервер помнит договорённость и показывает
-    её всем, кто открыл этот день, — и после перезапуска тоже.
-    """
-    record = _record(deps, dataset_id)
-    with record.lock:
-        session = _session(record)
-        if session.request(request_id) is None:
-            raise HTTPException(status_code=404, detail=f"Заявка {request_id} не найдена.")
-        record.mark_agreed(request_id, body)
-        return planning_state(record)
-
-
-@router.delete("/datasets/{dataset_id}/agreed/{request_id}", response_model=PlanningState)
-def delete_agreed(dataset_id: str, request_id: str, deps: Deps) -> PlanningState:
-    """Снимает отметку «договорились»: заявка снова попадёт в список звонков, если план с окном разошёлся.
-
-    Интерфейс диспетчера эту ручку не зовёт: строка уходит из блока «Согласовано» сама, как только план
-    снова расходится с тем, что знает клиент (frontend/src/lib/communications.ts). Ручка нужна контракту
-    API — снять отметку должно быть чем — и тестам вкладки «Коммуникации».
-    """
-    record = _record(deps, dataset_id)
-    with record.lock:
-        _session(record)
-        if not record.unmark_agreed(request_id):
-            raise HTTPException(status_code=404, detail=f"По заявке {request_id} договорённости нет.")
-        return planning_state(record)
 
 
 @router.get("/datasets/{dataset_id}/explain/{request_id}", response_model=Explanation)

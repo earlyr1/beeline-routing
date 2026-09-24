@@ -1,11 +1,11 @@
 """День диспетчера в Postgres: psycopg 3 и обычный SQL, без ORM.
 
-Пять таблиц (миграция backend/migrations/0001.day-state.sql):
+Четыре таблицы (миграции в backend/migrations):
 
 - days              — день: входные данные, отчёт разбора, текущее время, счётчики номеров;
-- timeline_entries  — события шкалы в порядке применения;
+- timeline_entries  — события шкалы в порядке применения, в том числе отметки звонков вкладки «Коммуникации»
+                      (событие client_agreed; прежняя таблица agreed_windows снесена миграцией 0003);
 - plans             — кэш шагов: готовый план после события. Утренний план — строка с пустым ключом;
-- agreed_windows    — согласованные окна вкладки «Коммуникации»;
 - proposals         — предложения помощника со своими статусами.
 
 Матрица дороги в базу не едет: это чистая функция от точек дня, и на подъёме её собирает тот же make_problem
@@ -16,8 +16,7 @@
 поэтому повторный расчёт того же ключа не имеет права затереть план, который диспетчер уже видел.
 
 База рассчитана РОВНО НА ОДИН процесс backend (один воркер uvicorn — так он и запускается в Dockerfile).
-Ревизия шкалы ловит вторую реплику только на событиях; курсор, согласованные окна, предложения и планы
-ей не защищены, а _fail_interrupted гасит все считающиеся дни, не разбирая, чей это день. Нужны две
+Ревизия шкалы ловит вторую реплику только на событиях; курсор, предложения и планы ей не защищены, а _fail_interrupted гасит все считающиеся дни, не разбирая, чей это день. Нужны две
 реплики — состояние дня придётся переносить в базу целиком, с блокировкой на день.
 """
 
@@ -32,7 +31,7 @@ from psycopg import sql
 from psycopg_pool import ConnectionPool, PoolTimeout
 from pydantic import ValidationError
 
-from app.api.schemas import AgreedWindow, TimeWindow, UploadReport
+from app.api.schemas import UploadReport
 from app.llm.schemas import Proposal
 from app.planning.models import EventVariant
 from app.planning.session import PlanningContext, PlanningSession
@@ -63,8 +62,8 @@ from app.state.repo import (
 
 logger = logging.getLogger(__name__)
 
-# Сколько последних дней держит база. Лишние уносит создание нового дня, вместе со шкалой, планами,
-# окнами и предложениями (ON DELETE CASCADE). День, который процесс ещё держит в памяти, из этого счёта
+# Сколько последних дней держит база. Лишние уносит создание нового дня, вместе со шкалой, планами
+# и предложениями (ON DELETE CASCADE). День, который процесс ещё держит в памяти, из этого счёта
 # исключается (аргумент keep у create): писать в вытесненный день было бы некуда.
 MAX_DAYS = 20
 SAVE_FAILED_TEXT = "Не удалось сохранить: база недоступна."
@@ -76,14 +75,6 @@ MISSING_TEXT = "День больше не хранится в базе: заг�
 CONFLICT_TEXT = "Данные изменились в другой вкладке, обновите страницу."
 # День, пойманный перезапуском на предподсчёте, не возобновляется: честный экран вместо вечного спиннера.
 INTERRUPTED_TEXT = "Предподсчёт прервал перезапуск сервиса: загрузите файл заново."
-
-
-def _window(window: TimeWindow | None) -> str | None:
-    return None if window is None else dump_model(window)
-
-
-def _parse_window(raw: str | None) -> TimeWindow | None:
-    return None if raw is None else TimeWindow.model_validate_json(raw)
 
 
 class PostgresDayWriter:
@@ -121,10 +112,9 @@ class PostgresDayWriter:
                 (payload, revision, day_revision, last_number, last_version, self._id),
             )
             _found_day(cur, self._id)
-            # День собран заново: прежние события, планы и договорённости к нему не относятся.
+            # День собран заново: прежние события (и договорённости с клиентами среди них) и планы к нему не относятся.
             cur.execute("DELETE FROM timeline_entries WHERE dataset_id = %s", (self._id,))
             cur.execute("DELETE FROM plans WHERE dataset_id = %s", (self._id,))
-            cur.execute("DELETE FROM agreed_windows WHERE dataset_id = %s", (self._id,))
             cur.execute(
                 "INSERT INTO plans (dataset_id, prefix, token, session) VALUES (%s, '{}', '', %s::jsonb)",
                 (self._id, morning),
@@ -213,31 +203,6 @@ class PostgresDayWriter:
     def keep_steps(self, keys: Collection[StepKey]) -> None:
         with self._repo.cursor() as cur:
             _keep_steps(cur, self._id, keys)
-
-    def save_agreed(self, request_id: str, window: AgreedWindow) -> None:
-        with self._repo.cursor() as cur:
-            cur.execute(
-                "INSERT INTO agreed_windows "
-                "(dataset_id, request_id, client_window, request_window, version) "
-                "VALUES (%s, %s, %s::jsonb, %s::jsonb, %s) "
-                "ON CONFLICT (dataset_id, request_id) DO UPDATE SET "
-                "client_window = excluded.client_window, request_window = excluded.request_window, "
-                "version = excluded.version, agreed_at = now()",
-                (
-                    self._id,
-                    request_id,
-                    _window(window.window),
-                    _window(window.request_window),
-                    window.version,
-                ),
-            )
-
-    def drop_agreed(self, request_id: str) -> None:
-        with self._repo.cursor() as cur:
-            cur.execute(
-                "DELETE FROM agreed_windows WHERE dataset_id = %s AND request_id = %s",
-                (self._id, request_id),
-            )
 
     def save_proposals(self, proposals: Collection[Proposal], *, urgent_number: int) -> None:
         rows = [
@@ -434,19 +399,6 @@ class PostgresStateRepo:
                     (dataset_id,),
                 )
                 _restore_plans(state, state.prepared, cur.fetchall(), self._ctx)
-            cur.execute(
-                "SELECT request_id, client_window::text, request_window::text, version "
-                "FROM agreed_windows WHERE dataset_id = %s",
-                (dataset_id,),
-            )
-            state.agreed = {
-                request_id: AgreedWindow(
-                    window=_parse_window(client),
-                    request_window=_parse_window(request_window),
-                    version=version,
-                )
-                for request_id, client, request_window, version in cur.fetchall()
-            }
             cur.execute(
                 "SELECT payload::text FROM proposals WHERE dataset_id = %s ORDER BY seq", (dataset_id,)
             )

@@ -83,6 +83,15 @@ def late_visits(plan: Plan) -> int:
     return sum(1 for route in plan.routes for visit in route.visits if visit.late_min > 0)
 
 
+def _dropped(plan: Plan) -> list[str]:
+    """Заявки без инженера, которых мог бы взять хоть какой-то вариант: перенесённые не в счёт.
+
+    Перенесённую заявку («Сегодня не приедем») решатель не получает ни в одном варианте: она без инженера везде
+    одинаково, и сравнивать варианты по ней нечего.
+    """
+    return [item.request_id for item in plan.unassigned if item.reason_code != ReasonCode.POSTPONED]
+
+
 def breakages(plan: Plan) -> int:
     """Поломки плана для правила окна выбора: заявки без инженера и нарушения маршрутов.
 
@@ -90,7 +99,7 @@ def breakages(plan: Plan) -> int:
     обед, оборудование, навык, транспорт и плечо: то, что план обещает и не выполнит. Заявки, которые без инженера
     во всех вариантах одинаково, и опоздание уже начатой работы на сравнение вариантов не влияют.
     """
-    return len(plan.unassigned) + plan.metrics.violations
+    return len(_dropped(plan)) + plan.metrics.violations
 
 
 def _by_queue(plan: Plan, queues: Mapping[str, int]) -> tuple[int, ...]:
@@ -101,7 +110,7 @@ def _by_queue(plan: Plan, queues: Mapping[str, int]) -> tuple[int, ...]:
     2 — подключения, 3 — остальные. Заявка, которой там нет, считается в последней очереди.
     """
     counts = [0] * _QUEUES
-    broken = [item.request_id for item in plan.unassigned]
+    broken = _dropped(plan)
     broken += [visit.request_id for route in plan.routes for visit in route.visits if visit.late_min > 0]
     for request_id in broken:
         counts[queues.get(request_id, _QUEUES - 1)] += 1

@@ -14,13 +14,20 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 
 from app.api.registry import DatasetRecord
-from app.api.schemas import PlanningState, TimelineItem, to_planning_state
+from app.api.schemas import AgreedCall, PlanningState, TimelineItem, to_planning_state
 from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
-from app.planning.facts import assign_allowed, assignable
+from app.planning.facts import agreement, assign_allowed, assignable
 from app.planning.models import BaseVariant, EventChoice, EventVariant
 from app.planning.session import PlanningContext
-from app.planning.timeline import TimelineEntry, TimelineStep, Walk, choice_needed, replay_step
+from app.planning.timeline import (
+    TimelineEntry,
+    TimelineStep,
+    TimelineView,
+    Walk,
+    choice_needed,
+    replay_step,
+)
 from app.planning.variants import VARIANTS, Outcome, assign_variant, assigned_engineer, build_choice
 from app.state.repo import StateConflict, StateUnavailable
 
@@ -133,6 +140,20 @@ def _choice(
     )
 
 
+def _agreed(views: list[TimelineView]) -> dict[str, AgreedCall]:
+    """Договорённости с клиентами к текущему времени: события «Коммуникация», применённые к плану на часах.
+
+    По каждой заявке — последняя: клиент мог перезвонить. Событие позже часов ещё не случилось, поэтому отмотанные
+    назад часы снимают и его отметку, и то, что оно сделало с заявкой.
+    """
+    agreed: dict[str, AgreedCall] = {}
+    for view in views:
+        made = agreement(view.event) if view.status == "applied" else None
+        if made is not None:
+            agreed[made.request_id] = AgreedCall(window=made.window, entry_id=view.entry.id)
+    return agreed
+
+
 def planning_state(record: DatasetRecord) -> PlanningState:
     """Состояние на текущее время плана с событиями таймлайна. Вызывать, когда план дня уже есть."""
     with record.lock:
@@ -161,8 +182,8 @@ def planning_state(record: DatasetRecord) -> PlanningState:
             morning=record.base,
             # Регион дня сгенерирован нами: вкладка «Сравнение» так и подписывает колонку «Диспетчеры».
             generated=record.prepared is not None and record.prepared.generated,
-            # Что клиентам уже сказали по телефону: отметки вкладки «Коммуникации» живут на сервере.
-            agreed=record.agreed,
+            # Что клиентам уже сказали по телефону: отметки вкладки «Коммуникации» — события шкалы.
+            agreed=_agreed(views),
         )
 
 

@@ -307,6 +307,15 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
         return Explanation(
             request_id=request.id, status="cancelled", summary="Заявка отменена и в плане не участвует."
         )
+    if request.status == RequestStatus.POSTPONED:
+        # Заявку перенёс диспетчер, а не решатель: бригады и ограничения тут ни при чём, разбирать их нечего.
+        item = next((u for u in plan.unassigned if u.request_id == request.id), None)
+        return Explanation(
+            request_id=request.id,
+            status="unassigned",
+            summary="Перенесена: клиенту сказали, что сегодня не приедем, и решатель её не планирует.",
+            unassigned=item,
+        )
 
     assigned = next(
         (
