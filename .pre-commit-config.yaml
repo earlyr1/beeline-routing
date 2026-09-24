@@ -2,7 +2,7 @@
 # `uvx pre-commit run --all-files`. Хуки смотрят только на то, что попало в коммит; mypy проверяет весь backend.
 # Фронт здесь не проверяется: его tsc, vitest и сборку гоняют `make front` и CI.
 repos:
-  # Та же версия ruff, что в backend/uv.lock: хук и `make lint` не должны спорить о стиле.
+  # Та же версия ruff, что закреплена в dev-зависимостях backend/pyproject.toml: хук и `make lint` не должны спорить о стиле.
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.7
     hooks:
