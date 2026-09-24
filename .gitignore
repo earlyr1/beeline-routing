@@ -8,6 +8,11 @@ node_modules/
 frontend/dist/
 .env
 coverage/
+# Данные покрытия backend: make test PYTEST_ARGS=--cov (у frontend это каталог coverage/ выше).
+.coverage
+.coverage.*
+# Отчёты тестов и покрытия, которые складывает CI (ci.yml), — если повторить его команды локально.
+/reports/
 .claude/
 .DS_Store
 # Идентификаторы и ключ хоста машины в Yandex Cloud: пишет infra/yc/create.sh, у каждого свои.

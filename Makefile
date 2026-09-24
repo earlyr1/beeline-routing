@@ -13,6 +13,8 @@ POSTGRES_DB ?= routing
 PG_TEST_PORT ?= 55432
 TEST_DATABASE_URL ?= postgresql://routing:routing@localhost:$(PG_TEST_PORT)/routing
 PG_TEST_NAME ?= routing-test-db
+# Лишние флаги pytest для test и test-db: make test PYTEST_ARGS=--cov — с покрытием, как в CI.
+PYTEST_ARGS ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help up rebuild down logs ps smoke db migrate rollback psql test test-fast test-db lint typecheck fmt front check \
@@ -63,7 +65,7 @@ smoke:  ## проверить живой сервис: регионы, план 
 ## --- проверки ---
 
 test:  ## полный прогон бэкенда без базы (~6.5 мин): половины [postgres] уходят в skipped
-	cd backend && $(UV) run pytest -o addopts= -q
+	cd backend && $(UV) run pytest -o addopts= -q $(PYTEST_ARGS)
 	@echo "Тесты базы (маркер db) пропущены — зелёный прогон тут не полный. Прогнать их: make test-db"
 
 test-fast:  ## бэкенд без тестов солвера и API (быстрая обратная связь)
@@ -74,7 +76,7 @@ test-db:  ## всё, что ходит в Postgres (маркер db): своя �
 	@docker run -d --name $(PG_TEST_NAME) -e POSTGRES_DB=routing -e POSTGRES_USER=routing \
 		-e POSTGRES_PASSWORD=routing -p $(PG_TEST_PORT):5432 postgres:17-alpine >/dev/null
 	@until docker exec $(PG_TEST_NAME) pg_isready -U routing -d routing >/dev/null 2>&1; do sleep 1; done
-	@cd backend && TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(UV) run pytest -o addopts= -q -m db; status=$$?; \
+	@cd backend && TEST_DATABASE_URL=$(TEST_DATABASE_URL) $(UV) run pytest -o addopts= -q -m db $(PYTEST_ARGS); status=$$?; \
 		docker rm -f $(PG_TEST_NAME) >/dev/null; exit $$status
 
 lint:  ## ruff: проверка стиля и форматирования

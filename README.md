@@ -1,5 +1,15 @@
 # Планировщик маршрутов выездных инженеров
 
+[![ci](https://github.com/earlyr1/beeline-routing/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/earlyr1/beeline-routing/actions/workflows/ci.yml)
+[![lint](https://github.com/earlyr1/beeline-routing/actions/workflows/lint.yml/badge.svg?branch=main)](https://github.com/earlyr1/beeline-routing/actions/workflows/lint.yml)
+[![typecheck](https://github.com/earlyr1/beeline-routing/actions/workflows/typecheck.yml/badge.svg?branch=main)](https://github.com/earlyr1/beeline-routing/actions/workflows/typecheck.yml)
+[![tests](https://github.com/earlyr1/beeline-routing/raw/badges/tests.svg)](https://github.com/earlyr1/beeline-routing/actions/workflows/ci.yml?query=branch%3Amain)
+[![backend coverage](https://github.com/earlyr1/beeline-routing/raw/badges/coverage-backend.svg)](https://github.com/earlyr1/beeline-routing/actions/workflows/ci.yml?query=branch%3Amain)
+[![frontend coverage](https://github.com/earlyr1/beeline-routing/raw/badges/coverage-frontend.svg)](https://github.com/earlyr1/beeline-routing/actions/workflows/ci.yml?query=branch%3Amain)
+![Python 3.12](https://img.shields.io/badge/python-3.12-3776ab?logo=python&logoColor=white)
+![React + TypeScript](https://img.shields.io/badge/React%20%2B%20TypeScript-3178c6?logo=typescript&logoColor=white)
+![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ed?logo=docker&logoColor=white)
+
 Прототип помощника диспетчера для кейса «Билайн Бизнес» (Лидеры цифровой трансформации). Сервис загружает заявки дня, распределяет их между инженерами с учётом навыков, временных окон, смен и типа транспорта, строит маршруты по дорогам Москвы и области, перестраивает план после событий и объясняет каждое решение простыми словами.
 
 ## TL;DR для жюри
@@ -153,6 +163,8 @@ uv run mypy                                      # то же, что make typech
 Базы для этого не нужно: без `DATABASE_URL` день живёт в памяти процесса, как раньше. Тесты уровня API идут дважды — на памяти и на Postgres (`test_x[memory]` и `test_x[postgres]`), чтобы две реализации хранилища не разошлись незаметно; без `TEST_DATABASE_URL` постгресовые половины пропускаются, и в конце обычного прогона их видно как `skipped`. `make test-db` поднимает базу на время прогона, гоняет по ней всё помеченное маркером `db` и убирает базу за собой. В `make check` он не входит — предкоммитный прогон не должен требовать Docker, — поэтому `make test` в конце сам напоминает, что тесты базы остались непрогнанными.
 
 Линтер, типы, тесты и фронт разом — `make check`. Стиль и типы ловятся и раньше, на самом коммите: `make pre-commit-install` один раз ставит [pre-commit](https://pre-commit.com/) инструментом uv и вешает его на `git commit`. Хук ставится на репозиторий, а не на рабочую копию: он общий для всех `git worktree`, а на ветках без `.pre-commit-config.yaml` коммит проходит без проверок. Тестов в хуке нет, коммит остаётся быстрым. Хук смотрит на файлы коммита: ruff исправляет и форматирует Python в `backend`, mypy проверяет весь backend в его окружении uv, а для всего репозитория — синтаксис YAML и TOML, забытые маркеры конфликта слияния, новые файлы больше 1 МБ (кроме презентации) и приватные ключи. Если ruff что-то поправил, коммит прерывается: исправленное остаётся в рабочей копии, его надо `git add` и закоммитить заново. Весь репозиторий разом — `uvx pre-commit run --all-files`; хуки описаны в `.pre-commit-config.yaml`, настройки mypy — в `[tool.mypy]` файла `backend/pyproject.toml`.
+
+Бейджи в начале README живые. `ci`, `lint` и `typecheck` — бейджи самого GitHub Actions: итог последнего прогона одноимённого workflow на `main`. `lint` и `typecheck` гоняют ruff и mypy отдельно ради своих бейджей, выкат же ждёт тех же проверок в `ci`. Тесты и покрытие считает `ci.yml`: покрытие backend — сумма прогона без базы и прогона на Postgres (job `coverage`), фронта — `vitest --coverage`, тесты — по отчётам JUnit всех трёх прогонов. SVG рисует `backend/scripts/badges.py`, а job `badges` кладёт их в ветку `badges` после каждого пуша в `main`, чем бы ни кончились тесты, если коммит всё ещё верхушка `main`. Так бейджи всегда про последний `main`, а не про последний зелёный: упал тест — `tests` красный и показывает, сколько упало; покрытие ниже порога или при упавшем vitest — измеренный процент, но красный; отчёта нет (job упал раньше тестов, покрытие не считалось) — серый `unknown`. Покрытие считается по строкам, порог чуть ниже измеренного — `FAIL_UNDER` job `coverage` и `thresholds` в `frontend/vite.config.ts`; ниже порога CI красный и выкат не идёт. Локально: `make test PYTEST_ARGS=--cov` (без половин `[postgres]`, поэтому процент ниже) и `cd frontend && npx vitest run --coverage`. Python, React и Docker — просто факты о стеке. Репозиторий закрытый: бейджи видят те, у кого к нему есть доступ.
 
 Переменные окружения backend:
 
