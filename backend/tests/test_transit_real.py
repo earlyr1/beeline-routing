@@ -35,9 +35,9 @@ REAL_KEY = (os.environ.get("TRANSIT_KEY") or "").strip()
 REGIONS = sorted(path.parent.name for path in (REPO_ROOT / "data" / "bundles").glob("*/bundle.json"))
 needs_key = pytest.mark.skipif(not REAL_KEY, reason="нет TRANSIT_KEY: настоящие матрицы не расшифровать")
 
-# Последний коммит, где data/transit/<регион>.json лежали в git открытыми, и SHA-256 этих файлов
-# (git show 584dc5b:data/transit/<регион>.json | shasum -a 256). Расшифрованный <регион>.json.enc обязан давать ровно
-# эти байты: тогда отпечатки задач те же, и ночные планы data/bundles/*/night_plan.json подходят. Пересчитали
+# Коммит, где data/transit/<регион>.json лежат в git открытыми (из них зашифрованы нынешние .enc), и SHA-256 этих
+# файлов (git show 584dc5b:data/transit/<регион>.json | shasum -a 256). Расшифрованный <регион>.json.enc обязан давать
+# ровно эти байты: тогда отпечатки задач те же, и ночные планы data/bundles/*/night_plan.json подходят. Пересчитали
 # матрицы и зашифровали заново (make transit) — впишите хэши новых открытых файлов: shasum -a 256 data/transit/*.json.
 PLAINTEXT_COMMIT = "584dc5b"
 PLAINTEXT_SHA256 = {
