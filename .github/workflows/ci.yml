@@ -54,6 +54,8 @@ jobs:
           path: reports/
           if-no-files-found: error
           retention-days: 7
+          # Re-run (им же делается откат) грузит отчёты заново под тем же именем.
+          overwrite: true
 
   backend-db:
     name: backend — тесты на Postgres (маркер db)
@@ -95,6 +97,7 @@ jobs:
           path: reports/
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   frontend:
     name: frontend — tsc, vitest, сборка
@@ -129,6 +132,7 @@ jobs:
             reports/coverage-frontend/coverage-summary.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   # Покрытие backend: прогон без базы не проходит код хранилища на Postgres, прогон с базой — всё остальное,
   # поэтому честный процент есть только у суммы двух. Порог — чуть ниже измеренного (24.09.2026: 95,5% строк,
@@ -169,6 +173,7 @@ jobs:
           path: reports/coverage-backend.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   # Бейджи README: покрытие backend и frontend и число прошедших тестов. Репозиторий закрытый, shields.io до его
   # прогонов не дотянуться, поэтому SVG рисует scripts/badges.py, а README берёт их из ветки badges — отдельной
