@@ -92,8 +92,11 @@ check: lint test front  ## всё сразу: то, что гоняется пе
 bundles:  ## пересобрать бандлы регионов (нужен OSRM)
 	cd backend && OSRM_URL=$(OSRM_URL) $(UV) run python -m app.synth.prepare --region $(REGION) --geocoder cache-only
 
+# Долгий расчёт не должен прерываться сном машины: caffeinate есть только на macOS, на остальных системах пусто.
+KEEP_AWAKE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -i)
+
 night:  ## ночной поиск утренних планов: make night MINUTES=120 REGION=all
-	cd backend && caffeinate -i $(UV) run python -m scripts.night_plan --region $(REGION) --minutes $(MINUTES)
+	cd backend && $(KEEP_AWAKE) $(UV) run python -m scripts.night_plan --region $(REGION) --minutes $(MINUTES)
 
 transit-dry:  ## сколько запросов демо-ключа 2ГИС стоит пересчёт матриц
 	cd backend && $(UV) run python -m scripts.transit_matrix --region $(REGION) --dry-run
