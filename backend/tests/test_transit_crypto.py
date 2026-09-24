@@ -262,3 +262,41 @@ def test_the_script_does_not_encrypt_what_is_not_a_matrix(tmp_path, capsys):
 def test_the_script_has_nothing_to_do_without_plaintext(tmp_path, capsys):
     assert run_encrypt(tmp_path) == 0
     assert "шифровать нечего" in capsys.readouterr().out
+
+
+def test_the_script_checks_encrypted_files_that_have_no_plaintext(tmp_path, capsys):
+    # Свежий клон или рабочая копия после слияния: открытых файлов нет, есть только .enc.
+    directory = tmp_path / "transit"
+    directory.mkdir()
+    seal(directory, "east")
+    seal(directory, "south", key=OTHER_KEY)
+    sealed = snapshot(directory)
+
+    assert run_encrypt(tmp_path) == 1
+    captured = capsys.readouterr()
+    assert "регион east: east.json.enc расшифровывается этим ключом" in captured.out
+    assert "регион south: south.json.enc не расшифровывается этим ключом, открытого файла нет" in captured.err
+    assert "регионов: 2, с ошибкой: 1" in captured.out and "--build backend" not in captured.out
+    assert snapshot(directory) == sealed
+
+    (directory / "south.json.enc").unlink()
+    assert run_encrypt(tmp_path) == 0
+    assert "с ошибкой: 0" in capsys.readouterr().out
+
+
+def test_rekey_refuses_when_an_encrypted_file_has_no_plaintext(tmp_path, capsys):
+    # Смена ключа с частью открытых файлов оставила бы в каталоге .enc на двух разных ключах.
+    directory = tmp_path / "transit"
+    seal(directory, "east", key=OTHER_KEY, keep_plain=True)
+    seal(directory, "south", key=OTHER_KEY)
+    sealed = snapshot(directory)
+
+    assert run_encrypt(tmp_path, "--rekey") == 1
+    err = capsys.readouterr().err
+    assert "у регионов south нет открытых" in err and "Ничего не тронуто" in err and "git show" in err
+    assert snapshot(directory) == sealed
+
+    # Без открытых файлов вовсе --rekey тоже не проходит молча.
+    (directory / "east.json").unlink()
+    assert run_encrypt(tmp_path, "--rekey") == 1
+    assert "у регионов east, south нет открытых" in capsys.readouterr().err
