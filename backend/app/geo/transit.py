@@ -472,7 +472,7 @@ def decrypt_matrix_bytes(token: bytes, key: str) -> bytes:
         return fernet.decrypt(token)
     except InvalidToken:
         raise TransitKeyError(
-            "файл не расшифровывается этим ключом: ключ не тот или файл повреждён"
+            f"файл не расшифровывается ключом из {TRANSIT_KEY_ENV}: ключ не тот или файл повреждён"
         ) from None
 
 
@@ -568,11 +568,10 @@ def load_region_matrix(directory: Path, region: str, key: str | None) -> Transit
         matrix = load_encrypted_matrix(sealed, key)
     except TransitKeyError as error:
         logger.warning(
-            "Матрицу 2ГИС региона %s (%s) не расшифровать ключом из %s: %s. Общественный транспорт региона "
-            "считает встроенная формула",
+            "Матрицу 2ГИС региона %s (%s) не расшифровать — %s. Общественный транспорт региона считает "
+            "встроенная формула",
             region,
             sealed.name,
-            TRANSIT_KEY_ENV,
             error,
         )
         return None
