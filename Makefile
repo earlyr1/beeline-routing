@@ -16,10 +16,10 @@ PG_TEST_NAME ?= routing-test-db
 
 .DEFAULT_GOAL := help
 .PHONY: help up rebuild down logs ps smoke db migrate rollback psql test test-fast test-db lint typecheck fmt front check \
-	bundles night transit transit-dry transit-error graph
+	pre-commit-install bundles night transit transit-dry transit-error graph
 
 help:  ## показать этот список
-	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t 16
+	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed 's/:.*##/\t/' | expand -t 20
 
 ## --- сервис ---
 
@@ -90,6 +90,12 @@ front:  ## фронт: тесты, типы, сборка
 	cd frontend && npx vitest run && npx tsc --noEmit && npm run build
 
 check: lint typecheck test front  ## всё сразу: то, что гоняется перед коммитом
+
+# pre-commit — отдельный инструмент uv (uv tool): его окружение живёт вне проекта, и путь к нему, записанный в хук,
+# не пропадёт при чистке кэша uv, как пропал бы у разового uvx.
+pre-commit-install:  ## git-хук на коммит: ruff, mypy и проверки файлов из .pre-commit-config.yaml
+	$(UV) tool install --quiet pre-commit
+	$(UV) tool run pre-commit install
 
 ## --- данные ---
 

@@ -1,0 +1,37 @@
+# Проверки перед каждым коммитом: `make pre-commit-install` вешает их на git commit, вручную по всему репозиторию —
+# `uvx pre-commit run --all-files`. Хуки смотрят только на то, что попало в коммит; mypy проверяет весь backend.
+# Фронт здесь не проверяется: его tsc, vitest и сборку гоняют `make front` и CI.
+repos:
+  # Та же версия ruff, что в backend/uv.lock: хук и `make lint` не должны спорить о стиле.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.7
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+        types_or: [python, pyi]
+
+  # mypy — из окружения backend (uv run): ему нужны pydantic, fastapi и прочие зависимости проекта с их типами.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (backend)
+        entry: uv run --directory backend --frozen mypy
+        language: system
+        pass_filenames: false
+        files: ^backend/(.*\.py|pyproject\.toml|uv\.lock)$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      # --unsafe — только синтаксис: в docker-compose.prod.yml теги compose (!reset), которых yaml-загрузчик не знает.
+      - id: check-yaml
+        args: [--unsafe]
+      - id: check-toml
+      - id: check-merge-conflict
+      # Самый большой файл в репозитории — адреса OSM в data/sources, около 500 КБ.
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: detect-private-key

@@ -137,15 +137,18 @@ OSRM_URL=http://localhost:5050 GEOCODER=cache-only uv run uvicorn app.api.main:a
 
 Frontend: `cd frontend && npm ci && npm run dev`, dev-сервер Vite проксирует `/api` на `http://localhost:8001`.
 
-Тесты и линтер:
+Тесты, линтер и типы:
 
 ```bash
 cd backend
 uv run pytest
 uv run ruff format --check app tests scripts && uv run ruff check app tests scripts
+uv run mypy                                      # то же, что make typecheck: app, scripts и tests
 ```
 
 Базы для этого не нужно: без `DATABASE_URL` день живёт в памяти процесса, как раньше. Тесты уровня API идут дважды — на памяти и на Postgres (`test_x[memory]` и `test_x[postgres]`), чтобы две реализации хранилища не разошлись незаметно; без `TEST_DATABASE_URL` постгресовые половины пропускаются, и в конце обычного прогона их видно как `skipped`. `make test-db` поднимает базу на время прогона, гоняет по ней всё помеченное маркером `db` и убирает базу за собой. В `make check` он не входит — предкоммитный прогон не должен требовать Docker, — поэтому `make test` в конце сам напоминает, что тесты базы остались непрогнанными.
+
+Линтер, типы, тесты и фронт разом — `make check`. Стиль и типы ловятся и раньше, на самом коммите: `make pre-commit-install` один раз ставит [pre-commit](https://pre-commit.com/) инструментом uv и вешает его на `git commit`. Тестов в хуке нет, коммит остаётся быстрым. Хук смотрит на файлы коммита: ruff исправляет и форматирует Python в `backend`, mypy проверяет весь backend в его окружении uv, а для всего репозитория — синтаксис YAML и TOML, забытые маркеры конфликта слияния, новые файлы больше 1 МБ и приватные ключи. Весь репозиторий разом — `uvx pre-commit run --all-files`; хуки описаны в `.pre-commit-config.yaml`, настройки mypy — в `[tool.mypy]` файла `backend/pyproject.toml`.
 
 Переменные окружения backend:
 
