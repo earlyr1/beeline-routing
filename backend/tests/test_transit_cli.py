@@ -1,7 +1,15 @@
 """scripts/transit_matrix.py: план расхода, расчёт всех регионов за один запуск, докат и отказы. Без сети."""
 
+from cryptography.fernet import Fernet
+
 from app.domain.models import Bundle
-from app.geo.transit import TransitError, load_transit_matrix, transit_matrix_path
+from app.geo.transit import (
+    TransitError,
+    encrypt_matrix_bytes,
+    encrypted_matrix_path,
+    load_transit_matrix,
+    transit_matrix_path,
+)
 from app.ingest.bundle import save_bundle
 from scripts import transit_matrix as cli
 from tests.helpers import at, req
@@ -228,6 +236,30 @@ def test_a_region_that_is_already_computed_is_skipped_unless_force(tmp_path, mon
     out = capsys.readouterr().out
     assert code == 0 and seen["calls"] == [3, 5, 26]
     assert "уже посчитан" not in out
+
+
+def test_a_region_encrypted_in_the_repository_counts_as_computed_with_the_key(tmp_path, monkeypatch, capsys):
+    # Свежий клон: открытого файла нет, есть только зашифрованный — с ключом регион не пересчитывается.
+    save_region(tmp_path, "средний")
+    seen: dict = {}
+    monkeypatch.setattr(cli, "TransitClient", stub_client(seen))
+    cli.main(["--region", "средний"], env={"DATA_DIR": str(tmp_path), **KEY})
+    plain = matrix_path(tmp_path, "средний")
+    transit_key = Fernet.generate_key().decode()
+    encrypted_matrix_path(plain.parent, "средний").write_bytes(
+        encrypt_matrix_bytes(plain.read_bytes(), transit_key)
+    )
+    plain.unlink()
+    capsys.readouterr()
+
+    code = cli.main(
+        ["--region", "средний", "--dry-run"], env={"DATA_DIR": str(tmp_path), "TRANSIT_KEY": transit_key}
+    )
+    assert code == 0 and "уже посчитан" in capsys.readouterr().out
+
+    # Без ключа не понять, на тех ли точках он посчитан: регион в плане как непосчитанный.
+    code = cli.main(["--region", "средний", "--dry-run"], env={"DATA_DIR": str(tmp_path)})
+    assert code == 0 and "уже посчитан" not in capsys.readouterr().out
 
 
 def test_a_changed_bundle_makes_the_saved_matrix_stale(tmp_path, monkeypatch, capsys):
