@@ -276,7 +276,8 @@ class Timeline:
         становится awaiting. Событие, отклонённое при optimal, выбора не требует и проходится как отклонённое.
         """
         limit = len(self.entries) if count is None else min(count, len(self.entries))
-        session, prefix = base, ()
+        session = base
+        prefix: tuple[str, ...] = ()
         steps: list[TimelineStep] = []
         keys: list[StepKey] = []
         awaiting: TimelineEntry | None = None

@@ -172,7 +172,7 @@ def _geocoder(calls):
 
 
 def test_request_update_without_point_is_geocoded_once_and_replayed_from_the_answer(solves):
-    calls = []
+    calls: list[tuple[str, str]] = []
     ctx = context(geocode=_geocoder(calls))
     base = new_session(ctx)
     r2 = base.request("R2").model_copy(update={"district": "Таганский"})
@@ -206,7 +206,7 @@ def test_request_update_without_point_is_geocoded_once_and_replayed_from_the_ans
 
 
 def test_request_update_to_the_same_address_is_still_geocoded_and_point_edit_is_not():
-    calls = []
+    calls: list[tuple[str, str]] = []
     ctx = context(geocode=_geocoder(calls))
     base = new_session(ctx)
     same = base.request("R2").model_copy(update={"lat": None, "lon": None, "duration_min": 60})
@@ -223,7 +223,7 @@ def test_request_update_to_the_same_address_is_still_geocoded_and_point_edit_is_
 
 
 def test_urgent_request_is_located_at_add_time_and_replay_does_not_geocode(solves):
-    calls = []
+    calls: list[tuple[str, str]] = []
     ctx = context(geocode=_geocoder(calls))
     base = new_session(ctx)
     urgent = req("U1", 0, 0, "13:00", "15:00").model_copy(update={"lat": None, "lon": None})
@@ -312,7 +312,9 @@ def test_walk_stops_at_a_breaking_event_without_a_choice_until_its_variants_are_
     walk = timeline.walk(base)
     assert (walk.done, walk.awaiting) == (0, breaking)
     assert timeline.pending_choice(base, 12 * 60) is None
-    pending_walk, entry = timeline.pending_choice(base, 15 * 60)
+    pending = timeline.pending_choice(base, 15 * 60)
+    assert pending is not None
+    pending_walk, entry = pending
     assert entry == breaking and pending_walk.session == base
     items, ready = timeline.view(base, 15 * 60)
     assert [item.status for item in items] == ["awaiting", "pending"] and ready is True

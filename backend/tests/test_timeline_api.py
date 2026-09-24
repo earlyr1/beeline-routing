@@ -2,6 +2,7 @@
 
 import json
 import threading
+from typing import Any
 
 import pytest
 
@@ -301,7 +302,7 @@ def test_event_rejected_at_or_before_the_cursor_is_removed_with_422(api, solves)
 
 def test_timeline_event_checks_ids_and_time_range(api, solves):
     client, _, base, _ = dataset(api, solves)
-    urgent = {
+    urgent: dict[str, Any] = {
         "type": "urgent",
         "time": "15:00",
         "request": {
@@ -547,7 +548,7 @@ def test_cursor_request_during_precompute_waits_for_the_step_and_reuses_it(api, 
     early = at(client, base, "12:00")
     assert (request_status(early, "R3"), request_status(early, "R2")) == ("cancelled", "active")
 
-    results = {}
+    results: dict[str, Any] = {}
     late = threading.Thread(
         target=lambda: results.update(late=client.post(f"{base}/cursor", json={"time": "15:00"})), daemon=True
     )

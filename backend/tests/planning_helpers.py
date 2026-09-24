@@ -1,3 +1,5 @@
+from typing import Any
+
 from app.domain.models import Office
 from app.geo.matrix import TrafficProfile, TravelModel
 from app.planning.session import PlanningContext, start_session
@@ -11,7 +13,9 @@ OFFICE = Office(
 
 
 def context(**overrides):
-    values = dict(model=TravelModel(), traffic=TrafficProfile({}), time_limit_s=1, time_limit_lunch_s=1)
+    values: dict[str, Any] = dict(
+        model=TravelModel(), traffic=TrafficProfile({}), time_limit_s=1, time_limit_lunch_s=1
+    )
     values.update(overrides)
     return PlanningContext(**values)
 

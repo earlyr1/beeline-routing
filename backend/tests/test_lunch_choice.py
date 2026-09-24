@@ -129,7 +129,9 @@ def test_session_without_lunch_plans_exactly_as_before_lunch_feature():
     assert all_lunches(updated.plan, updated.baseline) == [None] * 4
     [late] = updated.last_diff.delay_forecast.late_without_replan
     assert (late.request_id, late.planned_start, late.forecast_start, late.late_min) == ("R2", 781, 811, 21)
-    assert build_explanation(updated.problem, updated.plan, updated.request("R1")).factors == [
+    r1 = updated.request("R1")
+    assert r1 is not None
+    assert build_explanation(updated.problem, updated.plan, r1).factors == [
         "Работа уже началась к моменту последнего события, поэтому заявка не переназначается."
     ]
 

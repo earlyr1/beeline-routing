@@ -30,6 +30,7 @@ from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_
 from app.geo.transit import SNAP_RADIUS_KM, TransitLookup, TransitMatrix, load_transit_matrices
 from app.ingest.bundle import load_bundle
 from app.settings import Settings
+from app.solvers.problem import problem_points
 
 # Полосы расстояния по прямой между точками пары, км: нижняя граница входит, верхняя нет.
 DISTANCE_BANDS: tuple[tuple[str, float, float], ...] = (
@@ -248,8 +249,7 @@ def coverage_lines(settings: Settings, matrices: Sequence[TransitMatrix]) -> lis
         if not own:
             continue
         bundle = load_bundle(path)
-        located = [r for r in bundle.requests if r.lat is not None and r.lon is not None]
-        points = [(e.start_lat, e.start_lon) for e in bundle.engineers] + [(r.lat, r.lon) for r in located]
+        points = problem_points(bundle.engineers, bundle.requests)
         lookup = TransitLookup(points, own)
         pairs = len(points) * (len(points) - 1)
         share = 100.0 * lookup.covered / pairs if pairs else 0.0

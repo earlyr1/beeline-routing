@@ -72,7 +72,7 @@ def test_nominatim_reverse_keeps_the_same_interval_as_search():
             return httpx.Response(200, json=[])
         return httpx.Response(200, json={"address": PEROVSKAYA})
 
-    sleeps = []
+    sleeps: list[float] = []
     ticks = iter([0.0, 0.3, 0.3])
     geocoder = _nominatim(handler, sleep=sleeps.append, clock=lambda: next(ticks))
     geocoder.lookup("Москва, Перовская улица, 42к1")
@@ -163,6 +163,7 @@ def test_short_address_and_precision(hit, expected):
 
 def test_short_address_parses_back_into_street_and_house():
     found = short_address(ReverseHit("Москва", "Перовская улица", "42 к1"))
+    assert found.address is not None
     parsed = parse_address(found.address)
     assert (parsed.city, parsed.street_type, parsed.street_name, parsed.house) == (
         "Москва",

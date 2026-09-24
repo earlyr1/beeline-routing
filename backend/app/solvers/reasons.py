@@ -51,13 +51,11 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
     skilled = [s for s in states if request.skill in s.engineer.skills]
     if not skilled:
         return result(ReasonCode.NO_SKILL, f"Нет инженера с навыком «{skill}».")
-    with_transport = [
-        s
-        for s in skilled
-        if request.transport_required is None or s.engineer.transport == request.transport_required
-    ]
-    if not with_transport:
-        transport = TRANSPORT_RU[request.transport_required]
+    required = request.transport_required
+    with_transport = [s for s in skilled if required is None or s.engineer.transport == required]
+    # Без требования к транспорту подходят все бригады с навыком, а они есть: пустым список бывает только с ним.
+    if required is not None and not with_transport:
+        transport = TRANSPORT_RU[required]
         return result(
             ReasonCode.NO_TRANSPORT, f"Нет инженера с навыком «{skill}» и транспортом «{transport}»."
         )
@@ -91,7 +89,7 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
         return result(
             ReasonCode.NO_TRANSPORT,
             f"Нет инженера, который доедет: ближайшая подходящая бригада в "
-            f"{min(far for _, far in direct):.0f} км от заявки, а {limits}.{tail}",
+            f"{min(far for _, far in direct if far is not None):.0f} км от заявки, а {limits}.{tail}",
         )
 
     # Оборудование бригада получает утром сразу на весь день: если у всех, кто мог бы приехать, запас уже

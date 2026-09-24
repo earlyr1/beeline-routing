@@ -75,7 +75,7 @@ def _session(record: DatasetRecord) -> PlanningSession:
 
 def _check_known(record: DatasetRecord, event: Event) -> None:
     try:
-        check_known(record.base, record.timeline.entries, event)
+        check_known(record.day_base(), record.timeline.entries, event)
     except EventRejected as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
@@ -208,6 +208,7 @@ def build_plan(dataset_id: str, deps: Deps, body: PlanRequest | None = None) -> 
             ):
                 return planning_state(record)
             day = record.prepared
+            assert day is not None  # данные дня приходят в запись вместе с его планом
             version = record.next_version()
         # Пересборка идёт без record.lock: состояние, объяснения и линии маршрутов отвечают по прежнему плану.
         fresh = start_session(
@@ -251,7 +252,7 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
     ctx = deps.ingest.planning
     with record.lock:
         _session(record)
-        requests = known_requests(record.base, record.timeline.entries)
+        requests = known_requests(record.day_base(), record.timeline.entries)
     _check_window_grid(deps, event, requests)
     # Геокодер может отвечать долго: адрес срочной заявки и новый адрес изменённой заявки ищем до блокировок
     # датасета, чтобы не держать остальные запросы к нему. При пересчётах геокодер больше не вызывается, даже если
@@ -269,7 +270,7 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
             if step is None:
                 record.drop_entry(entry.id)
                 with record.lock:
-                    awaiting = record.timeline.walk(record.base).awaiting
+                    awaiting = record.timeline.walk(record.day_base()).awaiting
                 when = fmt_hhmm(awaiting.event.time if awaiting is not None else cursor)
                 raise HTTPException(status_code=409, detail=f"Сначала выберите вариант для события в {when}.")
             if step.reason is not None:
@@ -302,7 +303,7 @@ def add_timeline_event(
         _check_known(record, event)
         if variant is not None:
             _check_variant(record, event, variant)
-        requests = known_requests(record.base, record.timeline.entries)
+        requests = known_requests(record.day_base(), record.timeline.entries)
     _check_window_grid(deps, event, requests)
     event, geo = geocode_entry(event, requests, ctx)
     try:
@@ -352,7 +353,7 @@ def clear_timeline(dataset_id: str, deps: Deps) -> PlanningState:
     with record.timeline_lock:
         with record.lock:
             _session(record)
-            record.start_day(record.base)
+            record.start_day(record.day_base())
         return planning_state(record)
 
 

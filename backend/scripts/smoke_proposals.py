@@ -12,7 +12,9 @@ import sys
 import time
 from pathlib import Path
 
-from smoke_api import call, upload
+# Скрипт запускается по пути (python scripts/smoke_proposals.py), и smoke_api лежит рядом в sys.path[0]. mypy
+# проверяет scripts как пакет и знает модуль только как scripts.smoke_api.
+from smoke_api import call, upload  # type: ignore[import-not-found]
 
 
 def main(argv: list[str]) -> int:

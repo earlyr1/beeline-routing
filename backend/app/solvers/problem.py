@@ -19,7 +19,7 @@ from app.domain.models import (
 )
 from app.geo.kvcache import KVCache
 from app.geo.matrix import TrafficProfile, TravelModel, TravelTimes, build_base_matrix
-from app.geo.osrm import OsrmClient
+from app.geo.osrm import LatLon, OsrmClient
 from app.geo.transit import TransitLookup, TransitMatrix
 
 
@@ -155,6 +155,13 @@ class Problem:
         )
 
 
+def problem_points(engineers: Iterable[Engineer], requests: Iterable[Request]) -> list[LatLon]:
+    """Точки задачи в порядке её узлов: старты инженеров, затем заявки с координатами (без них заявка не узел)."""
+    return [(e.start_lat, e.start_lon) for e in engineers] + [
+        (r.lat, r.lon) for r in requests if r.lat is not None and r.lon is not None
+    ]
+
+
 def make_problem(
     requests: list[Request],
     engineers: list[Engineer],
@@ -188,7 +195,7 @@ def make_problem(
         if (r.lat is None or r.lon is None) and r.status == RequestStatus.ACTIVE
     ]
     if travel is None:
-        points = [(e.start_lat, e.start_lon) for e in engineers] + [(r.lat, r.lon) for r in located]
+        points = problem_points(engineers, located)
         # Минуты 2ГИС берутся по парам: точка дня привязывается к ближайшей точке матрицы в 150 м, и пара из одной
         # матрицы идёт из 2ГИС, даже если в дне появилась срочная заявка или сменился адрес. Пары с новой точкой,
         # как и день, которого нет ни в одной матрице, считает встроенная модель, и это не ошибка.

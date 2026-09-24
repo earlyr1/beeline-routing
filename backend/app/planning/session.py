@@ -44,7 +44,7 @@ from app.settings import DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S, DEFAULT_SOLVER_TIME_
 from app.solvers.fcfs import FcfsSolver
 from app.solvers.ortools_solver import ObjectiveWeights, OrToolsSolver
 from app.solvers.portfolio import SolverPool, plan_cost
-from app.solvers.problem import EngineerState, Problem, make_problem
+from app.solvers.problem import EngineerState, Problem, make_problem, problem_points
 from app.solvers.reasons import too_far_km
 from app.solvers.simulate import simulate_route
 
@@ -224,9 +224,7 @@ def warn_stale_transit(region: str, problem: Problem, transit: Sequence[TransitM
     own = [matrix for matrix in transit if matrix.region == region]
     if not own:
         return
-    points = [(e.start_lat, e.start_lon) for e in problem.engineers] + [
-        (r.lat, r.lon) for r in problem.requests
-    ]
+    points = problem_points(problem.engineers, problem.requests)
     lookup = TransitLookup(points, own)
     if lookup.snapped < len(points):
         logger.warning(
@@ -561,6 +559,7 @@ def _changed_inputs(
         if index is None:
             raise EventRejected(f"Заявка {event.request_id} не найдена.")
         stored, sent = requests[index], event.request
+        assert sent is not None  # валидатор Event: у изменения заявки request есть всегда
         label = request_label(stored.id, stored.priority)
         if stored.id in started:
             raise EventRejected(
@@ -581,7 +580,7 @@ def _changed_inputs(
         else:
             # Заявка стала «как можно скорее»: часы ожидания идут с этого события.
             window = asap_window(engineers, now)
-        changes = {**sent.model_dump(include=EDITABLE_REQUEST_FIELDS), **window}
+        changes = {**sent.model_dump(include=set(EDITABLE_REQUEST_FIELDS)), **window}
         merged = stored.model_copy(update={**changes, **_edited_location(stored, sent, ctx)})
         if merged == stored:
             raise EventRejected(f"В заявке {label} ничего не изменилось.")
@@ -638,6 +637,7 @@ def _changed_inputs(
         # Закреплённые визиты сохраняют прежние время и пробег (pin_problem берёт их из текущего плана),
         # а все участки после них солвер считает по новому транспорту.
         previous = engineer.transport
+        assert event.transport is not None  # валидатор Event: у смены транспорта transport есть всегда
         engineer.transport = event.transport
         return requests, engineers, event.model_copy(update={"previous_transport": previous})
 
@@ -664,12 +664,12 @@ def _changed_inputs(
                 f"Заявке {label} нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
                 f"у {engineer.name} «{TRANSPORT_RU[engineer.transport]}»."
             )
-        previous = _planned_engineer(session.plan, request.id)
-        if previous == engineer.id:
+        previous_engineer = _planned_engineer(session.plan, request.id)
+        if previous_engineer == engineer.id:
             raise EventRejected(f"Заявка {label} уже у {engineer.name}.")
         # Успевает ли бригада к заявке, проверяет apply_event по задаче после события.
         request.fixed_engineer_id = engineer.id
-        return requests, engineers, event.model_copy(update={"previous_engineer_id": previous})
+        return requests, engineers, event.model_copy(update={"previous_engineer_id": previous_engineer})
 
     if event.type == EventType.ENGINEER_UNAVAILABLE:
         engineer = _find_engineer(engineers, event.engineer_id)
@@ -685,10 +685,12 @@ def _changed_inputs(
     # (dispatch_order) при любом типе работ. Уровень — род работ, и его, какой бы ни прислал клиент, сервер берёт
     # по типу заявки BK, как у заявки дня того же типа: срочное подключение остаётся подключением. Заявка без типа
     # работ из таблицы нормативов (старый диалог, чат) — авария.
-    new = event.request.model_copy(
+    urgent = event.request
+    assert urgent is not None  # валидатор Event: у срочной заявки request есть всегда
+    new = urgent.model_copy(
         update={
             "priority": Priority.URGENT,
-            "tier": ctx.tier_by_bk.get(event.request.source_type_bk, RequestTier.EMERGENCY),
+            "tier": ctx.tier_by_bk.get(urgent.source_type_bk, RequestTier.EMERGENCY),
             "status": RequestStatus.ACTIVE,
             "fixed_engineer_id": None,
         }
@@ -718,15 +720,18 @@ def _pinned_problem(base: Problem, session: PlanningSession, event: Event) -> Pr
 
     if event.type in (EventType.REQUEST_UPDATED, EventType.REQUEST_REASSIGNED):
         # Изменённую и переназначенную заявку солвер планирует заново, даже если инженер уже едет к ней.
+        assert event.request_id is not None  # валидатор Event: у этих событий request_id есть всегда
         return pin([event.request_id])
     problem = pin(())
     if event.type != EventType.ENGINEER_DELAYED:
         return problem
-    missed = missed_hold(problem, event.engineer_id, event.delay_min)
+    engineer_id, delay_min = event.engineer_id, event.delay_min
+    assert engineer_id is not None and delay_min is not None  # валидатор Event: у задержки они есть всегда
+    missed = missed_hold(problem, engineer_id, delay_min)
     if missed is not None:
         # С задержкой инженер не успеет в окно заявки, к которой едет: кому её отдать, решает солвер.
         problem = pin([missed])
-    return delay_engineer(problem, event.engineer_id, event.delay_min)
+    return delay_engineer(problem, engineer_id, delay_min)
 
 
 def _check_reachable(problem: Problem, event: Event, label: str) -> None:
@@ -829,7 +834,9 @@ def apply_event(
         unassigned_before = {item.request_id for item in session.plan.unassigned}
         if reassigned:
             # У переназначения «keep» — «Вставить в маршрут»: заявка встаёт в маршрут выбранной бригады.
-            plan = insert_plan(problem, stored_event.request_id, stored_event.engineer_id, unassigned_before)
+            request_id, engineer_id = stored_event.request_id, stored_event.engineer_id
+            assert request_id is not None and engineer_id is not None  # валидатор Event у переназначения
+            plan = insert_plan(problem, request_id, engineer_id, unassigned_before)
         else:
             plan = keep_plan(problem, unassigned_before)
         baseline = FcfsSolver().solve(problem)
@@ -844,7 +851,9 @@ def apply_event(
     cancelled = {request.id for request in requests if request.status == RequestStatus.CANCELLED}
     diff = compute_diff(session.plan, plan, cancelled)
     if stored_event.type == EventType.ENGINEER_DELAYED:
-        forecast = forecast_delay(problem, session.plan, stored_event.engineer_id, stored_event.delay_min)
+        engineer_id, delay_min = stored_event.engineer_id, stored_event.delay_min
+        assert engineer_id is not None and delay_min is not None  # валидатор Event у задержки
+        forecast = forecast_delay(problem, session.plan, engineer_id, delay_min)
         diff = diff.model_copy(update={"delay_forecast": forecast})
     version = session.version + 1 if version is None else version
     applied = AppliedEvent(id=f"ev_{len(session.events) + 1}", event=stored_event, version=version)

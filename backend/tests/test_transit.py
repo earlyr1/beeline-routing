@@ -172,7 +172,8 @@ def test_distance_groups_keep_every_pair_within_the_limit_even_along_a_chain():
 
 
 def test_client_sleeps_between_calls_and_reports_progress():
-    pauses, steps = [], []
+    pauses: list[float] = []
+    steps: list[tuple[int, int]] = []
 
     def handler(request):
         return _ok(json.loads(request.content))
@@ -197,7 +198,7 @@ def test_client_sleeps_between_calls_and_reports_progress():
 
 def test_rate_limit_answer_waits_and_retries_the_same_request():
     answers = [httpx.Response(429, text="Too Many Requests")]
-    pauses = []
+    pauses: list[float] = []
 
     def handler(request):
         return answers.pop(0) if answers else _ok(json.loads(request.content))
@@ -215,7 +216,7 @@ def test_rate_limit_that_does_not_pass_becomes_transit_error():
     def handler(request):
         return httpx.Response(429, text="Too Many Requests")
 
-    pauses = []
+    pauses: list[float] = []
     client = TransitClient(
         KEY, client=httpx.Client(transport=httpx.MockTransport(handler)), sleep=pauses.append
     )

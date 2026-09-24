@@ -104,11 +104,11 @@ def build_base_matrix(
         if table is not None:
             km_raw, min_raw = table
             road_km = [
-                [fallback_km[i][j] if km_raw[i][j] is None else km_raw[i][j] for j in range(n)]
+                [fallback_km[i][j] if (km := km_raw[i][j]) is None else km for j in range(n)]
                 for i in range(n)
             ]
             car_min = [
-                [fallback_min[i][j] if min_raw[i][j] is None else min_raw[i][j] for j in range(n)]
+                [fallback_min[i][j] if (mins := min_raw[i][j]) is None else mins for j in range(n)]
                 for i in range(n)
             ]
             return BaseMatrix(road_km, car_min, straight, "osrm")

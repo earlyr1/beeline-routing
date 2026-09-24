@@ -78,10 +78,12 @@ def _alternative(
             engineer_id=engineer.id, feasible=False, reason=f"Нет навыка «{SKILL_RU[request.skill]}»"
         ), False
     if reason == Exclusion.NO_TRANSPORT:
+        required = request.transport_required
+        assert required is not None  # exclusion() даёт NO_TRANSPORT только заявке с требованием к транспорту
         return Alternative(
             engineer_id=engineer.id,
             feasible=False,
-            reason=f"Нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
+            reason=f"Нужен транспорт «{TRANSPORT_RU[required]}», "
             f"у инженера «{TRANSPORT_RU[engineer.transport]}»",
         ), False
     if reason == Exclusion.UNAVAILABLE:
@@ -128,6 +130,12 @@ def _alternative(
         start=insertion.start,
         reason=f"Может взять: {mileage}, начало {fmt_hhmm(insertion.start)}{note}",
     ), idle
+
+
+def _extra_km(alternative: Alternative) -> float:
+    """Прирост пробега у альтернативы, которая может взять заявку: у таких _alternative его всегда считает."""
+    assert alternative.extra_km is not None
+    return alternative.extra_km
 
 
 def _shown(alternative: Alternative) -> Alternative:
@@ -252,7 +260,7 @@ def _unassigned_constraints(problem: Problem, plan: Plan, request: Request) -> l
         else f"Сегодня никто из подходящих инженеров не успевает до конца смен в {fmt_hhmm(until)}"
     )
     if unreachable:
-        nearest = min(far for _, far in reach)
+        nearest = min(far for _, far in reach if far is not None)
         transport_detail += f"; ближайшая бригада в {nearest:.0f} км, это дальше предела плеча"
         # Дело не в окне и не в смене: ехать к заявке некому, и время считать не по кому.
         window_detail = f"{NO_REACH}: успеть к окну {window} некому"
@@ -375,7 +383,7 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
     evaluated = [
         _alternative(problem, plan, s, request) for s in problem.states if s.engineer.id != engineer_id
     ]
-    feasible = sorted((pair for pair in evaluated if pair[0].feasible), key=lambda pair: pair[0].extra_km)
+    feasible = sorted((pair for pair in evaluated if pair[0].feasible), key=lambda pair: _extra_km(pair[0]))
     infeasible = [pair for pair in evaluated if not pair[0].feasible]
 
     factors: list[str] = []
@@ -388,7 +396,7 @@ def build_explanation(problem: Problem, plan: Plan, request: Request) -> Explana
     else:
         best, _ = feasible[0]
         best_name = problem.state(best.engineer_id).engineer.name
-        delta = best.extra_km - own_extra
+        delta = _extra_km(best) - own_extra
         if delta > KM_EPSILON:
             factors.append(
                 f"Кратчайшая вставка: у лучшей альтернативы ({best_name}) пробег больше на {delta:.1f} км."

@@ -143,6 +143,12 @@ class DatasetRecord:
             self.agreed = snapshot.agreed
             raise
 
+    def day_base(self) -> PlanningSession:
+        """План начала дня: он есть с того момента, как день собран. Раньше сюда не приходят — запросы к дню
+        без плана отвечают 409 (routes._session), а фоновый предподсчёт без него не запускается."""
+        assert self.base is not None, "план дня ещё не собран"
+        return self.base
+
     def take_resume(self) -> int | None:
         """Время, к которому план должен догнать часы после подъёма дня из базы. Забирается один раз."""
         with self.lock:
@@ -429,7 +435,7 @@ def _restore_plan(record: DatasetRecord) -> None:
     застал солвер за работой), досчитается в фоне, и settle доведёт план до времени на часах.
     """
     count = record.timeline.applied_count(record.cursor)
-    walk = record.timeline.walk(record.base, count)
+    walk = record.timeline.walk(record.day_base(), count)
     record.session = walk.session
     if walk.awaiting is not None:
         record.cursor = walk.awaiting.event.time

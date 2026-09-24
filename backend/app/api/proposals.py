@@ -62,7 +62,7 @@ def _approve(deps: AppDeps, record: DatasetRecord, proposal: Proposal) -> Propos
         _session(record)
         cursor = record.cursor
         event = _refreshed(proposal.event, cursor)
-        known = known_requests(record.base, record.timeline.entries)
+        known = known_requests(record.day_base(), record.timeline.entries)
         off_grid = window_grid_problem(deps, event, known)
         if off_grid is not None:
             failed = proposal.model_copy(update={"status": "failed", "event": event, "error": off_grid})

@@ -153,7 +153,7 @@ def test_run_writes_the_matrix_of_the_region_and_compares_it_with_the_built_in_m
 def test_summary_compares_2gis_with_the_built_in_model_on_the_same_pairs():
     # 5 км по прямой: поездка 22.5 + 2.8·5 = 36.5, то есть 37 минут; 0.5 км пешком: 0.5 ×1.3 при 5 км/ч = 7.8, то есть 8.
     points = [at(0, 0), at(5, 0), at(0, 0.5)]
-    minutes = [[0, 40, None], [40, 0, 30], [9, 30, 0]]
+    minutes: list[list[int | None]] = [[0, 40, None], [40, 0, 30], [9, 30, 0]]
 
     lines = cli.summary_lines(points, minutes)
 

@@ -9,6 +9,7 @@ SMOKE = Path(__file__).resolve().parents[1] / "scripts" / "smoke_api.py"
 
 def _load_smoke():
     spec = importlib.util.spec_from_file_location("smoke_api", SMOKE)
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

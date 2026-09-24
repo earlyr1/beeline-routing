@@ -80,7 +80,7 @@ def test_nominatim_client_sends_bounded_query_and_respects_rate_limit():
         seen.append(request)
         return httpx.Response(200, json=[{"lat": "55.70", "lon": "37.78", "category": "building"}])
 
-    sleeps = []
+    sleeps: list[float] = []
     ticks = iter([0.0, 0.2, 0.2])
     geocoder = NominatimGeocoder(
         client=httpx.Client(transport=httpx.MockTransport(handler)),
@@ -123,7 +123,7 @@ def test_nominatim_default_timeout_is_five_seconds():
 
 
 def test_unreachable_nominatim_fails_fast_and_failure_is_not_cached(tmp_path, network_up):
-    attempts = []
+    attempts: list[str] = []
     path = tmp_path / "cache.json"
     cache = JsonGeocodeCache(path)
     result = geocode_address(
@@ -136,7 +136,7 @@ def test_unreachable_nominatim_fails_fast_and_failure_is_not_cached(tmp_path, ne
 
 
 def test_after_network_failure_geocoder_is_not_called_for_a_minute(tmp_path, network_up):
-    attempts = []
+    attempts: list[str] = []
     geocoder = _unreachable_nominatim(attempts)
     clock = FakeClock(1000.0)
     cache = JsonGeocodeCache(tmp_path / "c.json")
@@ -267,7 +267,7 @@ def test_nominatim_client_reads_place_rank():
 
 
 def test_cached_variant_is_used_while_network_is_down(tmp_path, network_up):
-    attempts = []
+    attempts: list[str] = []
     cache = JsonGeocodeCache(tmp_path / "c.json")
     cache.put("Москва, Грайвороновская улица", GeoHit(55.72, 37.73, "highway"))
     result = geocode_address(ADDRESS, "", _unreachable_nominatim(attempts), cache, clock=FakeClock(0.0))

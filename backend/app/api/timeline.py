@@ -17,7 +17,7 @@ from app.api.registry import DatasetRecord
 from app.api.schemas import PlanningState, TimelineItem, to_planning_state
 from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
-from app.planning.models import EventChoice, EventVariant
+from app.planning.models import BaseVariant, EventChoice, EventVariant
 from app.planning.session import PlanningContext
 from app.planning.timeline import TimelineEntry, TimelineStep, Walk, replay_step
 from app.planning.variants import (
@@ -89,7 +89,7 @@ def _choice(
 def planning_state(record: DatasetRecord) -> PlanningState:
     """Состояние на текущее время плана с событиями таймлайна. Вызывать, когда план дня уже есть."""
     with record.lock:
-        views, ready = record.timeline.view(record.base, record.cursor)
+        views, ready = record.timeline.view(record.day_base(), record.cursor)
         timeline = [
             TimelineItem(
                 id=view.entry.id,
@@ -101,7 +101,8 @@ def planning_state(record: DatasetRecord) -> PlanningState:
             )
             for view in views
         ]
-        pending = record.timeline.pending_choice(record.base, record.cursor)
+        pending = record.timeline.pending_choice(record.day_base(), record.cursor)
+        assert record.session is not None  # план на текущее время есть вместе с планом начала дня
         return to_planning_state(
             record.session,
             cursor=record.cursor,
@@ -136,7 +137,7 @@ def _replay_variants(record: DatasetRecord, ctx: PlanningContext, walk: Walk, en
         known = {variant: record.timeline.step(walk, entry, variant) for variant in VARIANTS}
     missing = [variant for variant in VARIANTS if known[variant] is None]
     rejected = known["optimal"] is not None and known["optimal"].reason is not None
-    fresh: dict[EventVariant, TimelineStep] = {}
+    fresh: dict[BaseVariant, TimelineStep] = {}
     if ctx.solver_pool is not None and len(missing) > 1 and not rejected:
         with ThreadPoolExecutor(max_workers=len(missing)) as threads:
             futures = {
@@ -181,7 +182,7 @@ def compute_steps(record: DatasetRecord, ctx: PlanningContext, count: int) -> Wa
     """
     while True:
         with record.lock:
-            walk = record.timeline.walk(record.base, count)
+            walk = record.timeline.walk(record.day_base(), count)
             if walk.awaiting is not None or walk.done >= min(count, len(record.timeline.entries)):
                 return walk
             entry = record.timeline.entries[walk.done]
@@ -197,7 +198,7 @@ def move_cached(record: DatasetRecord, cursor: int) -> bool:
     Время не проходит «ломающее» событие без выбора: оно встаёт на время события, план — план до него.
     """
     count = record.timeline.applied_count(cursor)
-    walk = record.timeline.walk(record.base, count)
+    walk = record.timeline.walk(record.day_base(), count)
     if walk.awaiting is not None:
         record.move_to(walk.awaiting.event.time, walk.session)
         return True
@@ -327,7 +328,7 @@ def precompute(
                 with record.lock:
                     if record.timeline.revision != revision:
                         return
-                    walk = record.timeline.walk(record.base)
+                    walk = record.timeline.walk(record.day_base())
                     ready = walk.done == len(record.timeline.entries)
                     if ready:
                         record.prune_steps(walk)

@@ -78,7 +78,7 @@ def test_address_must_parse_back_to_street_and_house():
 
 
 def test_pool_keeps_residential_addresses_once_and_in_stable_order():
-    elements = [
+    elements: list[dict] = [
         {
             "type": "way",
             "center": {"lat": 55.8, "lon": 37.4},

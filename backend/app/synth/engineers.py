@@ -35,7 +35,7 @@ def choose_shift(cfg: SynthConfig, rows: list[RawRequestRow]) -> ShiftTemplate:
     return max(cfg.shifts, key=covered)  # max возвращает первый из равных
 
 
-def largest_remainder(shares: Mapping[str, float], total: int) -> dict[TransportDraw, int]:
+def largest_remainder(shares: Mapping[TransportDraw, float], total: int) -> dict[TransportDraw, int]:
     weight = sum(shares.values())
     raw = {t: shares.get(t, 0.0) / weight * total for t in TRANSPORT_DRAW_ORDER}
     counts = {t: int(raw[t]) for t in TRANSPORT_DRAW_ORDER}
@@ -74,14 +74,16 @@ def assign_transports(
     if total >= len(TRANSPORT_DRAW_ORDER):
         for t in TRANSPORT_DRAW_ORDER:
             while counts[t] == 0:
-                donor = max(counts, key=counts.get)
+                donor = max(counts, key=lambda draw: counts[draw])
                 counts[donor] -= 1
                 counts[t] += 1
     forced = [
         eid for eid, skills in engineers if skills & set(cfg.force_car_for_skills) or eid in forced_car_ids
     ]
     deficit = len(forced) - counts["car"]
-    for t in sorted((t for t in TRANSPORT_DRAW_ORDER if t != "car"), key=counts.get, reverse=True):
+    for t in sorted(
+        (t for t in TRANSPORT_DRAW_ORDER if t != "car"), key=lambda draw: counts[draw], reverse=True
+    ):
         while deficit > 0 and counts[t] > 1:
             counts[t] -= 1
             counts["car"] += 1
@@ -106,7 +108,7 @@ def history_medoid(
     points = [row_points[row.row_index] for row in rows if row.row_index in row_points]
     if not points:
         return None
-    return min(points, key=lambda p: sum(haversine_km(*p, *q) for q in points))
+    return min(points, key=lambda p: sum(haversine_km(p[0], p[1], q[0], q[1]) for q in points))
 
 
 def home_start(

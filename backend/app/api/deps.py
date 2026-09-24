@@ -84,6 +84,7 @@ def build_llm(settings: Settings) -> LlmClient | None:
     """Клиент OpenAI-совместимого API или None, если LLM_BASE_URL и LLM_MODEL не заданы."""
     if not settings.llm_enabled:
         return None
+    assert settings.llm_base_url and settings.llm_model  # это и значит llm_enabled
     return OpenAiLlmClient(
         base_url=settings.llm_base_url,
         model=settings.llm_model,

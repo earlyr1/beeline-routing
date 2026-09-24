@@ -47,9 +47,11 @@ def create_app(deps: AppDeps | None = None) -> FastAPI:
         lifespan=_lifespan,
     )
     app.state.deps = deps or build_deps(Settings.from_env())
-    app.add_exception_handler(RequestValidationError, _validation_error)
-    app.add_exception_handler(StateConflict, _state_conflict)
-    app.add_exception_handler(StateUnavailable, _state_unavailable)
+    # Starlette типизирует обработчик как принимающий любое Exception, хотя зовёт его только для своего класса:
+    # обработчик с узким типом ошибки mypy не пропускает.
+    app.add_exception_handler(RequestValidationError, _validation_error)  # type: ignore[arg-type]
+    app.add_exception_handler(StateConflict, _state_conflict)  # type: ignore[arg-type]
+    app.add_exception_handler(StateUnavailable, _state_unavailable)  # type: ignore[arg-type]
     app.include_router(router)
     app.include_router(proposals_router)
     app.include_router(geocoding_router)

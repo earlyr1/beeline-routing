@@ -53,6 +53,7 @@ from app.geo.transit import (
 )
 from app.ingest.bundle import load_bundle
 from app.settings import Settings
+from app.solvers.problem import problem_points
 
 ALL_REGIONS = "all"
 NO_KEY = (
@@ -72,8 +73,7 @@ class RegionsNotFound(LookupError):
 
 def matrix_points(bundle: Bundle) -> list[LatLon]:
     """Точки задачи в порядке make_problem: старты инженеров, затем заявки с координатами."""
-    located = [r for r in bundle.requests if r.lat is not None and r.lon is not None]
-    return [(e.start_lat, e.start_lon) for e in bundle.engineers] + [(r.lat, r.lon) for r in located]
+    return problem_points(bundle.engineers, bundle.requests)
 
 
 def cost(points: Sequence[LatLon]) -> tuple[int, int]:
@@ -206,9 +206,11 @@ def summary_lines(points: Sequence[LatLon], minutes: Sequence[Sequence[int | Non
             *lines,
             "2ГИС не нашёл ни одного маршрута: матрица пустая, сервис будет считать встроенной моделью",
         ]
+    # В known только пары с числом: условие на None здесь для mypy, он не видит проверку isinstance выше.
+    found = [int(value) for i, j in known if (value := minutes[i][j]) is not None]
     return [
         *lines,
-        f"2ГИС, минуты: {_spread([int(minutes[i][j]) for i, j in known])}",
+        f"2ГИС, минуты: {_spread(found)}",
         f"встроенная модель на тех же парах: {_spread(model_minutes(points, known))}",
     ]
 
@@ -275,6 +277,7 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
             print(f"регион {job.region}: уже посчитан, пропущен — {job.path}")
             continue
         print(f"регион {job.region}: считаем, запросов: {job.requests}")
+        assert client is not None  # клиента нет, только когда посчитаны все регионы
         try:
             minutes = client.matrix(job.points, departure, progress=_progress)
         except TransitError as error:

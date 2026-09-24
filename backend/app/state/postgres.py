@@ -433,7 +433,7 @@ class PostgresStateRepo:
                     "WHERE dataset_id = %s ORDER BY cardinality(prefix), token",
                     (dataset_id,),
                 )
-                _restore_plans(state, cur.fetchall(), self._ctx)
+                _restore_plans(state, state.prepared, cur.fetchall(), self._ctx)
             cur.execute(
                 "SELECT request_id, client_window::text, request_window::text, version "
                 "FROM agreed_windows WHERE dataset_id = %s",
@@ -457,7 +457,9 @@ class PostgresStateRepo:
         self._pool.close()
 
 
-def _restore_plans(state: DayState, rows: Sequence[tuple], ctx: PlanningContext) -> None:
+def _restore_plans(
+    state: DayState, prepared: PreparedDay, rows: Sequence[tuple], ctx: PlanningContext
+) -> None:
     """Утренний план и кэш шагов из строк plans: солвер при этом не запускается ни разу.
 
     Строки идут от коротких ключей к длинным, поэтому у отклонённого шага (своего плана у него нет) план
@@ -470,7 +472,7 @@ def _restore_plans(state: DayState, rows: Sequence[tuple], ctx: PlanningContext)
         return load_session(
             raw,
             dataset_id=state.dataset_id,
-            prepared=state.prepared,
+            prepared=prepared,
             ctx=ctx,
             matrices=matrices,
         )
@@ -482,12 +484,9 @@ def _restore_plans(state: DayState, rows: Sequence[tuple], ctx: PlanningContext)
             state.base = hydrate(raw_session)
             by_prefix[()] = state.base
             continue
-        if raw_session is not None:
-            session = hydrate(raw_session)
-        else:
-            session = by_prefix.get(key[0])
-            if session is None:
-                continue
+        session = hydrate(raw_session) if raw_session is not None else by_prefix.get(key[0])
+        if session is None:
+            continue
         state.steps[key] = step_from_row(session, applied, reason)
         if applied is not None:
             by_prefix[(*key[0], token)] = session

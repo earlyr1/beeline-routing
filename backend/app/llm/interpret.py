@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -138,7 +138,7 @@ class ClarifyArgs(BaseModel):
     question: str = Field(min_length=1)
 
 
-ARGUMENT_MODELS: dict[str, type[BaseModel]] = {
+ARGUMENT_MODELS: dict[str, type[_TimedArgs] | type[ClarifyArgs]] = {
     "propose_urgent_request": UrgentArgs,
     "propose_cancel": RequestArgs,
     "propose_engineer_unavailable": EngineerArgs,
@@ -242,7 +242,7 @@ def _updated_request(
     stored: Request, args: RequestUpdateArgs, ctx: PlanningContext, notes: list[str]
 ) -> Request:
     """Текущая заявка с полями, которые назвала модель. У нового адреса координаты сбрасываются: их найдёт геокодер."""
-    changes = args.model_dump(include=EDITABLE_REQUEST_FIELDS, exclude_none=True)
+    changes = args.model_dump(include=set(EDITABLE_REQUEST_FIELDS), exclude_none=True)
     if not changes:
         raise Unresolved(
             f"Не понял, что изменить в заявке {request_label(stored.id, stored.priority)}. "
@@ -287,6 +287,7 @@ def _request_update_event(
 ) -> Event:
     request_id = resolve_request(session, args.request_id)
     stored = session.request(request_id)
+    assert stored is not None  # resolve_request вернул номер заявки, которая есть в дне
     request = _updated_request(stored, args, ctx, notes)
     # Окно заявки «как можно скорее» задаёт backend при проверке события, порядок границ здесь не важен.
     if request.asap or request.window_end > request.window_start:
@@ -302,7 +303,7 @@ def _request_update_event(
 
 def _build_event(
     name: str,
-    args: BaseModel,
+    args: _TimedArgs,
     session: PlanningSession,
     ctx: PlanningContext,
     new_request_id: Callable[[], str],
@@ -311,48 +312,53 @@ def _build_event(
 ) -> Event:
     """notes — что помощник сделал с окном сверх сказанного моделью: эти строки уходят в пояснение предложения."""
     time = args.time if args.time is not None else now
+    # Модель аргументов выбрана по имени инструмента (ARGUMENT_MODELS), и по нему же здесь известен её класс.
     if name == "propose_request_update":
-        return _request_update_event(session, args, time, ctx, notes)
+        return _request_update_event(session, cast(RequestUpdateArgs, args), time, ctx, notes)
     if name == "propose_cancel":
-        return Event(type=EventType.CANCEL, time=time, request_id=resolve_request(session, args.request_id))
+        request_id = resolve_request(session, cast(RequestArgs, args).request_id)
+        return Event(type=EventType.CANCEL, time=time, request_id=request_id)
     if name == "propose_engineer_unavailable":
         return Event(
             type=EventType.ENGINEER_UNAVAILABLE,
             time=time,
-            engineer_id=resolve_engineer(session, args.engineer_id),
+            engineer_id=resolve_engineer(session, cast(EngineerArgs, args).engineer_id),
         )
     if name == "propose_engineer_transport_change":
+        change = cast(TransportChangeArgs, args)
         return Event(
             type=EventType.ENGINEER_TRANSPORT_CHANGED,
             time=time,
-            engineer_id=resolve_engineer(session, args.engineer_id),
-            transport=args.transport,
+            engineer_id=resolve_engineer(session, change.engineer_id),
+            transport=change.transport,
         )
     if name == "propose_engineer_delay":
+        delay = cast(EngineerDelayArgs, args)
         return Event(
             type=EventType.ENGINEER_DELAYED,
             time=time,
-            engineer_id=resolve_engineer(session, args.engineer_id),
-            delay_min=args.delay_min,
+            engineer_id=resolve_engineer(session, delay.engineer_id),
+            delay_min=delay.delay_min,
         )
-    if args.asap:
+    urgent = cast(UrgentArgs, args)
+    if urgent.asap:
         # Окно заявки «как можно скорее» заполнит проверка события: от времени события до конца смен.
         window_start = window_end = time
-    elif args.window_start is None or args.window_end is None:
+    elif urgent.window_start is None or urgent.window_end is None:
         raise Unresolved(URGENT_WINDOW_MISSING)
     else:
         # Окно срочной заявки кладём на сетку до сборки события: клиенту называют слот.
-        window_start, window_end = _on_grid(ctx, args.window_start, args.window_end, notes)
-    transport = None if args.transport_required in (None, "none") else Transport(args.transport_required)
+        window_start, window_end = _on_grid(ctx, urgent.window_start, urgent.window_end, notes)
+    transport = None if urgent.transport_required in (None, "none") else Transport(urgent.transport_required)
     request = Request(
         id=new_request_id(),
-        address=args.address.strip(),
-        duration_min=args.duration_min,
+        address=urgent.address.strip(),
+        duration_min=urgent.duration_min,
         window_start=window_start,
         window_end=window_end,
         priority=Priority.URGENT,
-        asap=args.asap,
-        skill=args.skill,
+        asap=urgent.asap,
+        skill=urgent.skill,
         transport_required=transport,
         source_type_bk="Срочная заявка из чата",
     )

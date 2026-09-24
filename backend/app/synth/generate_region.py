@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import Counter
+from collections.abc import Set
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -258,6 +259,7 @@ def district_query(district: DistrictSpec, bbox: BBox | None = None) -> str:
         prefix = f'area["name"="{district.osm_area}"]["admin_level"="8"]->.a;'
     else:
         around = district.around
+        assert around is not None  # валидатор DistrictSpec: без osm_area у района есть around
         scope = f"(around:{around.radius_m},{around.lat},{around.lon})"
         prefix = ""
     setting = f"[bbox:{bbox.south},{bbox.west},{bbox.north},{bbox.east}]" if bbox is not None else ""
@@ -453,7 +455,7 @@ def generate_region(
     pools: dict[str, list[dict]],
     cfg: SynthConfig,
     empirical: Empirical,
-    taken_ids: set[str] = frozenset(),
+    taken_ids: Set[str] = frozenset(),
 ) -> GeneratedRegion:
     def rng(purpose: str, key: str = "") -> random.Random:
         return random.Random(f"{spec.seed}:{purpose}:{key}")
@@ -566,8 +568,12 @@ def seed_geocode_cache(cache: JsonGeocodeCache, points: list[tuple[str, str, flo
             if precision != "house":
                 continue
             found, hit = cache.get(query)
-            close = hit is not None and haversine_km(hit.lat, hit.lon, lat, lon) <= SEED_MAX_ERROR_KM
-            if found and close and hit.category != "highway":
+            if (
+                found
+                and hit is not None
+                and haversine_km(hit.lat, hit.lon, lat, lon) <= SEED_MAX_ERROR_KM
+                and hit.category != "highway"
+            ):
                 continue
             cache.put(query, GeoHit(lat, lon, "building", HOUSE_PLACE_RANK))
             written += 1

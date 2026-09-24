@@ -37,21 +37,21 @@ VARIANT_EVENTS = BREAKING_EVENTS | {EventType.CANCEL}
 # «Минимум перестановок»: условные 500 км за перенос заявки к другому инженеру вместо 20. Снять заявку всё равно
 # дороже (drop_normal), поэтому заявки пострадавшей бригады уходят другим, а чужие маршруты почти не трогаются.
 STABLE_REASSIGNMENT = 500_000
-VARIANT_TITLES: dict[BaseVariant, str] = {
+VARIANT_TITLES: dict[EventVariant, str] = {
     "optimal": "Оптимально по дню",
     "stable": "Минимум перестановок",
     "keep": "Ничего не менять",
 }
-VARIANT_SUMMARIES: dict[BaseVariant, str] = {
+VARIANT_SUMMARIES: dict[EventVariant, str] = {
     "optimal": "Пересчитать остаток дня целиком",
     "stable": "Чужие маршруты почти не трогаем",
     "keep": "Оставить маршруты как есть",
 }
 # У переназначения заявки «keep» не оставляет всё как есть, а вставляет заявку в маршрут выбранной бригады.
-EVENT_VARIANT_TITLES: dict[EventType, dict[BaseVariant, str]] = {
+EVENT_VARIANT_TITLES: dict[EventType, dict[EventVariant, str]] = {
     EventType.REQUEST_REASSIGNED: {"keep": "Вставить в маршрут"},
 }
-EVENT_VARIANT_SUMMARIES: dict[EventType, dict[BaseVariant, str]] = {
+EVENT_VARIANT_SUMMARIES: dict[EventType, dict[EventVariant, str]] = {
     EventType.REQUEST_REASSIGNED: {
         "keep": "Бригада пропускает, на что не успевает, остальные маршруты как есть"
     },
