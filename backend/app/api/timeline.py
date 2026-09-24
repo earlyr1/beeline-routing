@@ -15,20 +15,13 @@ from concurrent.futures import ThreadPoolExecutor
 
 from app.api.registry import DatasetRecord
 from app.api.schemas import PlanningState, TimelineItem, to_planning_state
-from app.domain.models import Event, Plan
+from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
-from app.planning.facts import assignable
+from app.planning.facts import assign_allowed, assignable
 from app.planning.models import BaseVariant, EventChoice, EventVariant
 from app.planning.session import PlanningContext
-from app.planning.timeline import TimelineEntry, TimelineStep, Walk, replay_step
-from app.planning.variants import (
-    VARIANTS,
-    Outcome,
-    assign_variant,
-    assigned_engineer,
-    build_choice,
-    needs_choice,
-)
+from app.planning.timeline import TimelineEntry, TimelineStep, Walk, choice_needed, replay_step
+from app.planning.variants import VARIANTS, Outcome, assign_variant, assigned_engineer, build_choice
 from app.state.repo import StateConflict, StateUnavailable
 
 logger = logging.getLogger(__name__)
@@ -38,7 +31,8 @@ RunBackground = Callable[[Callable[[], None]], None]
 # Пауза фонового предподсчёта между шагами: запрос, который ждёт timeline_lock, успевает его взять.
 PRECOMPUTE_PAUSE_S = 0.05
 NOT_ASSIGNABLE_TEXT = (
-    "Бригаду можно выбрать только для события об одной заявке, которая после него остаётся в плане."
+    "Бригаду можно выбрать только для события об одной заявке, которая после него остаётся в плане "
+    "и которой само событие бригаду не называет."
 )
 
 
@@ -51,42 +45,61 @@ class VariantUnavailable(Exception):
 
 
 def check_variant(record: DatasetRecord, event: Event, variant: EventVariant) -> None:
-    """Под record.lock: проверяет стратегию из запроса для события. Бросает VariantUnavailable.
+    """Под record.lock: проверяет стратегию из запроса по самому событию. Бросает VariantUnavailable.
 
     Базовые стратегии подходят любому событию. Незнакомая строка — 422, «отдать бригаде» у события не об одной
-    заявке (или о заявке, которую оно снимает, как отмена) или с бригадой не из этого дня — 422.
+    заявке или у события, которое само называет заявке бригаду (facts.assign_allowed), или с бригадой не из этого
+    дня — 422. Останется ли заявка после события в плане, проверяет check_step по посчитанному шагу.
     """
     engineer_id = assigned_engineer(variant)
     if variant not in VARIANTS and engineer_id is None:
         raise VariantUnavailable(422, f"Неизвестный вариант «{variant}».")
     if engineer_id is None:
         return
-    if not assignable(event):
+    if not assign_allowed(event):
         raise VariantUnavailable(422, NOT_ASSIGNABLE_TEXT)
     if record.base is None or record.base.engineer(engineer_id) is None:
         raise VariantUnavailable(422, f"Инженер {engineer_id} не найден.")
 
 
-def check_not_rejected(record: DatasetRecord, entry: TimelineEntry) -> None:
-    """Под record.lock: у отклонённого события вариантов нет — 409 с причиной отказа. Непосчитанное проходит."""
+def _counted_step(record: DatasetRecord, entry: TimelineEntry) -> TimelineStep | None:
+    """Под record.lock: посчитанный шаг события на текущем проходе шкалы или None.
+
+    Шаг, по которому проход провёл событие; у события, на котором проход стоит, — шаг «Оптимально по дню».
+    """
     walk = record.timeline.walk(record.day_base())
     position = record.timeline.entries.index(entry)
-    reason = walk.steps[position].reason if position < walk.done else None
-    if reason is not None:
-        raise VariantUnavailable(409, f"Событие отклонено: {reason}")
+    if position < walk.done:
+        return walk.steps[position]
+    return record.timeline.step(walk, entry, "optimal") if position == walk.done else None
 
 
-def _current(entry: TimelineEntry, outcomes: list[Outcome]) -> EventVariant | None:
+def check_step(record: DatasetRecord, entry: TimelineEntry, variant: EventVariant) -> None:
+    """Под record.lock: проверяет стратегию по посчитанному шагу события. Бросает VariantUnavailable.
+
+    У отклонённого события вариантов нет — 409 с причиной отказа. «Отдать бригаде» — только если заявка события
+    после него в работе дня (facts.assignable), иначе 422: отменённую раньше по времени заявку отдавать некому.
+    Непосчитанное событие проходит: «отдать бригаде» без такой заявки apply_event считает «Оптимально по дню».
+    """
+    step = _counted_step(record, entry)
+    if step is None:
+        return
+    if step.reason is not None:
+        raise VariantUnavailable(409, f"Событие отклонено: {step.reason}")
+    if assigned_engineer(variant) is not None and not assignable(entry.event, step.session.requests):
+        raise VariantUnavailable(422, NOT_ASSIGNABLE_TEXT)
+
+
+def _current(entry: TimelineEntry, steps: dict[EventVariant, TimelineStep]) -> EventVariant | None:
     """Стратегия, с которой событие проходит план: выбранная, а без выбора — «keep», если выбирать не из чего.
 
-    То же решение, что принимает проход шкалы (Timeline.walk): None — событие ждёт выбора.
+    steps — применённые шаги стратегий события. То же решение, что принимает проход шкалы (Timeline.walk):
+    None — событие ждёт выбора.
     """
     if entry.variant is not None:
         return entry.variant
-    plans: dict[str, Plan] = {
-        outcome.variant: outcome.plan for outcome in outcomes if outcome.variant in VARIANTS
-    }
-    return "keep" if len(plans) == len(VARIANTS) and not needs_choice(plans) else None
+    base = {variant: step for variant, step in steps.items() if variant in VARIANTS}
+    return "keep" if len(base) == len(VARIANTS) and not choice_needed(base) else None
 
 
 def _choice(
@@ -94,15 +107,30 @@ def _choice(
 ) -> EventChoice:
     """Под record.lock: варианты события из посчитанных шагов его стратегий.
 
-    assign — стратегия «отдать бригаде», если диспетчер её назвал: она идёт в окне четвёртой.
+    assign — стратегия «отдать бригаде», если диспетчер её назвал: она идёт в окне четвёртой. Событие в окне —
+    каким его сохранил план (шаг «Оптимально по дню»): с прежней заявкой у правки, прежней бригадой у
+    переназначения и прежним транспортом, иначе заголовок окна не сказал бы, что изменилось. По заявкам того же
+    шага решается, можно ли отдать заявку события бригаде.
     """
+    steps: dict[EventVariant, TimelineStep] = {}
     outcomes = []
     for variant in (*VARIANTS, *([assign] if assign is not None else [])):
         step = record.timeline.step(walk, entry, variant)
         if step is not None and step.applied is not None and step.session.last_diff is not None:
+            steps[variant] = step
             outcomes.append(Outcome(variant, step.session.plan, step.session.last_diff))
+    optimal = steps.get("optimal")
+    event = optimal.applied.event if optimal is not None and optimal.applied is not None else entry.event
     names = {engineer.id: engineer.name for engineer in walk.session.engineers}
-    return build_choice(entry.id, entry.event, walk.session.plan, outcomes, _current(entry, outcomes), names)
+    return build_choice(
+        entry.id,
+        event,
+        walk.session.plan,
+        outcomes,
+        _current(entry, steps),
+        names,
+        assignable=optimal is not None and assignable(entry.event, optimal.session.requests),
+    )
 
 
 def planning_state(record: DatasetRecord) -> PlanningState:
@@ -117,8 +145,7 @@ def planning_state(record: DatasetRecord) -> PlanningState:
                 reason=view.reason,
                 variant=view.variant,
                 variant_auto=view.auto,
-                # Варианты можно открыть у любого события, кроме отклонённого.
-                choosable=view.status != "rejected",
+                choosable=view.choosable,
             )
             for view in views
         ]
@@ -283,6 +310,12 @@ def event_choice(
             optimal = record.timeline.step(walk, entry, "optimal")
             if optimal is not None and optimal.reason is not None:
                 raise VariantUnavailable(409, f"Событие отклонено: {optimal.reason}")
+            if (
+                variant is not None
+                and optimal is not None
+                and not assignable(entry.event, optimal.session.requests)
+            ):
+                raise VariantUnavailable(422, NOT_ASSIGNABLE_TEXT)
         if variant is not None:
             _replay_assign(record, ctx, walk, entry, variant)
         with record.lock:

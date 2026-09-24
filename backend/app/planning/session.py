@@ -23,7 +23,7 @@ from app.geo.transit import TransitLookup, TransitMatrix
 from app.ingest.geocode import GeoResult
 from app.planning.delay import keep_delays
 from app.planning.diff import compute_diff
-from app.planning.facts import EventRejected, Facts, delayed_until, event_facts
+from app.planning.facts import EventRejected, Facts, assignable, delayed_until, event_facts
 from app.planning.models import AppliedEvent, EventVariant, PlanDiff, PrecomputedPlan
 from app.planning.night import NightChoice, choose_night_plan, plan_routes
 from app.planning.variants import STABLE_REASSIGNMENT, assigned_engineer, keep_plan
@@ -367,12 +367,6 @@ def _release_pins(requests: list[Request], engineers: list[Engineer]) -> list[Re
     return released
 
 
-def _active(requests: Sequence[Request], request_id: str | None) -> str | None:
-    """request_id, если заявка с таким номером есть и она в работе дня (не отменена); иначе None."""
-    request = next((item for item in requests if item.id == request_id), None)
-    return request.id if request is not None and request.status == RequestStatus.ACTIVE else None
-
-
 def _pinned_problem(base: Problem, session: PlanningSession, facts: Facts) -> Problem:
     """Задача на остаток дня после события: закреплённая работа, прежние задержки и поправка самого события.
 
@@ -429,22 +423,22 @@ def apply_event(
     плана (у сессии и у применённого события); без него следующий за номером входной сессии.
 
     variant — стратегия (app/planning/variants.py): «optimal», «stable», «keep» или «assign:<инженер>». «Отдать
-    бригаде» действует, если событие об одной заявке и после события она в работе; иначе это «Оптимально по дню».
+    бригаде» действует, если событие это допускает (facts.assignable: оно об одной заявке, бригаду ей не называет,
+    и после события заявка в работе); иначе это «Оптимально по дню».
     """
     _check_time(session, event)
     facts = event_facts(session, event, ctx)
     engineers = facts.engineers
     requests = _release_pins(facts.requests, engineers)
     chosen = assigned_engineer(variant)
-    subject = _active(requests, facts.subject_request_id)
-    if chosen is not None and subject is not None:
+    if chosen is not None and assignable(facts.event, requests):
         # «Отдать заявку бригаде»: закрепляем её до сборки задачи, как это делает переназначение, и дальше
         # считаем обычным «Оптимально по дню». Событие не отклоняется ни при какой бригаде: цену решения
         # показывает план — не успевающая бригада оставит заявку или свою соседнюю без инженера. Бригаде,
         # которая заявку взять не может (нет навыка или транспорта, недоступна), закрепление снимают те же
         # правила _release_pins и сразу, а не на следующем событии: диспетчер утверждает тот план, который
         # останется. У остальных закрепление держит заявку у бригады и в следующих событиях.
-        _pin_request(requests, subject, chosen)
+        _pin_request(requests, facts.subject_request_id, chosen)
         requests = _release_pins(requests, engineers)
     base = day_problem(requests, engineers, ctx, session.workload_level, session.lunch_enabled)
     problem = _pinned_problem(base, session, facts)

@@ -23,7 +23,7 @@ from app.api.schemas import (
 )
 from app.api.timeline import (
     VariantUnavailable,
-    check_not_rejected,
+    check_step,
     check_variant,
     ensure_precompute,
     event_choice,
@@ -384,7 +384,7 @@ def put_timeline_variant(dataset_id: str, entry_id: str, body: VariantRequest, d
                 if entry is None:
                     raise VariantUnavailable(404, f"Событие {entry_id} не найдено.")
                 check_variant(record, entry.event, body.variant)
-                check_not_rejected(record, entry)
+                check_step(record, entry, body.variant)
                 record.choose_variant(entry_id, body.variant)
             settle(record, ctx)
             return planning_state(record)

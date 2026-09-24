@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.domain.enums import EventType, ReasonCode, Skill, Transport
+from app.domain.enums import EventType, Priority, ReasonCode, RequestTier, Skill, Transport
 from app.domain.models import Event, Metrics, Plan, Route, Unassigned, Visit
 from app.planning import session as session_module
 from app.planning.models import DiffMove, PlanDiff
@@ -87,6 +87,73 @@ def test_choice_is_needed_only_when_keep_breaks_more_than_the_best_replan():
     # Пересчёты, которые ломают больше, окна тоже не открывают.
     assert needs_choice({"keep": _broken(1), "optimal": _broken(3), "stable": _broken(2)}) is False
     assert VARIANTS == ("optimal", "stable", "keep")
+
+
+def _broken_for(unassigned=(), late=()):
+    """План, в котором без инженера заявки unassigned, а к заявкам late инженер опаздывает (по нарушению на визит)."""
+    visits = [
+        Visit(request_id=request_id, arrival=600, start=600, end=630, leg_km=1, leg_min=5, late_min=10)
+        for request_id in late
+    ]
+    return _broken(violations=len(late)).model_copy(
+        update={
+            "routes": [Route(engineer_id="E1", visits=visits, total_km=0, total_travel_min=0)],
+            "unassigned": [
+                Unassigned(request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text="")
+                for request_id in unassigned
+            ],
+        }
+    )
+
+
+def test_choice_weighs_breakages_by_the_importance_of_the_request():
+    """Поломок поровну, но «Ничего не менять» бросает срочную заявку, а пересчёт ради неё снимает обычную: окно
+    нужно. Важность — очередь распределения заявки (dispatch_order): закреплённые, аварии и срочные, подключения,
+    остальные."""
+    requests = [
+        req("U1", 0, 0, "12:00", "13:00", priority=Priority.URGENT),
+        req("C1", 0, 0, "12:00", "13:00", tier=RequestTier.CONNECTION),
+        req("P1", 0, 0, "12:00", "13:00").model_copy(update={"fixed_engineer_id": "E1"}),
+        *(req(f"N{k}", 0, 0, "12:00", "13:00") for k in range(3)),
+    ]
+
+    def choice_needed(keep, replan):
+        return needs_choice({"keep": keep, "optimal": replan, "stable": replan}, requests)
+
+    assert choice_needed(_broken_for(["U1", "N0"]), _broken_for(["N0", "N1"])) is True
+    # Опоздание — поломка той же очереди, что и заявка: keep опаздывает к срочной, пересчёт — к обычной.
+    assert choice_needed(_broken_for(late=["U1"]), _broken_for(late=["N0"])) is True
+    # Ради срочной пересчёт снимает даже две обычные: и это повод спросить диспетчера, хоть поломок у keep меньше.
+    assert choice_needed(_broken_for(["U1"]), _broken_for(["N0", "N1"])) is True
+    assert choice_needed(_broken_for(["C1"]), _broken_for(["N0"])) is True
+    # Закреплённая диспетчером заявка важнее срочной: пересчёт, который её бросает, keep не лучше.
+    assert choice_needed(_broken_for(["U1"]), _broken_for(["P1"])) is False
+    # Те же поломки той же важности — выбирать не из чего.
+    assert choice_needed(_broken_for(["N2"]), _broken_for(["N0"])) is False
+    # Без заявок важность не видна: заявка без очереди считается в последней, остаётся одно число поломок.
+    assert (
+        needs_choice({"keep": _broken_for(["U1"]), "optimal": _broken_for(["N0"]), "stable": _broken(1)})
+        is False
+    )
+
+
+def test_an_urgent_request_in_a_full_day_asks_for_a_choice_though_the_replan_drops_another_one():
+    """Настоящий OR-Tools. Бригада одна, день заполнен: утром две заявки без инженера. Срочная заявка в 09:00:
+    «Ничего не менять» оставляет её без инженера, пересчёт ради неё снимает обычную — поломок поровну, но
+    молча бросить срочную нельзя."""
+    ctx = context()
+    requests = [req(f"R{k}", 1, 0, "09:00", "18:00", duration=110) for k in range(6)]
+    base = new_session(ctx, requests=requests, engineers=[eng("E1")], lunch_enabled=False)
+    urgent = req("U1", 1, 0, "09:00", "18:00", duration=110).model_copy(update={"asap": True})
+    event = Event(type=EventType.URGENT, time="09:00", request=urgent)
+
+    after = {variant: apply_event(base, event, ctx, variant=variant) for variant in VARIANTS}
+    plans = {variant: session.plan for variant, session in after.items()}
+
+    assert "U1" in {item.request_id for item in plans["keep"].unassigned}
+    assert "U1" not in {item.request_id for item in plans["optimal"].unassigned}
+    assert breakages(plans["keep"]) == breakages(plans["optimal"])
+    assert needs_choice(plans, after["keep"].requests) is True
 
 
 def test_keep_leaves_the_upcoming_visits_of_an_unavailable_engineer_without_an_engineer(solves):
@@ -421,7 +488,7 @@ def test_choice_compares_the_recommended_variant_with_the_nearest_one_that_diffe
     assert by_variant["optimal"].cons == []
 
 
-def test_choice_titles_are_the_same_for_every_event_and_only_a_request_event_can_be_given_to_a_brigade():
+def test_choice_titles_are_the_same_for_every_event_and_the_brigade_card_is_up_to_the_caller():
     before = _plan(0, 5, 100.0)
     outcomes = [Outcome(variant, before, _diff(before, before, 1)) for variant in VARIANTS]
     reassigned = Event(type=EventType.REQUEST_REASSIGNED, time="12:00", request_id="R1", engineer_id="E2")
@@ -451,8 +518,9 @@ def test_choice_titles_are_the_same_for_every_event_and_only_a_request_event_can
         "Ничего не менять",
         "Только само событие, остальные маршруты как есть",
     )
-    # Отдать бригаде можно заявку события об одной заявке, если она остаётся в плане: отменённую — некому.
-    assert [choice.assignable for choice in choices] == [True, True, False, False]
+    # Можно ли отдать заявку бригаде, решают заявки после события (facts.assignable): окно берёт это как есть.
+    assert [choice.assignable for choice in choices] == [False] * 4
+    assert build_choice("tl_3", edited, before, outcomes, None, assignable=True).assignable is True
 
 
 def test_choice_adds_giving_the_request_to_a_brigade_as_a_fourth_option_priced_against_the_optimum():
@@ -469,7 +537,7 @@ def test_choice_adds_giving_the_request_to_a_brigade_as_a_fourth_option_priced_a
     ]
     event = Event(type=EventType.URGENT, time="12:00", request=req("U1", 0, 0, "12:00", "13:00"))
 
-    choice = build_choice("tl_1", event, before, outcomes, None, {"E9": "Бригада Зверев"})
+    choice = build_choice("tl_1", event, before, outcomes, None, {"E9": "Бригада Зверев"}, assignable=True)
 
     assert choice.assignable is True
     assert [option.variant for option in choice.variants] == ["optimal", "stable", "keep", "assign:E9"]

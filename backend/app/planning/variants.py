@@ -14,12 +14,12 @@ docs/superpowers/specs/2026-09-24-unified-events-design.md (единый пот�
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from app.domain.enums import SKILL_RU, TRANSPORT_RU, ReasonCode, request_label
-from app.domain.models import Event, Plan, Unassigned, Visit, dispatch_order
-from app.planning.facts import assignable, subject_request_id
+from app.domain.models import Event, Plan, Request, Unassigned, Visit, dispatch_order
+from app.planning.facts import subject_request_id
 from app.planning.models import BaseVariant, EventChoice, EventVariant, PlanDiff, VariantOption
 from app.solvers.assemble import build_plan
 from app.solvers.problem import EngineerState, Problem
@@ -31,6 +31,9 @@ REPLANS: tuple[BaseVariant, ...] = ("optimal", "stable")
 # «Минимум перестановок»: условные 500 км за перенос заявки к другому инженеру вместо 20. Снять заявку всё равно
 # дороже (drop_normal), поэтому заявки пострадавшей бригады уходят другим, а чужие маршруты почти не трогаются.
 STABLE_REASSIGNMENT = 500_000
+# Сколько очередей распределения у заявок (app/domain/models.dispatch_order): по ним правило окна выбора взвешивает
+# поломки важностью заявки.
+_QUEUES = 4
 VARIANT_TITLES: dict[EventVariant, str] = {
     "optimal": "Оптимально по дню",
     "stable": "Минимум перестановок",
@@ -90,13 +93,38 @@ def breakages(plan: Plan) -> int:
     return len(plan.unassigned) + plan.metrics.violations
 
 
-def needs_choice(plans: Mapping[EventVariant, Plan]) -> bool:
+def _by_queue(plan: Plan, queues: Mapping[str, int]) -> tuple[int, ...]:
+    """Поломки плана по очередям распределения, от важной к остальным: сколько заявок каждой очереди осталось
+    без инженера или ждёт опоздавшего инженера.
+
+    queues — очередь заявки по номеру (dispatch_order): 0 — закреплённые диспетчером, 1 — аварии и срочные,
+    2 — подключения, 3 — остальные. Заявка, которой там нет, считается в последней очереди.
+    """
+    counts = [0] * _QUEUES
+    broken = [item.request_id for item in plan.unassigned]
+    broken += [visit.request_id for route in plan.routes for visit in route.visits if visit.late_min > 0]
+    for request_id in broken:
+        counts[queues.get(request_id, _QUEUES - 1)] += 1
+    return tuple(counts)
+
+
+def needs_choice(plans: Mapping[BaseVariant, Plan], requests: Iterable[Request] = ()) -> bool:
     """Нужно ли окно выбора (правило Б): «Ничего не менять» ломает больше, чем лучший из пересчётов.
 
-    plans — планы трёх базовых стратегий после события. Если выбор не нужен, событие применяется с «Ничего не
-    менять»: пересчёт чужих маршрутов ничего бы не спас, а клиентам, которым уже назвали время, звонить незачем.
+    plans — планы трёх базовых стратегий после события, requests — заявки дня после него. Поломки сравниваются
+    двумя счетами: числом (breakages) и по важности заявок (_by_queue — сначала закреплённые, затем аварии и
+    срочные, подключения, остальные). Окно нужно, если keep хуже лучшего пересчёта хоть по одному из них. Одного
+    числа мало: в заполненном дне keep оставляет без инженера новую срочную заявку, а пересчёт ради неё снимает
+    обычную — поломок поровну, но молча бросить срочную нельзя.
+
+    Если выбор не нужен, событие применяется с «Ничего не менять»: пересчёт чужих маршрутов ничего бы не спас,
+    а клиентам, которым уже назвали время, звонить незачем.
     """
-    return breakages(plans["keep"]) > min(breakages(plans[variant]) for variant in REPLANS)
+    keep, replans = plans["keep"], [plans[variant] for variant in REPLANS]
+    if breakages(keep) > min(breakages(plan) for plan in replans):
+        return True
+    queues = {request.id: dispatch_order(request) for request in requests}
+    return _by_queue(keep, queues) > min(_by_queue(plan, queues) for plan in replans)
 
 
 def keep_plan(problem: Problem, unassigned_before: Collection[str] = ()) -> Plan:
@@ -441,8 +469,14 @@ def build_choice(
     outcomes: Sequence[Outcome],
     current: EventVariant | None,
     names: Mapping[str, str] | None = None,
+    *,
+    assignable: bool = False,
 ) -> EventChoice:
     """Варианты в порядке VARIANTS с рекомендацией и строками «лучше / хуже»; names — имена бригад по номеру.
+
+    event — событие, как его сохранил план (с полями, которые заполняет backend: окно называет, что изменилось).
+    assignable — заявку события можно отдать выбранной бригаде (app/planning/facts.assignable по заявкам после
+    события).
 
     Базовые варианты сравниваются с рекомендованным, рекомендованный — со следующим по ключу рекомендации.
     Если у него те же числа, рекомендованный сравнивается с ближайшим вариантом, у которого они другие: сравнение
@@ -493,5 +527,5 @@ def build_choice(
         late_before=late_visits(before),
         variants=described,
         current=current,
-        assignable=assignable(event),
+        assignable=assignable,
     )

@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from app.api.timeline import NOT_ASSIGNABLE_TEXT
 from app.domain.enums import EventType
 from app.domain.models import Event
 from tests.api_helpers import HashGeocoder, sample_bundle, upload
@@ -637,15 +638,24 @@ def test_time_stops_at_an_event_that_needs_a_choice_until_a_variant_is_chosen(ap
     background.run()
     ahead = state_of(client, base)
     assert ahead["timeline_ready"] is True and ahead["pending_choice"] is None
-    # Проход стоит на первом событии: отмену после него не считали, её стратегия ещё не решена.
+    # Проход стоит на первом событии: отмену после него не считали, её стратегия ещё не решена. Варианты отмены
+    # не открыть, пока не выбран вариант события перед ней: сервер ответил бы 409.
     assert [(item["status"], item["choosable"], item["variant"]) for item in ahead["timeline"]] == [
         ("pending", True, None),
-        ("pending", True, None),
+        ("pending", False, None),
     ]
 
     stopped = cursor_to(client, base, "17:00")
     assert stopped["cursor"] == "13:00"
-    assert [item["status"] for item in stopped["timeline"]] == ["awaiting", "pending"]
+    assert [(item["status"], item["choosable"]) for item in stopped["timeline"]] == [
+        ("awaiting", True),
+        ("pending", False),
+    ]
+    behind = client.get(f"{base}/timeline/events/tl_2/variants")
+    assert (behind.status_code, behind.json()["detail"]) == (
+        409,
+        "Сначала выберите вариант для события в 13:00.",
+    )
     choice = stopped["pending_choice"]
     assert choice["entry_id"] == "tl_1" and choice["current"] is None
     assert [option["variant"] for option in choice["variants"]] == ["optimal", "stable", "keep"]
@@ -661,9 +671,9 @@ def test_time_stops_at_an_event_that_needs_a_choice_until_a_variant_is_chosen(ap
     assert chosen.status_code == 200, chosen.text
     chosen = chosen.json()
     assert (chosen["cursor"], chosen["pending_choice"]) == ("13:00", None)
-    assert [(item["status"], item["variant"]) for item in chosen["timeline"]] == [
-        ("applied", "keep"),
-        ("pending", None),
+    assert [(item["status"], item["variant"], item["choosable"]) for item in chosen["timeline"]] == [
+        ("applied", "keep", True),
+        ("pending", None, True),
     ]
     assert {item["request_id"] for item in chosen["plan"]["unassigned"]} >= {
         visit["request_id"]
@@ -827,6 +837,14 @@ def test_a_small_edit_the_route_survives_goes_without_a_choice_and_is_marked_aut
         "keep",
         ["optimal", "stable", "keep"],
     )
+    # Событие в окне — каким его сохранил план: с прежней заявкой, иначе заголовок не скажет, что изменилось.
+    assert (
+        choice["event"]["previous_request"]["duration_min"],
+        choice["event"]["request"]["duration_min"],
+    ) == (
+        30,
+        45,
+    )
     chosen = choose(client, base, "tl_1", "optimal")
     assert [(item["variant"], item["variant_auto"]) for item in chosen["timeline"]] == [("optimal", False)]
     assert solves == []
@@ -852,9 +870,28 @@ def test_an_edited_request_can_be_given_to_a_brigade_and_a_cancelled_one_cannot(
     refused = client.get(f"{base}/timeline/events/tl_2/variants", params={"assign": "E2"})
     assert (refused.status_code, refused.json()["detail"]) == (
         422,
-        "Бригаду можно выбрать только для события об одной заявке, которая после него остаётся в плане.",
+        NOT_ASSIGNABLE_TEXT,
     )
     assert client.get(f"{base}/timeline/events/tl_2/variants").json()["assignable"] is False
+
+
+def test_an_edit_of_a_request_cancelled_earlier_cannot_be_given_to_a_brigade(api, solves):
+    """Правка R3 в 14:00, затем раньше по времени отмена R3 в 12:00: после правки заявка не в работе, и отдать
+    её бригаде нельзя — ни карточкой в окне, ни стратегией через API."""
+    client, _, base, background = dataset(api, solves)
+    added(client, base, edit_of(client, base, "R3", "14:00", duration_min=45))
+    background.run()
+    assert client.get(f"{base}/timeline/events/tl_1/variants").json()["assignable"] is True
+    added(client, base, cancel("R3", "12:00"))
+    background.run()
+
+    choice = client.get(f"{base}/timeline/events/tl_1/variants")
+    refused = client.get(f"{base}/timeline/events/tl_1/variants", params={"assign": "E2"})
+    put = client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:E2"})
+
+    assert choice.status_code == 200 and choice.json()["assignable"] is False
+    assert (refused.status_code, refused.json()["detail"]) == (422, NOT_ASSIGNABLE_TEXT)
+    assert (put.status_code, put.json()["detail"]) == (422, NOT_ASSIGNABLE_TEXT)
 
 
 def test_the_state_carries_the_morning_windows_of_the_day_next_to_the_plan(api, solves):
@@ -956,8 +993,13 @@ def test_request_reassignment_goes_into_the_chosen_brigade_route_when_nothing_br
     assert choice["variants"][2]["summary"] == "Только само событие, остальные маршруты как есть"
     assert choice["current"] == "keep"
     assert [option["request_engineer_id"] for option in choice["variants"]] == ["E2", "E2", "E2"]
-    # Заявка события остаётся в плане: её можно отдать и другой бригаде.
-    assert choice["assignable"] is True
+    # Бригаду заявке назвало само переназначение: отдать её другой — значит спорить с событием.
+    assert choice["assignable"] is False
+    for response in (
+        client.get(f"{base}/timeline/events/tl_1/variants", params={"assign": "E1"}),
+        client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "assign:E1"}),
+    ):
+        assert (response.status_code, response.json()["detail"]) == (422, NOT_ASSIGNABLE_TEXT)
 
     # Отказ одинаков для всех вариантов: выбора не требует, на шкале событие не остаётся.
     rejected = add(client, base, reassigned("R3", "E2", "12:00"))
@@ -1077,7 +1119,7 @@ def test_a_brigade_can_be_named_only_for_an_event_about_one_request_and_only_fro
     ):
         assert (response.status_code, response.json()["detail"]) == (
             422,
-            "Бригаду можно выбрать только для события об одной заявке, которая после него остаётся в плане.",
+            NOT_ASSIGNABLE_TEXT,
         )
     for response in (
         client.get(f"{base}/timeline/events/tl_2/variants", params={"assign": "E9"}),

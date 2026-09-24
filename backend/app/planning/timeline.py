@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, replace
 from typing import Literal
 
 from app.domain.enums import request_label
-from app.domain.models import Event, Plan, Request
+from app.domain.models import Event, Request
 from app.domain.timeutil import DAY_MIN
 from app.ingest.geocode import GeoResult
 from app.planning.facts import (
@@ -33,7 +33,7 @@ from app.planning.facts import (
     offline_context,
     replay_checked_event,
 )
-from app.planning.models import AppliedEvent, EventVariant
+from app.planning.models import AppliedEvent, BaseVariant, EventVariant
 from app.planning.session import PlanningContext, PlanningSession, apply_event
 from app.planning.variants import VARIANTS, needs_choice
 
@@ -120,7 +120,8 @@ class TimelineView:
     """Событие на шкале для ответа API: применённое событие, если оно применено, иначе запланированное.
 
     variant — стратегия, с которой событие проходит план; auto — её выбрал проход, а не диспетчер: выбирать было
-    не из чего, и событие применено с «Ничего не менять».
+    не из чего, и событие применено с «Ничего не менять». choosable — варианты события можно открыть сейчас: оно
+    не отклонено и не стоит за событием, которое ждёт выбора (до него проход не дойдёт, пока диспетчер не выберет).
     """
 
     entry: TimelineEntry
@@ -129,6 +130,7 @@ class TimelineView:
     reason: str | None = None
     variant: EventVariant | None = None
     auto: bool = False
+    choosable: bool = True
 
 
 def replay_step(
@@ -150,6 +152,15 @@ def replay_step(
     except EventRejected as error:
         return TimelineStep(session=prior, reason=str(error))
     return TimelineStep(session=session, applied=session.events[-1])
+
+
+def choice_needed(steps: Mapping[BaseVariant, TimelineStep]) -> bool:
+    """Правило окна выбора (variants.needs_choice) по посчитанным шагам трёх базовых стратегий события.
+
+    Заявки дня после события у базовых стратегий одни и те же: они берутся из шага «Ничего не менять».
+    """
+    plans = {variant: step.session.plan for variant, step in steps.items()}
+    return needs_choice(plans, steps["keep"].session.requests)
 
 
 def _new_requests(entries: Sequence[TimelineEntry]) -> list[tuple[TimelineEntry, Request]]:
@@ -290,15 +301,13 @@ class Timeline:
                     keys.append(probe_key)
                     continue
                 counted = {
-                    base_variant: self.steps.get((prefix, entry_token(entry, base_variant)))
+                    base_variant: step
                     for base_variant in VARIANTS
+                    if (step := self.steps.get((prefix, entry_token(entry, base_variant)))) is not None
                 }
-                plans: dict[str, Plan] = {
-                    name: step.session.plan for name, step in counted.items() if step is not None
-                }
-                if len(plans) < len(VARIANTS):
+                if len(counted) < len(VARIANTS):
                     break
-                if needs_choice(plans):
+                if choice_needed(counted):
                     awaiting = entry
                     break
                 variant = "keep"
@@ -354,7 +363,8 @@ class Timeline:
         Принятое событие не позже cursor применено; событие, которое ждёт выбора и до которого дошло время,
         остаётся awaiting; остальные ждут своего времени или пересчёта. Остановка на выборе считается готовностью:
         дальше считать нельзя, пока диспетчер не выберет. Событие без выбора, которое проход провёл по «Ничего
-        не менять», получает эту стратегию с признаком auto — и применённое, и ещё впереди.
+        не менять», получает эту стратегию с признаком auto — и применённое, и ещё впереди. Варианты не открываются
+        у отклонённого события и у событий за тем, которое ждёт выбора: GET …/variants ответил бы на них 409.
         """
         walk = self.walk(base)
         items: list[TimelineView] = []
@@ -362,12 +372,17 @@ class Timeline:
             step = walk.steps[k] if k < walk.done else None
             auto = entry.variant is None and step is not None and step.applied is not None
             chosen = "keep" if auto else entry.variant
+            behind = walk.awaiting is not None and k > walk.done
             if step is not None and step.reason is not None:
-                items.append(TimelineView(entry, entry.event, "rejected", step.reason, chosen))
+                items.append(
+                    TimelineView(entry, entry.event, "rejected", step.reason, chosen, choosable=False)
+                )
             elif step is not None and step.applied is not None and entry.event.time <= cursor:
                 items.append(TimelineView(entry, step.applied.event, "applied", None, chosen, auto))
             elif entry is walk.awaiting and entry.event.time <= cursor:
                 items.append(TimelineView(entry, entry.event, "awaiting", None, chosen))
             else:
-                items.append(TimelineView(entry, entry.event, "pending", None, chosen, auto))
+                items.append(
+                    TimelineView(entry, entry.event, "pending", None, chosen, auto, choosable=not behind)
+                )
         return items, walk.done == len(self.entries) or walk.awaiting is not None

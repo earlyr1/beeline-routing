@@ -68,7 +68,7 @@ class Facts:
     event — событие, как его сохранит план: с полями, которые заполняет backend (previous_request,
     previous_transport, previous_engineer_id), и с координатами срочной заявки. released — заявки, визит в пути
     к которым не удерживается: их изменили или переназначили, и солвер решает заново. subject_request_id — заявка,
-    о которой событие, если оно об одной заявке: её диспетчер может отдать выбранной бригаде.
+    о которой событие, если оно об одной заявке: её диспетчер может отдать выбранной бригаде (assignable).
 
     Три поправки, которые нужны не каждому событию: adjust — задача после закрепления сделанного (задержка
     сдвигает день инженера; pin закрепляет заново, отпустив ещё и названные заявки), check — проверка по этой
@@ -486,8 +486,10 @@ class _Kind:
 
     names_engineer и names_request — событие называет инженера (engineer_id) и заявку (request_id) дня: их номера
     шкала проверяет до пересчёта. new_request — событие добавляет заявку (request), edited_request — присылает
-    заявку с желаемыми значениями. ends_request — после события заявка не остаётся в плане: отдать её выбранной
-    бригаде нельзя.
+    заявку с желаемыми значениями. Два случая, когда выбрать бригаду заявке события в окне выбора нельзя:
+    ends_request — событие снимает заявку с плана (отдавать некому), pins_request — событие само закрепляет её
+    за названной бригадой (переназначение): отдать её другой бригаде значило бы спорить с событием — на шкале
+    заявка ушла бы одной бригаде, а в плане стояла бы у другой.
     """
 
     apply: Callable[[_Day, Event, PlanningContext], Facts]
@@ -496,6 +498,7 @@ class _Kind:
     new_request: bool = False
     edited_request: bool = False
     ends_request: bool = False
+    pins_request: bool = False
 
 
 _KINDS: dict[EventType, _Kind] = {
@@ -506,7 +509,9 @@ _KINDS: dict[EventType, _Kind] = {
     EventType.ENGINEER_TRANSPORT_CHANGED: _Kind(_transport_changed, names_engineer=True),
     EventType.REQUEST_UPDATED: _Kind(_request_updated, names_request=True, edited_request=True),
     EventType.ENGINEER_DELAYED: _Kind(_engineer_delayed, names_engineer=True),
-    EventType.REQUEST_REASSIGNED: _Kind(_request_reassigned, names_engineer=True, names_request=True),
+    EventType.REQUEST_REASSIGNED: _Kind(
+        _request_reassigned, names_engineer=True, names_request=True, pins_request=True
+    ),
 }
 
 
@@ -555,9 +560,24 @@ def subject_request_id(event: Event) -> str | None:
     return added.id if added is not None else named_request(event)
 
 
-def assignable(event: Event) -> bool:
+def assign_allowed(event: Event) -> bool:
+    """Стратегию «отдать бригаде» допускает само событие: оно об одной заявке, не снимает её с плана и бригаду
+    ей не называет.
+
+    Это проверка по одному событию — там, где заявок после события ещё нет (на входе API). Останется ли заявка
+    в плане на самом деле, решают они (assignable): её могли отменить раньше по времени.
+    """
+    kind = _KINDS[event.type]
+    return subject_request_id(event) is not None and not kind.ends_request and not kind.pins_request
+
+
+def assignable(event: Event, requests: Iterable[Request]) -> bool:
     """Диспетчер может отдать заявку события выбранной бригаде (стратегия «assign:<инженер>»).
 
-    Нужна одна заявка, которая после события остаётся в плане: отменённую заявку отдавать некому.
+    requests — заявки дня после события. Кроме assign_allowed, заявка должна после события оставаться в работе дня
+    (RequestStatus.ACTIVE): отменённую — самим событием или раньше по времени — отдавать некому.
     """
-    return subject_request_id(event) is not None and not _KINDS[event.type].ends_request
+    subject = subject_request_id(event)
+    return assign_allowed(event) and any(
+        request.id == subject and request.status == RequestStatus.ACTIVE for request in requests
+    )

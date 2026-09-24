@@ -2,9 +2,9 @@
 
 import pytest
 
-from app.domain.enums import EventType, Skill
+from app.domain.enums import EventType, RequestStatus, Skill
 from app.domain.models import Event
-from app.planning.facts import assignable
+from app.planning.facts import assign_allowed, assignable, event_facts
 from app.planning.session import apply_event
 from app.planning.variants import ASSIGN_PREFIX, VARIANTS, assign_variant, assigned_engineer
 from tests.helpers import eng, req
@@ -28,19 +28,47 @@ def owner(plan, request_id):
 def test_a_request_event_can_be_given_to_a_chosen_brigade_unless_it_takes_the_request_away():
     """Отдать бригаде можно заявку события об одной заявке, которая после события остаётся в плане.
 
-    События об инженере двигают целую пачку заявок, а отменённую заявку отдавать некому.
+    События об инженере двигают целую пачку заявок, отменённую заявку отдавать некому, а переназначение само
+    называет бригаду: в событии осталась бы одна бригада, а в плане заявка стояла бы у другой.
     """
-    assignable_types = {
-        EventType.URGENT,
-        EventType.REQUEST_UPDATED,
-        EventType.REQUEST_REASSIGNED,
-        EventType.RESTORE,
-    }
+    allowed_types = {EventType.URGENT, EventType.REQUEST_UPDATED, EventType.RESTORE}
+    request = req("R1", 0, 0, "13:00", "17:00")
     for event_type in EventType:
-        event = Event.model_construct(
-            type=event_type, time=780, request_id="R1", request=req("R1", 0, 0, "13:00", "17:00")
-        )
-        assert assignable(event) is (event_type in assignable_types), event_type
+        event = Event.model_construct(type=event_type, time=780, request_id="R1", request=request)
+        assert assign_allowed(event) is (event_type in allowed_types), event_type
+        # По заявкам после события: та же проверка и заявка в работе дня.
+        assert assignable(event, [request]) is (event_type in allowed_types), event_type
+        cancelled = request.model_copy(update={"status": RequestStatus.CANCELLED})
+        assert assignable(event, [cancelled]) is False, event_type
+
+
+def test_an_edit_of_a_request_cancelled_earlier_cannot_be_given_to_a_brigade(solves):
+    """Правка отменённой заявки не отклоняется, но заявка после неё не в работе: «отдать бригаде» — это
+    «Оптимально по дню», закреплять её не за кем."""
+    ctx = context()
+    base = apply_event(new_session(ctx), cancel("R3", "11:00"), ctx)
+    edited = base.request("R3").model_copy(update={"duration_min": 45})
+    event = Event(type=EventType.REQUEST_UPDATED, time="12:00", request_id="R3", request=edited)
+
+    after = event_facts(base, event, ctx)
+    given = apply_event(base, event, ctx, variant=assign_variant("E2"))
+
+    assert assign_allowed(event) and not assignable(after.event, after.requests)
+    assert given.request("R3").fixed_engineer_id is None
+    assert given.plan == apply_event(base, event, ctx).plan
+
+
+def test_a_reassigned_request_is_not_given_to_another_brigade_than_the_event_names(solves):
+    """«Отдать бригаде» у переназначения — «Оптимально по дню»: заявка у той бригады, которую назвало событие."""
+    ctx = context()
+    base = new_session(ctx)
+    assert owner(base.plan, "R3") == "E1"
+    event = Event(type=EventType.REQUEST_REASSIGNED, time="12:00", request_id="R3", engineer_id="E2")
+
+    given = apply_event(base, event, ctx, variant=assign_variant("E1"))
+
+    assert given.events[-1].event.engineer_id == "E2"
+    assert (owner(given.plan, "R3"), given.request("R3").fixed_engineer_id) == ("E2", "E2")
 
 
 def test_assign_tokens_name_the_brigade_and_the_three_strategies_stay_as_they_were():
