@@ -8,16 +8,24 @@ vi.mock('../api/client', async (importOriginal) => {
 
 import * as api from '../api/client';
 import type { PlanningState } from '../api/types';
-import { PLAY_TICK_MS, useAppStore, type AppState } from '../store/useAppStore';
+import { PLAY_TICK_MS, useAppStore, type AppState, type PendingCancel } from '../store/useAppStore';
 import { makeEventChoice, makePlanningState, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
+import { CancelToast } from './CancelToast';
 import { DaySummary } from './DaySummary';
+import { ChoiceDialog } from './events/ChoiceDialog';
 import { TimeBar } from './TimeBar';
 
 /** Шкала дня фикстуры кончается в 23:00: это максимум ползунка. */
 const END = '23:00';
 const at = (cursor: string, patch: Partial<PlanningState> = {}) => makePlanningState({ cursor, ...patch });
 const summary = () => screen.queryByRole('dialog', { name: 'Итоги дня' });
+/** Отмена заявки 10135 с кнопки: уведомление ещё отсчитывает секунды, на сервер ничего не ушло. */
+const pendingCancel = (): PendingCancel => ({
+  event: { type: 'cancel', time: '22:50', request: null, request_id: '10135', engineer_id: null },
+  label: '10135',
+  deadline: Date.now() + 5000,
+});
 /** Часы и план стоят на этом времени, как после ответа сервера. */
 const moveTo = (time: string, patch: Partial<AppState> = {}) =>
   act(() => useAppStore.setState({ state: at(time), clock: time, ...patch }));
@@ -77,6 +85,60 @@ describe('DaySummary', () => {
     expect(summary()).toBeInTheDocument();
   });
 
+  it('gives way to a choice window that appears after the summary dropped', () => {
+    render(
+      <>
+        <ChoiceDialog />
+        <DaySummary />
+      </>,
+    );
+    moveTo(END);
+    expect(summary()).toBeInTheDocument();
+    // Отмена с отсчётом ушла на сервер уже при открытых итогах, и план встал на её событии в 22:20 ждать выбора.
+    const pending = makeEventChoice({ entry_id: 'tl_9' });
+    act(() => useAppStore.getState().setPlanningState(at('22:20', { pending_choice: pending })));
+    expect(summary()).toBeNull();
+    expect(screen.getAllByRole('dialog')).toHaveLength(1);
+    expect(useAppStore.getState()).toMatchObject({ daySummaryOpen: false, clock: '22:20' });
+  });
+
+  it('closes when the clock leaves the end of the day behind the summary and drops again on the way back', () => {
+    resetStore({ datasetId: 'd_test', state: at(END), daySummaryOpen: true });
+    render(<DaySummary />);
+    expect(summary()).toBeInTheDocument();
+    // Ползунок с клавиатуры за окном итогов: часы на 22:59, план ещё в конце дня — это уже не итоги дня.
+    act(() => useAppStore.getState().setClock('22:59'));
+    expect(summary()).toBeNull();
+    expect(useAppStore.getState().daySummaryOpen).toBe(false);
+    moveTo(END);
+    expect(summary()).toBeInTheDocument();
+  });
+
+  it('waits for a cancellation that is still counting down before dropping', () => {
+    render(<DaySummary />);
+    act(() => useAppStore.setState({ pendingCancel: pendingCancel() }));
+    moveTo(END);
+    expect(summary()).toBeNull();
+    act(() => useAppStore.setState({ pendingCancel: null }));
+    expect(summary()).toBeInTheDocument();
+  });
+
+  it('closes on Esc without undoing a cancellation that is counting down', () => {
+    resetStore({ datasetId: 'd_test', state: at(END), pendingCancel: pendingCancel() });
+    render(
+      <>
+        <CancelToast />
+        <DaySummary />
+      </>,
+    );
+    // Уведомление слушает Esc раньше итогов: итоги открыли кнопкой у часов, пока шёл отсчёт.
+    act(() => useAppStore.getState().openDaySummary());
+    expect(summary()).toBeInTheDocument();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(summary()).toBeNull();
+    expect(useAppStore.getState().pendingCancel).not.toBeNull();
+  });
+
   it('does not drop for a plan that opens already at the end of the day', () => {
     resetStore({ datasetId: 'd_test', state: at(END) });
     render(<DaySummary />);
@@ -116,8 +178,8 @@ describe('DaySummary', () => {
     expect(metric('Отмены')).toHaveTextContent('Отмены1');
     expect(metric('События бригад')).toHaveTextContent('События бригад1');
     expect(metric('Звонки')).toHaveTextContent('Звонки0');
-    expect(within(dialog).getByText('с окном выбора: 1').parentElement).toHaveTextContent(
-      'Всего применено: 2 · с окном выбора: 1 · без него: 1 — выбирать было не из чего',
+    expect(within(dialog).getByText('вариант выбрал диспетчер: 1').parentElement).toHaveTextContent(
+      'Всего применено: 2 · вариант выбрал диспетчер: 1 · без выбора: 1 — выбирать было не из чего',
     );
     // 18754 так и осталась без бригады, а клиенту не позвонили: это недоделка дня.
     expect(metric('Согласовано')).toHaveTextContent('Согласовано0');

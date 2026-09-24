@@ -5,12 +5,15 @@ import { AUTO_VARIANT_NOTE } from '../lib/variants';
 import { useAppStore } from '../store/useAppStore';
 import { Metric } from './MetricsStrip';
 
-/** Что считает «с окном выбора»: из плана не видно, открывалось ли окно, видно только, кто выбрал вариант. */
-const CHOSEN_TITLE = 'Вариант события выбрал диспетчер: в окне «Как исправить план» или сразу, как при отмене из «Коммуникаций»';
+/** Что считает «вариант выбрал диспетчер»: из плана не видно, открывалось ли окно, видно только, кто выбрал вариант. */
+const CHOSEN_TITLE =
+  'Вариант события выбрал диспетчер: в окне «Как исправить план» или сразу — отмена из «Коммуникаций», ' +
+  'предложение помощника после «Применить». Сколько раз открывалось само окно, план не хранит';
 
 /**
  * Окно выпадает один раз на приход часов в конец дня: проигрыванием или ползунком. Закрытое окно не выпадает снова,
  * пока часы не уйдут назад и не вернутся. Поверх окна выбора варианта итоги не показываются: сначала выбор.
+ * Отмена заявки, которая ещё отсчитывает секунды, тоже ждёт: итоги выпадут, когда она уйдёт на сервер или её вернут.
  */
 function useDayEndArrival(open: () => void): void {
   const atEnd = useAppStore((s) => s.state !== null && clockAtDayEnd(s.state, s.clock));
@@ -24,7 +27,8 @@ function useDayEndArrival(open: () => void): void {
       !s.committing &&
       !s.busy &&
       s.choice === null &&
-      !s.choiceLoading,
+      !s.choiceLoading &&
+      s.pendingCancel === null,
   );
   // План, открытый уже в конце дня (после перезагрузки страницы), окно не выбрасывает: прихода не было,
   // итоги открывает кнопка у часов.
@@ -131,8 +135,8 @@ function DaySummaryDialog() {
             </div>
             <p className="muted day-summary__line">
               {`Всего применено: ${events.total} · `}
-              <span title={CHOSEN_TITLE}>{`с окном выбора: ${events.chosen}`}</span>
-              {` · без него: ${events.auto} — ${AUTO_VARIANT_NOTE}`}
+              <span title={CHOSEN_TITLE}>{`вариант выбрал диспетчер: ${events.chosen}`}</span>
+              {` · без выбора: ${events.auto} — ${AUTO_VARIANT_NOTE}`}
             </p>
           </>
         )}
@@ -182,6 +186,14 @@ function DaySummaryDialog() {
 export function DaySummary() {
   const open = useAppStore((s) => s.daySummaryOpen);
   const openDaySummary = useAppStore((s) => s.openDaySummary);
+  const closeDaySummary = useAppStore((s) => s.closeDaySummary);
   useDayEndArrival(openDaySummary);
-  return open ? <DaySummaryDialog /> : null;
+  // Итоги — только про конец дня. Часы ушли назад (ползунок, ▶, сброс событий, пересчёт) или план встал на событии,
+  // которое ждёт выбора (отмена с отсчётом ушла на сервер уже при открытых итогах): окно закрывается, а не показывает
+  // середину дня под заголовком «Итоги дня». Окно выбора главнее итогов.
+  const current = useAppStore((s) => s.state !== null && dayOver(s.state, s.clock) && s.choice === null && !s.choiceLoading);
+  useEffect(() => {
+    if (open && !current) closeDaySummary();
+  }, [open, current, closeDaySummary]);
+  return open && current ? <DaySummaryDialog /> : null;
 }

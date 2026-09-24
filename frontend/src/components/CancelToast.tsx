@@ -30,8 +30,11 @@ export function CancelToast() {
     const undoOnEscape = (event: KeyboardEvent) => {
       // Уведомление — самое свежее действие диспетчера, но открытый диалог и поле ввода Esc забирают себе.
       if (event.key !== 'Escape' || event.defaultPrevented || isEditable(event.target)) return;
-      const { mapMenu, toolbarDialog, editingRequestId, delayDialogOpen, engineerDialog, choice, choiceLoading } = useAppStore.getState();
-      if (mapMenu || toolbarDialog || editingRequestId || delayDialogOpen || engineerDialog || choice || choiceLoading) return;
+      const { mapMenu, toolbarDialog, editingRequestId, delayDialogOpen, engineerDialog, choice, choiceLoading, daySummaryOpen } =
+        useAppStore.getState();
+      if (mapMenu || toolbarDialog || editingRequestId || delayDialogOpen || engineerDialog || choice || choiceLoading || daySummaryOpen) {
+        return;
+      }
       event.preventDefault();
       undoCancel();
     };

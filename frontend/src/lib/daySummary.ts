@@ -2,6 +2,7 @@ import type { EventType, HHMM, Metrics, PlanningState, TimeSlot } from '../api/t
 import { callList, type AgreedMarks } from './communications';
 import { deltaText, METRIC_SPECS, verdictOf, type MetricKey, type MetricSpec, type Verdict } from './comparison';
 import { formatKm, isValidTime, toMinutes } from './format';
+import { byId } from './planView';
 import { sliderRange } from './timeBar';
 import { dayScale } from './timeline';
 
@@ -75,14 +76,20 @@ export interface SummaryEvents {
   /** Применённые события шкалы: отклонённые и оставшиеся впереди в итоги не входят. */
   total: number;
   kinds: { kind: SummaryEventKind; label: string; count: number }[];
-  /** Вариант выбрал диспетчер: в окне выбора или сразу, как у отмены из «Коммуникаций». */
+  /**
+   * Вариант выбрал диспетчер: в окне выбора или сразу — отмена из «Коммуникаций», применённое предложение помощника.
+   * Сколько раз открывалось само окно, план не хранит: видно только, кто выбрал вариант.
+   */
   chosen: number;
   /** Прошли без окна выбора: «Ничего не менять» ломало план не больше пересчёта, выбирать было не из чего. */
   auto: number;
 }
 
 export interface SummaryCalls {
-  /** Клиенты, с которыми договорились по телефону: назвали окно или сказали, что сегодня не приедем. */
+  /**
+   * Клиенты, с которыми договорились по телефону: назвали окно или сказали, что сегодня не приедем. Сорванная потом
+   * договорённость не в счёт — такой клиент снова ждёт звонка, и заявка, отменённая после звонка, тоже.
+   */
   agreed: number;
   /** Клиенты, которые к концу дня ещё ждут звонка: то же число, что на вкладке «Коммуникации». */
   waiting: number;
@@ -141,7 +148,9 @@ function rows(state: PlanningState, clock: HHMM): SummaryRow[] {
   return [
     metric('engineers_used'),
     metric('total_km'),
-    metric('assigned'),
+    // Утром и к концу дня заявки разные: отмены клиентов и срочные меняют число назначенных, а план тут ни при чём.
+    // Разница не красится, как у «Выполнено»; оценку дают «Не назначено», нарушения и опоздания.
+    { ...metric('assigned'), verdict: 'same' },
     { label: `Выполнено к ${clock}`, morning: DASH, day: String(done(state, clock)), delta: '', verdict: 'same', nested: false },
     metric('unassigned'),
     // Уточнение строки выше, а не отдельный показатель: разница не красится.
@@ -204,6 +213,22 @@ function events(state: PlanningState): SummaryEvents {
 }
 
 /**
+ * Звонки к концу дня: сколько клиентов ждут звонка — строки вкладки «Коммуникации», и с кем договорились. Отметка
+ * звонка остаётся, даже когда договорённость сорвалась или заявку потом отменили: такие отметки согласованными
+ * не считаются, иначе один клиент стоял бы и в «Согласовано», и в «Ждут звонка».
+ */
+function calls(state: PlanningState, agreed: AgreedMarks, clock: HHMM, grid: TimeSlot[]): SummaryCalls {
+  const { pending } = callList(state, agreed, clock, grid);
+  const waiting = new Set(pending.map((item) => item.requestId));
+  const requests = byId(state.requests);
+  const settled = Object.keys(agreed).filter((requestId) => {
+    const request = requests.get(requestId);
+    return request !== undefined && request.status !== 'cancelled' && !waiting.has(requestId);
+  });
+  return { agreed: settled.length, waiting: pending.length };
+}
+
+/**
  * Итоги дня по плану на часах: утро против итога, сравнение с базовым и диспетчерами, события и звонки.
  * Всё берётся из состояния, которое уже на экране: утро — итоги утреннего плана и визиты начала дня (morning),
  * события — применённые события шкалы, звонки — отметки вкладки «Коммуникации» и её же список звонков.
@@ -214,6 +239,6 @@ export function daySummary(state: PlanningState, agreed: AgreedMarks, clock: HHM
     rows: rows(state, clock),
     versus: versus(state),
     events: events(state),
-    calls: { agreed: Object.keys(agreed).length, waiting: callList(state, agreed, clock, grid).pending.length },
+    calls: calls(state, agreed, clock, grid),
   };
 }

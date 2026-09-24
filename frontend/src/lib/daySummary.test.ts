@@ -48,7 +48,8 @@ describe('day summary', () => {
     ]);
     expect(row(state, 'Задействовано инженеров')).toMatchObject({ morning: '3', day: '2', delta: '−1', verdict: 'better' });
     expect(row(state, 'Суммарный пробег')).toMatchObject({ morning: '41,5 км', day: '34,9 км', delta: '−6,6 км', verdict: 'better' });
-    expect(row(state, 'Назначено заявок')).toMatchObject({ morning: '7', day: '6', delta: '−1', verdict: 'worse' });
+    // Набор заявок к концу дня другой (отмены, срочные): разница по назначенным не оценивается.
+    expect(row(state, 'Назначено заявок')).toMatchObject({ morning: '7', day: '6', delta: '−1', verdict: 'same' });
     expect(row(state, 'Выполнено к 23:00')).toMatchObject({ morning: '—', day: '6', delta: '' });
     expect(row(state, 'Не назначено')).toMatchObject({ morning: '0', day: '1', delta: '+1', verdict: 'worse' });
     expect(row(state, 'из них перенесено со звонком клиенту')).toMatchObject({ morning: '0', day: '0', nested: true });
@@ -117,7 +118,7 @@ describe('day summary', () => {
     expect(daySummary(at(END, { control: null }), {}, END).versus.map((item) => item.against)).toEqual(['к базовому (FCFS)']);
   });
 
-  it('counts only applied events by kind and how many of them went through the choice window', () => {
+  it('counts only applied events by kind and whose variant the dispatcher chose', () => {
     const timeline = [
       makeTimelineItem({ id: 'tl_1', event: event('urgent'), variant: 'optimal' }),
       makeTimelineItem({ id: 'tl_2', event: event('cancel', { request_id: '10135' }), variant: 'keep', variant_auto: true }),
@@ -153,5 +154,16 @@ describe('day summary', () => {
       '46393': { window: { start: '14:00', end: '16:00' }, entry_id: 'tl_7', applied: true },
     };
     expect(daySummary(at(END), agreed, END).calls).toEqual({ agreed: 2, waiting: 0 });
+  });
+
+  it('does not count a broken agreement or a request cancelled after the call as agreed', () => {
+    // Клиенту 18754 назвали 18:00–20:00, а заявка потом осталась без бригады: он снова ждёт звонка, и только там.
+    const broken: AgreedMarks = { '18754': { window: { start: '18:00', end: '20:00' }, entry_id: 'tl_8', applied: true } };
+    expect(daySummary(at(END), broken, END).calls).toEqual({ agreed: 0, waiting: 1 });
+    // Клиенту 46393 назвали окно, а потом он отказался: договорённость потеряла смысл.
+    const state = at(END);
+    const requests = state.requests.map((request) => (request.id === '46393' ? { ...request, status: 'cancelled' as const } : request));
+    const cancelled: AgreedMarks = { '46393': { window: { start: '14:00', end: '16:00' }, entry_id: 'tl_7', applied: true } };
+    expect(daySummary({ ...state, requests }, cancelled, END).calls).toMatchObject({ agreed: 0 });
   });
 });
