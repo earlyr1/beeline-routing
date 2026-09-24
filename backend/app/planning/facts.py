@@ -505,20 +505,29 @@ def _client_agreed(day: _Day, event: Event, ctx: PlanningContext) -> Facts:
     window = event.agreed_window
     if window is None:
         request.status = RequestStatus.POSTPONED
-    else:
-        if window.end < now:
-            raise EventRejected(
-                f"Окно {fmt_hhmm(window.start)}–{fmt_hhmm(window.end)} для заявки {label} заканчивается "
-                f"раньше времени события {fmt_hhmm(now)}."
-            )
-        if window.end <= window.start:
-            raise EventRejected(window_order_text(label))
-        # Окно «как можно скорее» клиенту называют словами, и заявка остаётся такой: часы её ожидания решатель
-        # по-прежнему считает от начала окна.
-        request.window_start, request.window_end, request.asap = window.start, window.end, window.asap
-        request.status = RequestStatus.ACTIVE
+        return day.facts(event, released=[request.id])
+    if window.asap:
+        # Окно «как можно скорее» клиенту называют словами, а задаёт его сервер, как у изменения заявки: заявка
+        # «как можно скорее» держит своё (часы её ожидания не перезапускаются), обычная ждёт с этого звонка до
+        # конца смен. Присланные начало и конец не используются, а в событие записывается окно, которое получила
+        # заявка: его вкладка «Коммуникации» и считает известным клиенту.
+        bounds = (
+            {"window_start": request.window_start, "window_end": request.window_end}
+            if request.asap
+            else asap_window(day.engineers, now)
+        )
+        window = TimeWindow(start=bounds["window_start"], end=bounds["window_end"], asap=True)
+    elif window.end < now:
+        raise EventRejected(
+            f"Окно {fmt_hhmm(window.start)}–{fmt_hhmm(window.end)} для заявки {label} заканчивается "
+            f"раньше времени события {fmt_hhmm(now)}."
+        )
+    elif window.end <= window.start:
+        raise EventRejected(window_order_text(label))
+    request.window_start, request.window_end, request.asap = window.start, window.end, window.asap
+    request.status = RequestStatus.ACTIVE
     # С новым окном заявку солвер планирует заново, даже если инженер уже едет к ней, как у изменённой заявки.
-    return day.facts(event, released=[request.id])
+    return day.facts(event.model_copy(update={"agreed_window": window}), released=[request.id])
 
 
 @dataclass(frozen=True)

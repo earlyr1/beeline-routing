@@ -36,7 +36,7 @@ from app.domain.models import Event, Request
 from app.domain.timeutil import fmt_hhmm
 from app.domain.windows import is_slot, off_grid_text
 from app.planning.explain import build_explanation
-from app.planning.facts import EventRejected, edited_request, geocode_entry, new_request
+from app.planning.facts import EventRejected, agreement, edited_request, geocode_entry, new_request
 from app.planning.models import EventChoice, Explanation
 from app.planning.session import PlanningSession, early_event_text, start_session
 from app.planning.timeline import EVENT_TIME_RANGE_TEXT, LAST_MINUTE, check_known, known_requests
@@ -80,19 +80,31 @@ def window_grid_problem(deps: AppDeps, event: Event, known: dict[str, Request]) 
     Правило живёт в слое API, потому что сетка — правило разговора с клиентом, а не модели: диспетчер предлагает
     клиенту слот, поэтому произвольный интервал сервер не принимает, что бы ни прислал клиент.
 
-    Проверяются ровно два события со своей заявкой: срочная заявка (окно у неё всегда новое) и изменение заявки,
-    и только если окно в нём действительно выбирают. Заявка «как можно скорее» не проверяется: её окно задаёт
-    сервер, от времени события до конца смен, и слотом оно не бывает. А вот обратный переход проверяется: окно
-    сервера клиенту не называли, поэтому снять «как можно скорее» можно, только выбрав слот.
+    Проверяются срочная заявка (окно у неё всегда новое), изменение заявки, если окно в нём действительно
+    выбирают, и звонок клиенту: окно, которое ему назвали, становится окном заявки. Окно «как можно скорее» не
+    проверяется: его задаёт сервер, от времени события до конца смен, и слотом оно не бывает. А вот обратный
+    переход проверяется: окно сервера клиенту не называли, поэтому снять «как можно скорее» можно, только выбрав слот.
 
     Заявки ДАННЫХ сеткой не проверяются вовсе — ни при загрузке выгрузки и бандла, ни в контрольных файлах:
     настоящие данные и есть источник правды. У аварий выгрузки там стоит весь день, 00:01–23:59, и такая заявка
-    должна и дальше и планироваться, и редактироваться; поэтому изменение с тем же окном сетку не задевает.
+    должна и дальше и планироваться, и редактироваться; поэтому изменение с тем же окном сетку не задевает. Звонку
+    такой поблажки нет: окно аварии — пометка данных, а не обещание, и клиенту называют слот вокруг визита.
     """
     grid = deps.ingest.synth_config.window_grid
+    if not grid:
+        return None
+    told = agreement(event)
+    if told is not None:
+        window = told.window
+        # «Сегодня не приедем» окна не называет.
+        if window is None or window.asap or is_slot(grid, window.start, window.end):
+            return None
+        called = known.get(told.request_id)
+        label = request_label(told.request_id, called.priority if called is not None else Priority.NORMAL)
+        return off_grid_text(label, window.start, window.end, grid)
     added, edited = new_request(event), edited_request(event)
     request = added or edited
-    if not grid or request is None or request.asap:
+    if request is None or request.asap:
         return None
     stored = known.get(event.request_id or request.id)
     if (

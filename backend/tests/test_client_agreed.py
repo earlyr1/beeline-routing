@@ -10,11 +10,11 @@ from app.domain.enums import EventType, ReasonCode, RequestStatus
 from app.domain.models import Event, TimeWindow
 from app.domain.timeutil import parse_hhmm
 from app.planning.explain import build_explanation
-from app.planning.facts import Agreement, agreement, assignable, event_facts
+from app.planning.facts import Agreement, agreement, asap_window, assignable, event_facts
 from app.planning.session import EventRejected, apply_event
 from app.planning.variants import VARIANTS, needs_choice
 from app.solvers.problem import POSTPONED_TEXT
-from tests.planning_helpers import context, new_session, routes
+from tests.planning_helpers import context, day_requests, new_session, routes
 from tests.timeline_helpers import cancel
 
 
@@ -150,14 +150,30 @@ def test_a_cancelled_request_or_one_in_work_cannot_be_agreed_about():
         event_facts(session, agreed("R1", during), ctx)
 
 
-def test_an_asap_window_named_in_words_stays_asap():
+def test_an_asap_window_is_named_in_words_and_set_by_the_server():
+    """«Как можно скорее» клиенту называют словами, а окно задаёт сервер, как у изменения заявки: присланные начало
+    и конец не используются. Заявка «как можно скорее» держит своё окно, обычная ждёт с времени звонка до конца смен.
+    В событии остаётся окно, которое получила заявка: его вкладка «Коммуникации» и считает известным клиенту."""
     ctx = context()
-    facts = event_facts(new_session(ctx), agreed("R3", "09:00", ("09:00", "18:00"), asap=True), ctx)
-    stored = next(request for request in facts.requests if request.id == "R3")
+    asap = day_requests()[2].model_copy(update={"asap": True, "window_start": parse_hhmm("09:00")})
+    session = new_session(ctx, requests=[*day_requests()[:2], asap])
+    anything = ("06:00", "23:59")
+
+    kept = event_facts(session, agreed("R3", "09:00", anything, asap=True), ctx)
+    stored = next(request for request in kept.requests if request.id == "R3")
+    assert (stored.window_start, stored.window_end, stored.asap) == (asap.window_start, asap.window_end, True)
+    assert kept.event.agreed_window == TimeWindow(start=asap.window_start, end=asap.window_end, asap=True)
+
+    started = event_facts(session, agreed("R2", "09:00", anything, asap=True), ctx)
+    stored = next(request for request in started.requests if request.id == "R2")
+    bounds = asap_window(session.engineers, parse_hhmm("09:00"))
     assert (stored.window_start, stored.window_end, stored.asap) == (
-        parse_hhmm("09:00"),
-        parse_hhmm("18:00"),
+        bounds["window_start"],
+        bounds["window_end"],
         True,
+    )
+    assert started.event.agreed_window == TimeWindow(
+        start=bounds["window_start"], end=bounds["window_end"], asap=True
     )
 
 
