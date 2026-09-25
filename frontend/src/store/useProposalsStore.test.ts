@@ -41,6 +41,12 @@ describe('useProposalsStore', () => {
     expect(useProposalsStore.getState().proposals.map((item) => item.id)).toEqual(['pr_1']);
   });
 
+  it('reports no proposals after «Не понял», so the field keeps the text to fix', async () => {
+    vi.mocked(api.sendChat).mockResolvedValue({ proposals: [], clarification: NOT_UNDERSTOOD });
+    expect(await useProposalsStore.getState().send('Кузнецов заболел')).toBe(false);
+    expect(useProposalsStore.getState()).toMatchObject({ clarification: NOT_UNDERSTOOD, sending: false, error: null });
+  });
+
   it('approves through the backend and refreshes the shared planning state', async () => {
     useProposalsStore.setState({ datasetId: 'd_test', proposals: [makeProposal()] });
     const state = makePlanningState({ version: 5 });

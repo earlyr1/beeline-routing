@@ -23,6 +23,10 @@ export interface ProposalsData {
 
 export interface ProposalsActions {
   load(datasetId: string): Promise<void>;
+  /**
+   * true — из сообщения вышли предложения, и поле ввода можно очистить. На «Не понял» без предложений — false:
+   * сообщение пишется целиком заново, и диспетчер правит свой текст, а не набирает его с нуля.
+   */
   send(text: string): Promise<boolean>;
   approve(proposalId: string): Promise<void>;
   reject(proposalId: string): Promise<void>;
@@ -103,7 +107,7 @@ export const useProposalsStore = create<ProposalsState>()((set, get) => {
           proposals: response.proposals.reduce(upsertProposal, get().proposals),
           clarification: response.clarification,
         });
-        return true;
+        return response.proposals.length > 0;
       } catch (error) {
         set({ error: message(error) });
         return false;

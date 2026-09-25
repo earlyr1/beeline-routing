@@ -37,23 +37,50 @@ NOT_UNDERSTOOD_TOOL = "not_understood"
 # читается как причина not_understood.
 LEGACY_CLARIFY_TOOL = "ask_clarification"
 REWRITE_HINT = "Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит."
-NO_REASON = "помощник не назвал, чего не хватает"
+# Понята часть сообщения: написать его целиком ещё раз значит получить понятое вторым предложением, а «Применить
+# все» внесло бы в план две одинаковые аварии или две задержки. Поэтому заново пишется только непонятое.
+PARTIAL_HINT = (
+    "Остальное — в предложениях ниже. Непонятое напишите отдельным сообщением, целиком: "
+    "прошлых сообщений помощник не помнит."
+)
+# «Не понял» без причины: модель её не назвала или вместо причины написала вопрос.
+NO_REASON = "Не понял, что изменить в плане."
+NO_REASON_PARTIAL = "Не понял часть сообщения."
 NOTHING_FOUND = (
     "в сообщении нет изменения плана (отмена заявки, срочная заявка, изменение заявки, недоступность инженера, "
     "смена транспорта или задержка инженера)"
 )
-_NOT_UNDERSTOOD_PREFIX = re.compile(r"^не\s+понял[аи]?\b[\s:,.!—–-]*", re.IGNORECASE)
+# Своё «Не понял», «Непонятно, …» или «Уточните, …» в начале причины: второе «Не понял» в ответе лишнее.
+_NOT_UNDERSTOOD_PREFIX = re.compile(
+    r"^(?:(?:не\s+понял[аи]?|не\s+понимаю|не\s+могу\s+понять|не\s*понятно|не\s*ясно)\b[\s:,.!—–-]*"
+    r"|(?:уточните|укажите)\s*[,:]\s*)+",
+    re.IGNORECASE,
+)
+# Не причина, а вопрос или просьба к диспетчеру: вопрос внутри текста («Кто заболел? Уточните фамилию»), «Укажите …».
+_NOT_A_REASON = re.compile(r"\?|\b(?:уточните|укажите|подскажите|скажите|назовите|напишите)\b", re.IGNORECASE)
+MAX_REASON_LEN = 200
+# Слова, с которых причина начинается с маленькой буквы после «Не понял:». Заглавную опускаем только у них:
+# фамилия инженера в начале причины должна остаться с большой.
+_LOWER_LEAD = re.compile(
+    r"(?:не|нет|ни|в|во|на|с|со|у|к|о|по|до|из|от|для|при|без|кто|кого|что|чего|как(?:ой|ая|ое|ие|ого|ую|их)?"
+    r"|где|куда|когда|сколько|насколько|почему|зачем|инженер\w*|заявк\w*|окн[оа]|время|адрес|длительность"
+    r"|срочн\w*)\b",
+    re.IGNORECASE,
+)
 # Возврат отменённой заявки убран из интерфейса и из инструментов помощника: передумать можно только в уведомлении
-# сразу после отмены. На просьбу вернуть помощник честно говорит, что так нельзя, а не молчит.
+# сразу после отмены. На просьбу вернуть помощник честно говорит, что так нельзя, а не молчит, — в том числе рядом
+# с предложениями по остальному сообщению: для этого у модели есть инструмент restore_not_supported.
 RESTORE_UNSUPPORTED = (
     "Вернуть отменённую заявку нельзя: передумать можно только в первые 5 секунд после отмены, в уведомлении. "
     "Если клиент снова ждёт визит, добавьте срочную заявку."
 )
+RESTORE_TOOL = "restore_not_supported"
 # Инструмент возврата, которого больше нет: модель со старой памятью ещё может его назвать.
 LEGACY_RESTORE_TOOL = "propose_restore"
 _RESTORE_WORDS = re.compile(
     r"\bверн(?:и|ите|уть|ём|ем|ёт|ет|ул|ула|ули)\b|снова в силе|\bвозврат", re.IGNORECASE
 )
+_REFUSED = re.compile(r"не\s+поддерживается|нельзя|невозможно", re.IGNORECASE)
 URGENT_WINDOW_MISSING = (
     "у срочной заявки названа одна граница окна, а нужно окно целиком или «как можно скорее»"
 )
@@ -159,11 +186,12 @@ class ProposalDraft:
 
 @dataclass
 class Interpretation:
-    """drafts — предложения; not_understood — причины, по которым часть сообщения не понята; notices — ответы
-    без «Не понял» (честный отказ вернуть заявку); prose — текст, который модель написала вместо инструментов."""
+    """drafts — предложения; not_understood — причины, по которым часть сообщения не понята (None — модель не назвала
+    причину); notices — ответы без «Не понял» (честный отказ вернуть заявку); prose — текст, который модель написала
+    вместо инструментов."""
 
     drafts: list[ProposalDraft] = field(default_factory=list)
-    not_understood: list[str] = field(default_factory=list)
+    not_understood: list[str | None] = field(default_factory=list)
     notices: list[str] = field(default_factory=list)
     prose: str | None = None
 
@@ -386,13 +414,18 @@ def _interpret_call(
     seen: set[tuple],
     now: int,
 ) -> None:
-    if call.name == LEGACY_RESTORE_TOOL:
+    if call.name in (RESTORE_TOOL, LEGACY_RESTORE_TOOL):
         out.notices.append(RESTORE_UNSUPPORTED)
         return
     if call.name in (NOT_UNDERSTOOD_TOOL, LEGACY_CLARIFY_TOOL):
         # Причину не проверяем строго: и без неё диспетчер должен прочесть, что сообщение не понято.
         arguments = call.arguments or {}
-        out.not_understood.append(_reason(arguments.get("reason") or arguments.get("question")))
+        said = arguments.get("reason") or arguments.get("question")
+        if isinstance(said, str) and _RESTORE_WORDS.search(said) and _REFUSED.search(said):
+            # Модель отказала в возврате через «не понял»: повторять сообщение незачем, диспетчеру — честный отказ.
+            out.notices.append(RESTORE_UNSUPPORTED)
+        else:
+            out.not_understood.append(_reason(said))
         return
     model = ARGUMENT_MODELS.get(call.name)
     if model is None:
@@ -470,21 +503,33 @@ def _interpret_call(
     out.drafts.append(ProposalDraft(event=stored, rationale=rationale))
 
 
-def _reason(value: object) -> str:
-    """Причина от модели в виде, в котором она встаёт в «Не понял: …»: без своего «Не понял», точки и вопроса."""
+def _reason(value: object) -> str | None:
+    """Причина от модели в виде, в котором она встаёт в «Не понял: …»: без своего «Не понял», точки и вопросительного
+    знака, с маленькой буквы. None — причины нет или вместо неё вопрос к диспетчеру («Кто заболел? Уточните фамилию»):
+    ответить на него нельзя, и помощник говорит «Не понял» без причины."""
     if not isinstance(value, str):
-        return NO_REASON
-    reason = _NOT_UNDERSTOOD_PREFIX.sub("", " ".join(value.split()))
-    return reason.rstrip(" .?!…;:") or NO_REASON
+        return None
+    reason = _NOT_UNDERSTOOD_PREFIX.sub("", " ".join(value.split())).rstrip(" .?!…;:")
+    if not reason or len(reason) > MAX_REASON_LEN or _NOT_A_REASON.search(reason):
+        return None
+    if _LOWER_LEAD.match(reason):
+        reason = reason[0].lower() + reason[1:]
+    return reason
 
 
-def not_understood_text(reasons: Sequence[str]) -> str:
-    """«Не понял» один раз на все причины и просьба написать сообщение целиком: вопрос помощник не запомнит."""
-    unique = list(dict.fromkeys(reasons))
+def not_understood_text(reasons: Sequence[str | None], partial: bool = False) -> str:
+    """«Не понял» один раз на все причины и просьба написать сообщение целиком: вопрос помощник не запомнит.
+
+    partial — часть сообщения понята и ушла в предложения: тогда заново пишется только непонятое.
+    """
+    unique = list(dict.fromkeys(reason for reason in reasons if reason))
+    hint = PARTIAL_HINT if partial else REWRITE_HINT
+    if not unique:
+        return f"{NO_REASON_PARTIAL if partial else NO_REASON} {hint}"
     if len(unique) == 1:
-        return f"Не понял: {unique[0]}. {REWRITE_HINT}"
+        return f"Не понял: {unique[0]}. {hint}"
     listed = ";\n".join(f"— {reason}" for reason in unique)
-    return f"Не понял:\n{listed}.\n{REWRITE_HINT}"
+    return f"Не понял:\n{listed}.\n{hint}"
 
 
 def reply_text(out: Interpretation, text: str) -> str | None:
@@ -493,7 +538,7 @@ def reply_text(out: Interpretation, text: str) -> str | None:
     Если модель не предложила ничего и не назвала причину, просьба вернуть заявку получает честный отказ, а в
     остальном «Не понял» с тем, что модель написала текстом, или с тем, какие изменения помощник понимает.
     """
-    notices = list(out.notices)
+    notices = list(dict.fromkeys(out.notices))
     reasons = list(out.not_understood)
     if not (out.drafts or notices or reasons):
         if _RESTORE_WORDS.search(text):
@@ -501,7 +546,7 @@ def reply_text(out: Interpretation, text: str) -> str | None:
         else:
             reasons.append(_reason(out.prose) if out.prose else NOTHING_FOUND)
     if reasons:
-        notices.append(not_understood_text(reasons))
+        notices.append(not_understood_text(reasons, partial=bool(out.drafts)))
     return "\n".join(notices) or None
 
 

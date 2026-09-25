@@ -253,6 +253,7 @@ def test_tools_mode_sends_eight_tools_and_parses_calls():
         "propose_engineer_transport_change",
         "propose_request_update",
         "propose_engineer_delay",
+        "restore_not_supported",
         "not_understood",
     ]
     assert body["messages"] == MESSAGES

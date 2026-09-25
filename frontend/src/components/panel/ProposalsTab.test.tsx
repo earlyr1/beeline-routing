@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAppStore } from '../../store/useAppStore';
 import { initialProposalsData, useProposalsStore } from '../../store/useProposalsStore';
@@ -45,6 +45,21 @@ describe('ProposalsTab', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
     await waitFor(() => expect(actions.send).toHaveBeenCalledWith('Арташкин заболел после обеда'));
     await waitFor(() => expect(field).toHaveValue(''));
+  });
+
+  it('keeps the text after «Не понял» without proposals: the message is written anew, and it is easier to fix', async () => {
+    let answered = Promise.resolve(false);
+    const send = vi.fn(() => (answered = Promise.resolve(false)));
+    setup({ send });
+    render(<ProposalsTab />);
+    const field = screen.getByLabelText('Сообщение помощнику');
+    fireEvent.change(field, { target: { value: 'Кузнецов заболел после обеда' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith('Кузнецов заболел после обеда'));
+    await act(async () => {
+      await answered;
+    });
+    expect(field).toHaveValue('Кузнецов заболел после обеда');
   });
 
   it('renders cards newest first with approve and reject for pending ones', () => {

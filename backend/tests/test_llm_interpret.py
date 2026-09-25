@@ -6,7 +6,10 @@ from app.domain.timeutil import fmt_hhmm
 from app.ingest.geocode import GeoResult
 from app.llm.client import LlmResult, ToolCall
 from app.llm.interpret import (
+    NO_REASON,
+    NO_REASON_PARTIAL,
     NOTHING_FOUND,
+    PARTIAL_HINT,
     RESTORE_UNSUPPORTED,
     REWRITE_HINT,
     URGENT_WINDOW_MISSING,
@@ -79,10 +82,16 @@ def test_conflicts_with_day_state_become_failed_drafts():
 
 
 def test_restoring_a_cancelled_request_is_not_offered_and_is_answered_honestly():
-    # Инструмента возврата у помощника нет, а правила говорят модели ничего не вызывать: ответит сервис.
-    assert "propose_restore" not in TOOL_NAMES
+    # Инструмента возврата у помощника нет: правила велят модели сказать отказом restore_not_supported.
+    assert "propose_restore" not in TOOL_NAMES and "restore_not_supported" in TOOL_NAMES
     system, _ = build_messages("Верните заявку R2", named_session(context()))
     assert "возврат отменённой заявки не поддерживается" in system["content"]
+    [rule] = [line for line in system["content"].splitlines() if line.startswith("4. ")]
+    assert "вызови restore_not_supported" in rule and "Остальные изменения из того же сообщения" in rule
+
+    out = run([ToolCall("restore_not_supported", {"request_id": "R2"})])
+    assert (out.drafts, out.notices, out.not_understood) == ([], [RESTORE_UNSUPPORTED], [])
+    assert reply_text(out, "Верните заявку R2") == RESTORE_UNSUPPORTED
     assert "propose_restore" not in system["content"]
     # Модель со старой памятью назвала прежний инструмент: предложения нет, есть честный ответ.
     out = run([ToolCall("propose_restore", {"request_id": "R2", "rationale": "Снова в силе"})])
@@ -274,7 +283,7 @@ def test_malformed_calls_duplicates_and_text_answers():
     # Текст вместо инструментов — не причина сам по себе: он идёт в «Не понял», только если модель больше ничего не дала.
     prose = run([], text="Что именно случилось?")
     assert (prose.not_understood, prose.prose) == ([], "Что именно случилось?")
-    assert reply_text(prose, "Так себе день") == f"Не понял: Что именно случилось. {REWRITE_HINT}"
+    assert reply_text(prose, "Так себе день") == f"Не понял: что именно случилось. {REWRITE_HINT}"
 
 
 def test_prompt_carries_now_engineers_and_assignments():
@@ -626,17 +635,24 @@ def test_the_old_clarifying_tool_reads_as_not_understood():
             assert reply_text(out, "Белузин опоздает") == expected, (name, key)
     question = run([ToolCall("ask_clarification", {"question": "На сколько задерживается Белузин?"})])
     assert reply_text(question, "Белузин опоздает") == (
-        f"Не понял: На сколько задерживается Белузин. {REWRITE_HINT}"
+        f"Не понял: на сколько задерживается Белузин. {REWRITE_HINT}"
     )
+    # Вопрос с просьбой уточнить причиной не станет: ответить на него нельзя.
+    asks = run([ToolCall("ask_clarification", {"question": "Кто именно опаздывает? Уточните фамилию."})])
+    assert reply_text(asks, "Кто-то опоздает") == f"{NO_REASON} {REWRITE_HINT}"
 
 
 def test_a_reason_from_the_model_gets_no_second_not_understood_and_no_question_mark():
     reasons: list[tuple[dict[str, Any], str]] = [
         ({"reason": "Не понял, кто заболел?"}, "кто заболел"),
         ({"reason": "не понял: не назван   инженер."}, "не назван инженер"),
-        ({"reason": "  "}, "помощник не назвал, чего не хватает"),
-        ({"reason": 42}, "помощник не назвал, чего не хватает"),
-        ({}, "помощник не назвал, чего не хватает"),
+        ({"reason": "Непонятно, какой инженер заболел"}, "какой инженер заболел"),
+        ({"reason": "Неясно: на сколько опоздает Белузин"}, "на сколько опоздает Белузин"),
+        ({"reason": "Не понял. Уточните, какой инженер заболел?"}, "какой инженер заболел"),
+        ({"reason": "Не сказано, кто заболел"}, "не сказано, кто заболел"),
+        # Фамилия в начале причины остаётся с большой буквы, аббревиатура тоже.
+        ({"reason": "Кузнецова нет среди инженеров дня"}, "Кузнецова нет среди инженеров дня"),
+        ({"reason": "URG-5 не найдена"}, "URG-5 не найдена"),
     ]
     for arguments, reason in reasons:
         out = run([ToolCall("not_understood", arguments)])
@@ -644,8 +660,22 @@ def test_a_reason_from_the_model_gets_no_second_not_understood_and_no_question_m
         answer = reply_text(out, "Кто-то заболел")
         assert answer == f"Не понял: {reason}. {REWRITE_HINT}", arguments
         assert answer.count("Не понял") == 1 and "?" not in answer, arguments
+    # Причины нет или вместо неё вопрос: «Не понял» без причины, от первого лица.
+    for arguments in (
+        {"reason": "  "},
+        {"reason": 42},
+        {},
+        {"reason": "Кто именно заболел? Уточните фамилию инженера."},
+        {"reason": "Укажите фамилию инженера"},
+    ):
+        out = run([ToolCall("not_understood", arguments)])
+        assert out.not_understood == [None], arguments
+        assert reply_text(out, "Кто-то заболел") == (
+            "Не понял, что изменить в плане. Напишите сообщение целиком ещё раз — прошлых сообщений помощник "
+            "не помнит."
+        ), arguments
     unparsed = run([ToolCall("not_understood", None, "аргументы не являются JSON (Expecting value)")])
-    assert unparsed.not_understood == ["помощник не назвал, чего не хватает"]
+    assert unparsed.not_understood == [None]
 
 
 def test_server_reasons_read_as_not_understood():
@@ -682,13 +712,15 @@ def test_several_reasons_share_one_not_understood_and_proposals_stay():
     )
     assert len(out.drafts) == 1
     answer = reply_text(out, "Отмена по R1, Кузнецов заболел, кто-то опоздает")
+    # Отмена уже в предложениях: заново пишется только непонятое, иначе отмена предложилась бы второй раз.
     assert answer == (
-        "Не понял:\n— инженер «Кузнецов» не найден;\n— не сказано, кто опоздает.\n" + REWRITE_HINT
+        "Не понял:\n— инженер «Кузнецов» не найден;\n— не сказано, кто опоздает.\n" + PARTIAL_HINT
     )
-    assert answer.count("Не понял") == 1
+    assert answer.count("Не понял") == 1 and "целиком ещё раз" not in answer
     assert not_understood_text(["заявка «Тверская» не найдена"]) == (
         f"Не понял: заявка «Тверская» не найдена. {REWRITE_HINT}"
     )
+    assert not_understood_text([None], partial=True) == f"{NO_REASON_PARTIAL} {PARTIAL_HINT}"
     # Предложения есть, причин нет: сказать диспетчеру нечего.
     assert (
         reply_text(run([ToolCall("propose_cancel", {"request_id": "R1", "rationale": "Отмена"})]), "R1")
@@ -704,3 +736,66 @@ def test_the_assistant_is_told_not_to_ask_questions():
     assert "Памяти между сообщениями нет" in rules and "вопросов не задавай" in rules
     [rule] = [line for line in rules.splitlines() if line.startswith("10. ")]
     assert "вызови not_understood и коротко, без вопроса назови, чего не хватает" in rule
+
+
+def test_part_understood_asks_to_rewrite_only_what_was_not_understood():
+    """Понятое уже в предложениях: повтор всего сообщения дал бы вторую аварию или вторую задержку в плане."""
+    urgent = {
+        "address": "Москва, ул. Тестовая, 1",
+        "asap": True,
+        "duration_min": 60,
+        "skill": "emergency",
+        "rationale": "Авария",
+    }
+    out = run(
+        [
+            ToolCall("propose_urgent_request", urgent),
+            ToolCall("propose_engineer_unavailable", {"engineer_id": "Кузнецов", "rationale": "Заболел"}),
+        ]
+    )
+    assert [draft.event.type for draft in out.drafts] == [EventType.URGENT]
+    assert reply_text(out, "Авария на ул. Тестовой, 1, и Кузнецов заболел") == (
+        "Не понял: инженер «Кузнецов» не найден. Остальное — в предложениях ниже. Непонятое напишите отдельным "
+        "сообщением, целиком: прошлых сообщений помощник не помнит."
+    )
+    # Ничего не понято — пишется всё сообщение.
+    alone = run(
+        [ToolCall("propose_engineer_unavailable", {"engineer_id": "Кузнецов", "rationale": "Заболел"})]
+    )
+    assert reply_text(alone, "Кузнецов заболел") == f"Не понял: инженер «Кузнецов» не найден. {REWRITE_HINT}"
+
+
+def test_restore_refusal_is_kept_next_to_proposals_for_the_rest_of_the_message():
+    """«Арташкин заболел, а заявку R2 верните»: недоступность предлагается, а про возврат диспетчер слышит отказ."""
+    text = "Арташкин заболел, а заявку R2 верните, клиент передумал"
+    unavailable = ToolCall(
+        "propose_engineer_unavailable", {"engineer_id": "Арташкин", "rationale": "Заболел"}
+    )
+    for refusal in (
+        ToolCall("restore_not_supported", {"request_id": "R2"}),
+        ToolCall("propose_restore", {"request_id": "R2", "rationale": "Клиент передумал"}),
+        ToolCall("restore_not_supported", {}),
+    ):
+        out = run([unavailable, refusal, refusal])
+        assert [draft.event.engineer_id for draft in out.drafts] == ["E1"], refusal
+        assert reply_text(out, text) == RESTORE_UNSUPPORTED, refusal
+    # Модель не послушалась и отказала через not_understood: это честный отказ, а не просьба повторить сообщение.
+    for reason in ("возврат отменённой заявки не поддерживается", "Вернуть отменённую заявку R2 нельзя."):
+        out = run([unavailable, ToolCall("not_understood", {"reason": reason})])
+        assert (out.not_understood, out.notices) == ([], [RESTORE_UNSUPPORTED]), reason
+        assert reply_text(out, text) == RESTORE_UNSUPPORTED, reason
+    # Отказ и непонятое вместе: отказ одной фразой, «Не понял» — своей.
+    both = run(
+        [ToolCall("restore_not_supported", {}), ToolCall("not_understood", {"reason": "не сказано, кто"})]
+    )
+    assert reply_text(both, text) == f"{RESTORE_UNSUPPORTED}\nНе понял: не сказано, кто. {REWRITE_HINT}"
+
+
+def test_prose_from_the_model_becomes_a_reason_only_without_a_question():
+    for prose, answer in (
+        ("Не указан инженер.", f"Не понял: не указан инженер. {REWRITE_HINT}"),
+        ("Кто именно заболел? Уточните фамилию инженера.", f"{NO_REASON} {REWRITE_HINT}"),
+        ("Уточните фамилию инженера", f"{NO_REASON} {REWRITE_HINT}"),
+        ("Кто заболел " * 30, f"{NO_REASON} {REWRITE_HINT}"),
+    ):
+        assert reply_text(run([], text=prose), "Кто-то заболел") == answer, prose

@@ -145,6 +145,21 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "required": ["engineer_id", "delay_min", "rationale"],
         },
     },
+    "restore_not_supported": {
+        "description": (
+            "Сказать диспетчеру, что вернуть отменённую заявку в план нельзя: вызывай на «вернуть», «снова в силе» "
+            "про отменённую заявку. Остальные изменения из того же сообщения предлагай как обычно."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "request_id": {
+                    "type": "string",
+                    "description": "id заявки, которую просят вернуть, если назван",
+                }
+            },
+        },
+    },
     "not_understood": {
         "description": (
             "Сказать диспетчеру, что сообщение не понято: непонятно, кого или что менять, или не хватает данных. "
