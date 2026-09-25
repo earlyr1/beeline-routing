@@ -799,3 +799,10 @@ def test_prose_from_the_model_becomes_a_reason_only_without_a_question():
         ("Кто заболел " * 30, f"{NO_REASON} {REWRITE_HINT}"),
     ):
         assert reply_text(run([], text=prose), "Кто-то заболел") == answer, prose
+
+
+def test_tool_call_written_as_text_is_not_shown_as_a_reason():
+    # YandexGPT на «Иванов заболел» написал вызов инструмента текстом: служебное диспетчеру не показываем.
+    raw = 'propose_engineer_unavailable {"engineer_id":"E01","rationale":"Иванов заболел"}'
+    for prose in (raw, '{"actions": []}'):
+        assert reply_text(run([], text=prose), "Иванов заболел") == f"{NO_REASON} {REWRITE_HINT}", prose
