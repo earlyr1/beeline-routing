@@ -54,10 +54,12 @@ describe('ProposalsTab', () => {
         makeUrgentProposal(),
         makeProposal({ id: 'pr_3', status: 'failed', error: 'Заявка 50104 уже отменена.' }),
       ],
-      clarification: 'Уточните, какую заявку вернуть?',
+      clarification: 'Не понял: заявка «Тверская» не найдена. Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит.',
     });
     render(<ProposalsTab />);
-    expect(screen.getByRole('status')).toHaveTextContent('Уточните, какую заявку вернуть?');
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Не понял: заявка «Тверская» не найдена. Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит.',
+    );
 
     const cards = screen.getAllByRole('listitem').filter((item) => item.classList.contains('proposal'));
     expect(cards.map((card) => card.querySelector('strong')?.textContent)).toEqual([
@@ -79,6 +81,18 @@ describe('ProposalsTab', () => {
     expect(actions.approveAll).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Отклонить все' }));
     expect(actions.rejectAll).toHaveBeenCalled();
+  });
+
+  it('shows the server answer as is: one «Не понял» for several reasons, line by line', () => {
+    const answer =
+      'Не понял:\n— инженер «Кузнецов» не найден;\n— не сказано, кто опоздает.\n' +
+      'Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит.';
+    setup({ clarification: answer });
+    render(<ProposalsTab />);
+    const note = screen.getByRole('status');
+    expect(note).toHaveClass('proposals__clarification');
+    expect(note.textContent).toBe(answer);
+    expect(note.textContent?.match(/Не понял/g)).toHaveLength(1);
   });
 
   it('locks approving while the plan is being moved to the clock', () => {

@@ -1,9 +1,19 @@
+from typing import Any
+
 from app.domain.enums import EventType, Priority, Skill, Transport
 from app.domain.models import Event
 from app.domain.timeutil import fmt_hhmm
 from app.ingest.geocode import GeoResult
 from app.llm.client import LlmResult, ToolCall
-from app.llm.interpret import NOTHING_FOUND, RESTORE_UNSUPPORTED, interpret, nothing_found
+from app.llm.interpret import (
+    NOTHING_FOUND,
+    RESTORE_UNSUPPORTED,
+    REWRITE_HINT,
+    URGENT_WINDOW_MISSING,
+    interpret,
+    not_understood_text,
+    reply_text,
+)
 from app.llm.prompt import build_messages
 from app.llm.tools import TOOL_NAMES
 from app.planning.session import apply_event
@@ -27,7 +37,7 @@ def test_cancel_by_id_and_by_street_become_pending_drafts():
             ToolCall("propose_cancel", {"request_id": "Дубининская", "time": "13:00", "rationale": "Отмена"}),
         ]
     )
-    assert out.clarifications == []
+    assert out.not_understood == []
     assert [(d.event.type, d.event.request_id, d.event.time, d.error) for d in out.drafts] == [
         (EventType.CANCEL, "R1", 540, None),
         (EventType.CANCEL, "R2", 780, None),
@@ -41,7 +51,7 @@ def test_engineer_resolved_by_surname_and_time_defaults_to_now():
     assert (draft.event.engineer_id, draft.event.time, draft.error) == ("E2", 0, None)
 
 
-def test_ambiguous_or_unknown_names_become_clarifications():
+def test_ambiguous_or_unknown_names_are_not_understood():
     out = run(
         [
             ToolCall("propose_engineer_unavailable", {"engineer_id": "Бригада", "rationale": "?"}),
@@ -49,9 +59,9 @@ def test_ambiguous_or_unknown_names_become_clarifications():
         ]
     )
     assert out.drafts == []
-    assert out.clarifications == [
-        "Под «Бригада» подходят несколько инженеров: Бригада Арташкин, Бригада Белузин. Уточните, кого вы имеете в виду.",
-        "Заявка «Тверская» не найдена.",
+    assert out.not_understood == [
+        "под «Бригада» подходят несколько инженеров: Бригада Арташкин, Бригада Белузин",
+        "заявка «Тверская» не найдена",
     ]
 
 
@@ -69,7 +79,7 @@ def test_conflicts_with_day_state_become_failed_drafts():
 
 
 def test_restoring_a_cancelled_request_is_not_offered_and_is_answered_honestly():
-    # Инструмента возврата у помощника нет, а правила говорят модели переспросить, а не молчать.
+    # Инструмента возврата у помощника нет, а правила говорят модели ничего не вызывать: ответит сервис.
     assert "propose_restore" not in TOOL_NAMES
     system, _ = build_messages("Верните заявку R2", named_session(context()))
     assert "возврат отменённой заявки не поддерживается" in system["content"]
@@ -77,15 +87,18 @@ def test_restoring_a_cancelled_request_is_not_offered_and_is_answered_honestly()
     # Модель со старой памятью назвала прежний инструмент: предложения нет, есть честный ответ.
     out = run([ToolCall("propose_restore", {"request_id": "R2", "rationale": "Снова в силе"})])
     assert out.drafts == []
-    assert out.clarifications == [RESTORE_UNSUPPORTED]
+    assert out.notices == [RESTORE_UNSUPPORTED] and out.not_understood == []
+    assert reply_text(out, "Верните заявку R2") == RESTORE_UNSUPPORTED
     assert "возврат" not in NOTHING_FOUND
 
 
 def test_a_restore_request_with_no_answer_from_the_model_gets_the_honest_refusal():
+    # Модель промолчала или ответила текстом вместо инструментов: просьба вернуть заявку получает отказ, а не «Не понял».
     for text in ("вернуть заявку 57866", "Верните 57866, клиент передумал", "57866 снова в силе"):
-        assert nothing_found(text) == RESTORE_UNSUPPORTED
+        assert reply_text(run([]), text) == RESTORE_UNSUPPORTED
+        assert reply_text(run([], text="Возврат не поддерживается."), text) == RESTORE_UNSUPPORTED
     for text in ("Как дела?", "Всё верно", "Вернулся из отпуска"):
-        assert nothing_found(text) == NOTHING_FOUND
+        assert reply_text(run([]), text) == f"Не понял: {NOTHING_FOUND}. {REWRITE_HINT}"
 
 
 def test_transport_change_by_surname_becomes_pending_draft():
@@ -106,7 +119,7 @@ def test_transport_change_by_surname_becomes_pending_draft():
             ),
         ]
     )
-    assert out.clarifications == []
+    assert out.not_understood == []
     assert [
         (
             d.event.type,
@@ -154,7 +167,7 @@ def test_old_foot_and_old_names_from_the_model_mean_public_transport():
                 )
             ]
         )
-        assert out.clarifications == [], name
+        assert out.not_understood == [], name
         assert [d.event.transport for d in out.drafts] == [Transport.PUBLIC], name
 
 
@@ -175,10 +188,10 @@ def test_transport_change_with_unknown_transport_or_same_transport():
             ),
         ]
     )
-    assert out.clarifications == [
-        "Не удалось разобрать предложение «propose_engineer_transport_change»: transport: неизвестный тип "
-        "транспорта «plane», допустимы car, bike, public.",
-        "Инженер «Кузнецов» не найден.",
+    assert out.not_understood == [
+        "не удалось разобрать предложение «propose_engineer_transport_change»: transport: неизвестный тип "
+        "транспорта «plane», допустимы car, bike, public",
+        "инженер «Кузнецов» не найден",
     ]
     [draft] = out.drafts
     assert (draft.event.engineer_id, draft.event.transport) == ("E2", Transport.CAR)
@@ -246,19 +259,22 @@ def test_malformed_calls_duplicates_and_text_answers():
             ),
             ToolCall("propose_cancel", None, "аргументы не являются JSON (Expecting value)"),
             ToolCall("delete_everything", {}),
-            ToolCall("ask_clarification", {"question": "Какую заявку отменить?"}),
+            ToolCall("not_understood", {"reason": "не сказано, какую заявку отменить"}),
             ToolCall("propose_cancel", {"request_id": "R3", "time": "13:00", "rationale": "Отмена"}),
             ToolCall("propose_cancel", {"request_id": "R3", "time": "13:00", "rationale": "Отмена ещё раз"}),
         ]
     )
     assert len(out.drafts) == 1
-    assert out.clarifications[0].startswith("Не удалось разобрать предложение «propose_urgent_request»")
-    assert out.clarifications[1:] == [
-        "Не удалось разобрать предложение «propose_cancel»: аргументы не являются JSON (Expecting value).",
-        "Помощник предложил неизвестное действие «delete_everything». Переформулируйте запрос.",
-        "Какую заявку отменить?",
+    assert out.not_understood[0].startswith("не удалось разобрать предложение «propose_urgent_request»")
+    assert out.not_understood[1:] == [
+        "не удалось разобрать предложение «propose_cancel»: аргументы не являются JSON (Expecting value)",
+        "помощник предложил неизвестное действие «delete_everything»",
+        "не сказано, какую заявку отменить",
     ]
-    assert run([], text="Что именно случилось?").clarifications == ["Что именно случилось?"]
+    # Текст вместо инструментов — не причина сам по себе: он идёт в «Не понял», только если модель больше ничего не дала.
+    prose = run([], text="Что именно случилось?")
+    assert (prose.not_understood, prose.prose) == ([], "Что именно случилось?")
+    assert reply_text(prose, "Так себе день") == f"Не понял: Что именно случилось. {REWRITE_HINT}"
 
 
 def test_prompt_carries_now_engineers_and_assignments():
@@ -286,7 +302,7 @@ def test_request_update_by_street_merges_new_window_into_current_request():
         "rationale": "Клиент просит приехать позже",
     }
     out = run([ToolCall("propose_request_update", arguments)], ctx=ctx, session=session)
-    assert out.clarifications == []
+    assert out.not_understood == []
     [draft] = out.drafts
     assert (draft.event.type, draft.event.request_id, draft.event.time, draft.error) == (
         EventType.REQUEST_UPDATED,
@@ -366,8 +382,8 @@ def test_request_update_without_fields_conflicts_and_unknown_address():
         ctx=ctx,
         session=session,
     )
-    assert out.clarifications == [
-        "Не понял, что изменить в заявке R2. Уточните окно, длительность, адрес или другое поле."
+    assert out.not_understood == [
+        "не сказано, что изменить в заявке R2: окно, длительность, адрес или другое поле"
     ]
     assert [(d.event.request_id, d.error) for d in out.drafts] == [
         ("R1", f"Заявка R1 уже в работе с {fmt_hhmm(started.start)}, изменить её нельзя."),
@@ -424,7 +440,7 @@ def test_request_update_with_inverted_window_is_failed_draft():
         ctx=ctx,
         session=session,
     )
-    assert out.clarifications == []
+    assert out.not_understood == []
     inverted, before_start = out.drafts
     assert (inverted.event.type, inverted.event.request_id, inverted.event.time) == (
         EventType.REQUEST_UPDATED,
@@ -455,7 +471,7 @@ def test_engineer_delay_by_surname_becomes_pending_draft():
             ),
         ]
     )
-    assert out.clarifications == []
+    assert out.not_understood == []
     assert [
         (d.event.type, d.event.engineer_id, d.event.delay_min, d.event.time, d.error) for d in out.drafts
     ] == [
@@ -484,9 +500,9 @@ def test_engineer_delay_with_bad_delay_unknown_or_unavailable_engineer():
         ctx=ctx,
         session=session,
     )
-    assert out.clarifications == [
-        "Не удалось разобрать предложение «propose_engineer_delay»: delay_min: задержка должна быть от 5 до 480 минут.",
-        "Инженер «Кузнецов» не найден.",
+    assert out.not_understood == [
+        "не удалось разобрать предложение «propose_engineer_delay»: delay_min: задержка должна быть от 5 до 480 минут",
+        "инженер «Кузнецов» не найден",
     ]
     [draft] = out.drafts
     assert (draft.event.engineer_id, draft.event.delay_min) == ("E1", 30)
@@ -540,7 +556,7 @@ def test_urgent_request_is_found_by_the_shown_urg_number():
         ctx=ctx,
         session=session,
     )
-    assert out.clarifications == ["Заявка «URG-99999» не найдена."]
+    assert out.not_understood == ["заявка «URG-99999» не найдена"]
     assert [(d.event.request_id, d.event.time, d.error) for d in out.drafts] == [
         ("57866", 0, None),
         ("57866", 780, None),
@@ -558,7 +574,7 @@ def test_urgent_request_from_chat_is_still_found_by_its_own_number():
         ctx=ctx,
         session=session,
     )
-    assert out.clarifications == []
+    assert out.not_understood == []
     assert [(d.event.request_id, d.error) for d in out.drafts] == [("URG-AI-001", None)]
 
 
@@ -577,11 +593,114 @@ def test_assistant_answers_sign_an_urgent_request_of_the_day():
         ctx=ctx,
         session=session,
     )
-    assert out.clarifications == [
-        "Не понял, что изменить в заявке URG-57866. Уточните окно, длительность, адрес или другое поле.",
-        "Под «адрес» подходят несколько заявок: R1 (адрес R1); R2 (адрес R2); R3 (адрес R3); "
-        "URG-57866 (адрес 57866). Уточните номер.",
+    assert out.not_understood == [
+        "не сказано, что изменить в заявке URG-57866: окно, длительность, адрес или другое поле",
+        "под «адрес» подходят несколько заявок: R1 (адрес R1); R2 (адрес R2); R3 (адрес R3); "
+        "URG-57866 (адрес 57866)",
     ]
     assert [(d.event.request_id, d.error) for d in out.drafts] == [
         ("57866", "Конец окна заявки URG-57866 должен быть позже начала.")
     ]
+
+
+BELUZIN_LATE = "не сказано, на сколько задерживается Белузин"
+
+
+def test_not_understood_becomes_a_single_not_understood_answer():
+    """Вопросов помощник не задаёт: памяти между сообщениями нет, и диспетчер пишет сообщение целиком заново."""
+    out = run([ToolCall("not_understood", {"reason": BELUZIN_LATE})])
+    assert (out.drafts, out.not_understood, out.notices) == ([], [BELUZIN_LATE], [])
+    assert reply_text(out, "Белузин опоздает") == (
+        "Не понял: не сказано, на сколько задерживается Белузин. "
+        "Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит."
+    )
+
+
+def test_the_old_clarifying_tool_reads_as_not_understood():
+    """Модель со старой памятью ещё зовёт ask_clarification: её вопрос — та же причина, что у not_understood."""
+    expected = reply_text(run([ToolCall("not_understood", {"reason": BELUZIN_LATE})]), "Белузин опоздает")
+    for name in ("ask_clarification", "not_understood"):
+        for key in ("question", "reason"):
+            out = run([ToolCall(name, {key: BELUZIN_LATE})])
+            assert out.not_understood == [BELUZIN_LATE], (name, key)
+            assert reply_text(out, "Белузин опоздает") == expected, (name, key)
+    question = run([ToolCall("ask_clarification", {"question": "На сколько задерживается Белузин?"})])
+    assert reply_text(question, "Белузин опоздает") == (
+        f"Не понял: На сколько задерживается Белузин. {REWRITE_HINT}"
+    )
+
+
+def test_a_reason_from_the_model_gets_no_second_not_understood_and_no_question_mark():
+    reasons: list[tuple[dict[str, Any], str]] = [
+        ({"reason": "Не понял, кто заболел?"}, "кто заболел"),
+        ({"reason": "не понял: не назван   инженер."}, "не назван инженер"),
+        ({"reason": "  "}, "помощник не назвал, чего не хватает"),
+        ({"reason": 42}, "помощник не назвал, чего не хватает"),
+        ({}, "помощник не назвал, чего не хватает"),
+    ]
+    for arguments, reason in reasons:
+        out = run([ToolCall("not_understood", arguments)])
+        assert out.not_understood == [reason], arguments
+        answer = reply_text(out, "Кто-то заболел")
+        assert answer == f"Не понял: {reason}. {REWRITE_HINT}", arguments
+        assert answer.count("Не понял") == 1 and "?" not in answer, arguments
+    unparsed = run([ToolCall("not_understood", None, "аргументы не являются JSON (Expecting value)")])
+    assert unparsed.not_understood == ["помощник не назвал, чего не хватает"]
+
+
+def test_server_reasons_read_as_not_understood():
+    """Причины сервиса — не вопросы: они встают в ту же фразу «Не понял: …»."""
+    unknown = run(
+        [ToolCall("propose_engineer_unavailable", {"engineer_id": "Кузнецов", "rationale": "Заболел"})]
+    )
+    assert (
+        reply_text(unknown, "Кузнецов заболел") == f"Не понял: инженер «Кузнецов» не найден. {REWRITE_HINT}"
+    )
+    half_window = {
+        "address": "Москва, ул. Тестовая, 1",
+        "window_start": "14:00",
+        "duration_min": 30,
+        "skill": "local",
+        "rationale": "Срочно",
+    }
+    urgent = run([ToolCall("propose_urgent_request", half_window)])
+    assert reply_text(urgent, "Срочно на Тестовую с двух") == (
+        "Не понял: у срочной заявки названа одна граница окна, а нужно окно целиком или «как можно скорее». "
+        + REWRITE_HINT
+    )
+    assert URGENT_WINDOW_MISSING[0].islower() and not URGENT_WINDOW_MISSING.endswith(".")
+
+
+def test_several_reasons_share_one_not_understood_and_proposals_stay():
+    out = run(
+        [
+            ToolCall("propose_cancel", {"request_id": "R1", "rationale": "Отмена"}),
+            ToolCall("propose_engineer_unavailable", {"engineer_id": "Кузнецов", "rationale": "Заболел"}),
+            ToolCall("not_understood", {"reason": "не сказано, кто опоздает"}),
+            ToolCall("propose_engineer_unavailable", {"engineer_id": "Кузнецов", "rationale": "Не выйдет"}),
+        ]
+    )
+    assert len(out.drafts) == 1
+    answer = reply_text(out, "Отмена по R1, Кузнецов заболел, кто-то опоздает")
+    assert answer == (
+        "Не понял:\n— инженер «Кузнецов» не найден;\n— не сказано, кто опоздает.\n" + REWRITE_HINT
+    )
+    assert answer.count("Не понял") == 1
+    assert not_understood_text(["заявка «Тверская» не найдена"]) == (
+        f"Не понял: заявка «Тверская» не найдена. {REWRITE_HINT}"
+    )
+    # Предложения есть, причин нет: сказать диспетчеру нечего.
+    assert (
+        reply_text(run([ToolCall("propose_cancel", {"request_id": "R1", "rationale": "Отмена"})]), "R1")
+        is None
+    )
+
+
+def test_the_assistant_is_told_not_to_ask_questions():
+    system, _ = build_messages("Белузин опоздает", named_session(context()))
+    rules = system["content"]
+    assert "ask_clarification" not in rules and "ask_clarification" not in TOOL_NAMES
+    assert "not_understood" in TOOL_NAMES
+    assert "Памяти между сообщениями нет" in rules and "вопросов не задавай" in rules
+    [rule] = [line for line in rules.splitlines() if line.startswith("10. ")]
+    assert "вызови not_understood и коротко, без вопроса назови, чего не хватает" in rule

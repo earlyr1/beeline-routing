@@ -23,6 +23,8 @@ import { useAppStore } from './useAppStore';
 import { initialProposalsData, useProposalsStore } from './useProposalsStore';
 
 const pristine = useProposalsStore.getState();
+const NOT_UNDERSTOOD =
+  'Не понял: инженер «Кузнецов» не найден. Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит.';
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -31,11 +33,11 @@ beforeEach(() => {
 });
 
 describe('useProposalsStore', () => {
-  it('sends a message and keeps proposals and the clarification', async () => {
-    vi.mocked(api.sendChat).mockResolvedValue({ proposals: [makeProposal()], clarification: 'Кто именно заболел?' });
+  it('sends a message and keeps proposals and the not-understood answer', async () => {
+    vi.mocked(api.sendChat).mockResolvedValue({ proposals: [makeProposal()], clarification: NOT_UNDERSTOOD });
     expect(await useProposalsStore.getState().send('Отмена на Грайвороновской')).toBe(true);
     expect(api.sendChat).toHaveBeenCalledWith('d_test', 'Отмена на Грайвороновской');
-    expect(useProposalsStore.getState()).toMatchObject({ clarification: 'Кто именно заболел?', sending: false, datasetId: 'd_test' });
+    expect(useProposalsStore.getState()).toMatchObject({ clarification: NOT_UNDERSTOOD, sending: false, datasetId: 'd_test' });
     expect(useProposalsStore.getState().proposals.map((item) => item.id)).toEqual(['pr_1']);
   });
 

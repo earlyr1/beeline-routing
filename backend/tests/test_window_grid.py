@@ -327,7 +327,7 @@ def test_the_assistant_puts_a_request_that_stops_being_as_soon_as_possible_on_a_
 
 
 def test_the_assistant_says_where_it_moved_the_window_and_asks_about_time_outside_the_day(grid):
-    """Сдвиг на слот виден диспетчеру, а время вне рабочего дня помощник не подменяет молча, а переспрашивает."""
+    """Сдвиг на слот виден диспетчеру, а время вне рабочего дня помощник не подменяет молча: отвечает «Не понял»."""
     ctx = context(
         window_grid=grid, geocode=lambda address, district: GeoResult(55.75, 37.61, "house", address)
     )
@@ -352,9 +352,9 @@ def test_the_assistant_says_where_it_moved_the_window_and_asks_about_time_outsid
         ids(),
     )
     assert out.drafts == []
-    assert out.clarifications == [
-        "Окна 22:00–23:00 в сетке нет: клиенту называют слот. Выберите один из: "
-        "10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00."
+    assert out.not_understood == [
+        "окна 22:00–23:00 нет в сетке, клиенту называют один из слотов: "
+        "10:00–12:00, 12:00–14:00, 14:00–16:00, 16:00–18:00, 18:00–20:00, 20:00–22:00"
     ]
 
 

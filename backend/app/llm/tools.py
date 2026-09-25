@@ -145,12 +145,21 @@ TOOL_SPECS: dict[str, dict[str, Any]] = {
             "required": ["engineer_id", "delay_min", "rationale"],
         },
     },
-    "ask_clarification": {
-        "description": "Задать диспетчеру короткий уточняющий вопрос, если непонятно, кого или что менять.",
+    "not_understood": {
+        "description": (
+            "Сказать диспетчеру, что сообщение не понято: непонятно, кого или что менять, или не хватает данных. "
+            "Вопросов не задавай: памяти между сообщениями нет, диспетчер напишет сообщение целиком заново."
+        ),
         "parameters": {
             "type": "object",
-            "properties": {"question": {"type": "string"}},
-            "required": ["question"],
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Коротко, без вопроса, с маленькой буквы: чего не хватает или что неоднозначно, "
+                    "например «не сказано, на сколько задерживается инженер»",
+                }
+            },
+            "required": ["reason"],
         },
     },
 }

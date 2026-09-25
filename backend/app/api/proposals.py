@@ -12,7 +12,7 @@ from app.api.schemas import PlanningState
 from app.api.timeline import ensure_precompute, insert_and_replay, planning_state, settle
 from app.domain.models import Event
 from app.llm.client import LlmError
-from app.llm.interpret import interpret, nothing_found
+from app.llm.interpret import interpret, reply_text
 from app.llm.prompt import build_messages
 from app.llm.schemas import STATUS_DONE_RU, ChatRequest, ChatResponse, Proposal
 from app.planning.timeline import known_requests
@@ -128,10 +128,7 @@ def chat(dataset_id: str, body: ChatRequest, deps: Deps) -> ChatResponse:
         now=cursor,
     )
     proposals = deps.proposals.create(dataset_id, interpretation.drafts, body.text, session.version)
-    clarification = "\n".join(interpretation.clarifications) or None
-    if not proposals and clarification is None:
-        clarification = nothing_found(body.text)
-    return ChatResponse(proposals=proposals, clarification=clarification)
+    return ChatResponse(proposals=proposals, clarification=reply_text(interpretation, body.text))
 
 
 @router.get("/proposals", response_model=list[Proposal])

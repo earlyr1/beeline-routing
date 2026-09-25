@@ -21,7 +21,7 @@ URGENT = {
     "time": "13:00",
     "rationale": "Авария, просят приехать как можно скорее",
 }
-MISSING_WINDOW = "Укажите окно визита или отметьте, что заявка как можно скорее."
+MISSING_WINDOW = "у срочной заявки названа одна граница окна, а нужно окно целиком или «как можно скорее»"
 
 
 def located():
@@ -58,7 +58,7 @@ def test_urgent_request_asap_without_window_becomes_pending_draft():
     ctx = located()
     out = run([ToolCall("propose_urgent_request", {**URGENT, "asap": True})], ctx)
 
-    assert out.clarifications == []
+    assert out.not_understood == []
     [draft] = out.drafts
     request = draft.event.request
     assert (draft.event.type, draft.event.time, draft.error) == (EventType.URGENT, 780, None)
@@ -93,7 +93,7 @@ def test_urgent_request_without_any_window_is_asap_even_without_asap_flag():
         assert (draft.error, draft.event.request.asap) == (None, True)
 
 
-def test_urgent_request_with_half_a_window_asks_for_window():
+def test_urgent_request_with_half_a_window_is_not_understood():
     ctx = located()
     out = run(
         [
@@ -103,7 +103,7 @@ def test_urgent_request_with_half_a_window_asks_for_window():
         ctx,
     )
     assert out.drafts == []
-    assert out.clarifications == [MISSING_WINDOW, MISSING_WINDOW]
+    assert out.not_understood == [MISSING_WINDOW, MISSING_WINDOW]
 
     with_window = run(
         [ToolCall("propose_urgent_request", {**URGENT, "window_start": "13:00", "window_end": "15:00"})], ctx
@@ -148,7 +148,7 @@ def test_request_update_with_asap():
         session,
     )
 
-    assert out.clarifications == []
+    assert out.not_understood == []
     [draft] = out.drafts
     assert (draft.event.type, draft.event.request_id, draft.error) == (EventType.REQUEST_UPDATED, "R3", None)
     assert draft.event.request == before.model_copy(
@@ -170,7 +170,7 @@ def test_request_update_with_asap():
         ctx,
         asap_day,
     )
-    assert edits.clarifications == []
+    assert edits.not_understood == []
     kept, named, off = edits.drafts
     # Правка заявки «как можно скорее» не перезапускает часы ожидания.
     assert (kept.error, kept.event.request.asap, kept.event.request.window_start) == (None, True, 780)
@@ -189,7 +189,7 @@ def test_prompt_mentions_asap_rule_and_asap_requests():
     # Авария без окна — «как можно скорее», а не повод спросить окно (yandexgpt/rc спрашивал).
     [rule] = [line for line in system["content"].splitlines() if line.startswith("8. ")]
     assert "Авария или срочная заявка без названного окна" in rule
-    assert "не спрашивай про окно через ask_clarification" in rule and "вопрос про окно здесь лишний" in rule
+    assert "отсутствие окна не повод для not_understood" in rule and "ask_clarification" not in rule
     # Правило общее, без адреса в примере: адрес мог бы совпасть с заявкой дня (ул. Окская, д. 32 — заявка
     # 84627 Востока) и тянул бы к новой срочной заявке вместо изменения существующей по правилу 6.
     assert "новую аварию или срочный вызов по адресу без названного времени" in rule

@@ -2,7 +2,7 @@ import json
 
 import httpx
 
-from app.llm.interpret import RESTORE_UNSUPPORTED
+from app.llm.interpret import RESTORE_UNSUPPORTED, REWRITE_HINT
 from tests.api_helpers import HashGeocoder, sample_bundle, upload
 from tests.llm_helpers import ScriptedProvider, completion, tool_call
 
@@ -42,7 +42,7 @@ def test_chat_creates_proposals_and_approve_goes_through_event_pipeline(api):
     response = client.post(f"{base}/chat", json={"text": "  Отмена по R2, а E9 не выйдет  "})
     body = response.json()
     assert response.status_code == 200, body
-    assert body["clarification"] == "Инженер «E9» не найден."
+    assert body["clarification"] == f"Не понял: инженер «E9» не найден. {REWRITE_HINT}"
     [proposal] = body["proposals"]
     assert proposal["id"] == "pr_1" and proposal["status"] == "pending"
     assert proposal["event"] == {
@@ -279,8 +279,9 @@ def test_chat_errors_are_russian(api):
     assert failed.status_code == 503 and "LLM_API_KEY" in failed.json()["detail"]
     nothing = client.post(f"{base}/chat", json={"text": "Как дела?"}).json()
     assert nothing["proposals"] == [] and nothing["clarification"].startswith(
-        "Не нашёл в сообщении изменений"
+        "Не понял: в сообщении нет изменения плана"
     )
+    assert nothing["clarification"].endswith(REWRITE_HINT)
 
 
 def test_restoring_a_cancelled_request_gets_an_honest_answer_and_changes_nothing(api):
@@ -298,3 +299,24 @@ def test_restoring_a_cancelled_request_gets_an_honest_answer_and_changes_nothing
         assert answer["clarification"] == RESTORE_UNSUPPORTED
     assert client.get(f"{base}/proposals").json() == []
     assert client.get(f"{base}/state").json()["version"] == version
+
+
+def test_the_assistant_answers_not_understood_instead_of_a_question(api):
+    """Памяти между сообщениями нет: вопрос помощника диспетчеру не на что ответить, поэтому вместо него «Не понял»."""
+    reason = [tool_call("not_understood", {"reason": "не сказано, на сколько задерживается Белузин"})]
+    legacy = [tool_call("ask_clarification", {"question": "На сколько задерживается Белузин?"})]
+    client, provider = with_llm(api, completion(tool_calls=reason), completion(tool_calls=legacy))
+    base = ready(client)
+
+    answer = client.post(f"{base}/chat", json={"text": "Белузин опоздает"}).json()
+    assert answer == {
+        "proposals": [],
+        "clarification": "Не понял: не сказано, на сколько задерживается Белузин. "
+        "Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит.",
+    }
+    # Модель со старой памятью назвала прежний инструмент вопроса: ответ той же формы.
+    old = client.post(f"{base}/chat", json={"text": "Белузин опоздает"}).json()
+    assert old["clarification"] == f"Не понял: На сколько задерживается Белузин. {REWRITE_HINT}"
+    tools = [tool["function"]["name"] for tool in provider.bodies()[0]["tools"]]
+    assert "not_understood" in tools and "ask_clarification" not in tools
+    assert client.get(f"{base}/proposals").json() == []

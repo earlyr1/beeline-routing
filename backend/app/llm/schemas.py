@@ -38,5 +38,8 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    """clarification — ответ помощника рядом с предложениями: «Не понял: <причина>. Напишите сообщение целиком ещё
+    раз…» или честный отказ вернуть заявку. Вопросов помощник не задаёт: памяти между сообщениями нет."""
+
     proposals: list[Proposal]
     clarification: str | None = None
