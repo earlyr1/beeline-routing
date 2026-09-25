@@ -351,26 +351,38 @@ def test_night_plan_of_the_day_pair_is_the_morning_plan(tmp_path, monkeypatch, l
     assert (session.workload_level, session.lunch_enabled) == (level, lunch)
 
 
-@pytest.mark.parametrize(
-    "night_pair, day_pair",
-    [
-        ((EXACT_TRAVEL_LEVEL, True), (DEFAULT_WORKLOAD_LEVEL, True)),
-        ((DEFAULT_WORKLOAD_LEVEL, True), (EXACT_TRAVEL_LEVEL, True)),
-        ((DEFAULT_WORKLOAD_LEVEL, True), (DEFAULT_WORKLOAD_LEVEL, False)),
-    ],
-    ids=["level 2 file, level 1 day", "level 1 file, level 2 day", "lunch file, day without lunch"],
-)
-def test_night_plan_of_another_pair_is_not_even_a_seed(tmp_path, monkeypatch, caplog, night_pair, day_pair):
-    # В каталоге только файл другой пары: день ищется с нуля, его маршрутов поиск не видит.
+def test_night_plan_of_another_pair_is_not_taken_for_the_default_day(tmp_path, monkeypatch, caplog):
+    # В каталоге только файл «На пределе»: день «Обычный» с обедом ищется с нуля, чужих маршрутов поиск не видит.
     ctx = context(night_plan_dir=tmp_path)
-    write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW, level=night_pair[0], lunch=night_pair[1])
+    write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW, level=EXACT_TRAVEL_LEVEL)
+    searches = Searches(monkeypatch)
+
+    with caplog.at_level("INFO", logger="app.planning.night"):
+        session = new_session(ctx)
+
+    assert session.precomputed is None and searches == [None]
+    assert f"файла {night_file(tmp_path)} нет, план ищется при загрузке" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "day_pair",
+    [(EXACT_TRAVEL_LEVEL, True), (DEFAULT_WORKLOAD_LEVEL, False)],
+    ids=["level 2 day", "day without lunch"],
+)
+def test_day_without_its_own_file_starts_from_the_default_night_plan(tmp_path, monkeypatch, caplog, day_pair):
+    # Своего файла у пары дня нет, есть только «Обычный день» с обедом: утренним планом он не становится,
+    # но поиск стартует от его маршрутов, как до раздельных файлов.
+    ctx = context(night_plan_dir=tmp_path)
+    write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW)
     searches = Searches(monkeypatch)
 
     with caplog.at_level("INFO", logger="app.planning.night"):
         session = new_session(ctx, workload_level=day_pair[0], lunch_enabled=day_pair[1])
 
-    assert session.precomputed is None and searches == [None]
-    assert f"файла {night_file(tmp_path, *day_pair)} нет, план ищется при загрузке" in caplog.text
+    assert session.precomputed is None
+    assert len(searches) == 1 and routes(searches[0]) == {"E1": [], **SECOND_CREW}
+    assert f"файла {night_file(tmp_path, *day_pair)} нет" in caplog.text
+    assert "поиск стартует от маршрутов ночного плана «Обычного дня» с обедом" in caplog.text
 
 
 def test_night_plan_of_another_pair_under_the_day_file_name_is_not_taken(tmp_path, monkeypatch, caplog):

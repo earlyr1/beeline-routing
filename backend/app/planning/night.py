@@ -292,6 +292,29 @@ class NightChoice:
     seed: Plan | None = None
 
 
+def default_pair_seed(
+    directory: Path, region: str, problem: Problem, workload_level: int, lunch_enabled: bool
+) -> Plan | None:
+    """Старт поиска для дня, у пары которого своего ночного файла нет: маршруты ночного плана «Обычного дня» с обедом.
+
+    Утренним планом они не становятся — у дня другие веса, запас на дорогу или обед, — но если на задаче дня они
+    допустимы, поиск стартует от них и не даёт план хуже их по цели. Для самой пары по умолчанию и при битом или
+    чужом файле старта нет.
+    """
+    if (workload_level, lunch_enabled) == (DEFAULT_WORKLOAD_LEVEL, True):
+        return None
+    try:
+        night = load_night_plan(night_plan_path(directory, region, DEFAULT_WORKLOAD_LEVEL, True))
+    except NightPlanUnreadable:
+        return None
+    if night is None or night.region != region:
+        return None
+    if (night.workload_level, night.lunch_enabled) != (DEFAULT_WORKLOAD_LEVEL, True):
+        return None
+    plan, _ = routes_plan(problem, night.routes)
+    return plan
+
+
 def choose_night_plan(
     directory: Path | None, region: str, problem: Problem, workload_level: int, lunch_enabled: bool
 ) -> NightChoice:
@@ -316,13 +339,17 @@ def choose_night_plan(
         logger.warning("Ночной план региона %s не подошёл: файл %s не читается (%s)", region, path, error)
         return NightChoice()
     if night is None:
+        seed = default_pair_seed(directory, region, problem, workload_level, lunch_enabled)
         logger.info(
-            "Ночной план региона %s не подошёл: для дня (%s) файла %s нет, план ищется при загрузке",
+            "Ночной план региона %s не подошёл: для дня (%s) файла %s нет, %s",
             region,
             pair,
             path,
+            "поиск стартует от маршрутов ночного плана «Обычного дня» с обедом"
+            if seed is not None
+            else "план ищется при загрузке",
         )
-        return NightChoice()
+        return NightChoice(seed=seed)
     if night.region != region:
         logger.info("Ночной план региона %s не подошёл: файл посчитан для региона %s", region, night.region)
         return NightChoice()
