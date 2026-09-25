@@ -85,18 +85,25 @@ def test_urgent_request_asap_without_window_becomes_pending_draft():
     )
 
 
-def test_urgent_request_without_window_and_without_asap_asks_for_window():
+def test_urgent_request_without_any_window_is_asap_even_without_asap_flag():
+    # Модель забыла asap=true, но окна не назвала: срочная без окна — «как можно скорее», не переспрашиваем.
+    ctx = located()
+    for args in (URGENT, {**URGENT, "asap": False}, {**URGENT, "asap": None}):
+        [draft] = run([ToolCall("propose_urgent_request", args)], ctx).drafts
+        assert (draft.error, draft.event.request.asap) == (None, True)
+
+
+def test_urgent_request_with_half_a_window_asks_for_window():
     ctx = located()
     out = run(
         [
-            ToolCall("propose_urgent_request", URGENT),
             ToolCall("propose_urgent_request", {**URGENT, "asap": False, "window_start": "14:00"}),
             ToolCall("propose_urgent_request", {**URGENT, "asap": None, "window_end": "14:00"}),
         ],
         ctx,
     )
     assert out.drafts == []
-    assert out.clarifications == [MISSING_WINDOW, MISSING_WINDOW, MISSING_WINDOW]
+    assert out.clarifications == [MISSING_WINDOW, MISSING_WINDOW]
 
     with_window = run(
         [ToolCall("propose_urgent_request", {**URGENT, "window_start": "13:00", "window_end": "15:00"})], ctx

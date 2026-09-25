@@ -335,7 +335,10 @@ def _build_event(
             delay_min=delay.delay_min,
         )
     urgent = cast(UrgentArgs, args)
-    if urgent.asap:
+    # Срочная заявка без названного окна — «как можно скорее», даже если модель забыла asap=true: так YandexGPT
+    # отвечал на «Срочно авария на …». Переспрашиваем, только если названа одна граница окна.
+    no_window = urgent.window_start is None and urgent.window_end is None
+    if urgent.asap or no_window:
         # Окно заявки «как можно скорее» заполнит проверка события: от времени события до конца смен.
         window_start = window_end = time
     elif urgent.window_start is None or urgent.window_end is None:
@@ -351,7 +354,7 @@ def _build_event(
         window_start=window_start,
         window_end=window_end,
         priority=Priority.URGENT,
-        asap=urgent.asap,
+        asap=bool(urgent.asap) or no_window,
         skill=urgent.skill,
         transport_required=transport,
         source_type_bk="Срочная заявка из чата",
