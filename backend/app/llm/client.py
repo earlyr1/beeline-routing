@@ -28,7 +28,10 @@ _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 SINGLE_TIMEOUT_S = 60.0
 SINGLE_MAX_RETRIES = 1
 # Пул: повтор — это следующая модель. Повтор SDK на той же удвоил бы ожидание на недоступной (на 429 SDK ещё и
-# ждёт, сколько скажет провайдер), а nginx фронта ждёт ответа backend 180 секунд на весь перебор.
+# ждёт, сколько скажет провайдер), а nginx фронта ждёт ответа backend 180 секунд на весь перебор. Короткая
+# попытка — у всех моделей, кроме последней: после неё спросить некого, и 30 секунд лишь превратили бы медленный
+# ответ в отказ, поэтому она ждёт, как одна модель. Если обе модели пула из двух не ответили вовремя,
+# это 30 + 60 секунд.
 POOL_TIMEOUT_S = 30.0
 POOL_MAX_RETRIES = 0
 # Сколько символов ответа провайдера об ошибке попадает в лог.
@@ -155,19 +158,19 @@ class OpenAiLlmClient:
             raise ValueError(f"неизвестный режим LLM: {mode}")
         if not models:
             raise ValueError("нужна хотя бы одна модель LLM")
-        pool = len(models) > 1
-        if timeout_s is None:
-            timeout_s = POOL_TIMEOUT_S if pool else SINGLE_TIMEOUT_S
         if max_retries is None:
-            max_retries = POOL_MAX_RETRIES if pool else SINGLE_MAX_RETRIES
+            max_retries = POOL_MAX_RETRIES if len(models) > 1 else SINGLE_MAX_RETRIES
         self._models = tuple(models)
+        # Таймаут попытки у каждой модели по порядку; timeout_s задаёт один на всех.
+        if timeout_s is None:
+            self._timeouts = (POOL_TIMEOUT_S,) * (len(models) - 1) + (SINGLE_TIMEOUT_S,)
+        else:
+            self._timeouts = (timeout_s,) * len(models)
         self._mode = mode
-        self._timeout_s = timeout_s
         self._client = OpenAI(
             base_url=base_url,
             api_key=api_key or "not-needed",
             http_client=http_client,
-            timeout=timeout_s,
             max_retries=max_retries,
         )
 
@@ -178,9 +181,9 @@ class OpenAiLlmClient:
     def complete(self, messages: list[Message]) -> LlmResult:
         """Ответ первой доступной модели. Если не ответила ни одна — LlmError с причиной отказа последней."""
         failure: _Unavailable | None = None
-        for model in self._models:
+        for model, timeout_s in zip(self._models, self._timeouts, strict=True):
             try:
-                result = self._complete_model(model, messages)
+                result = self._complete_model(model, timeout_s, messages)
             except _Unavailable as error:
                 logger.warning("Помощник: модель %s не ответила: %s", model, error.detail)
                 failure = error
@@ -190,16 +193,16 @@ class OpenAiLlmClient:
         assert failure is not None  # в пуле хотя бы одна модель
         raise LlmError(str(failure)) from failure
 
-    def _complete_model(self, model: str, messages: list[Message]) -> LlmResult:
+    def _complete_model(self, model: str, timeout_s: float, messages: list[Message]) -> LlmResult:
         """Ответ одной модели; её недоступность — _Unavailable, остальные ошибки — LlmError."""
         try:
             if self._mode == "json":
-                return self._complete_json(model, messages)
+                return self._complete_json(model, timeout_s, messages)
             try:
-                return self._complete_tools(model, messages)
+                return self._complete_tools(model, timeout_s, messages)
             except openai.APIStatusError as error:
                 if self._mode == "auto" and error.status_code in _FALLBACK_STATUSES:
-                    return self._complete_json(model, messages)
+                    return self._complete_json(model, timeout_s, messages)
                 raise
         except openai.APIStatusError as error:
             if _model_unavailable(error.status_code):
@@ -207,12 +210,14 @@ class OpenAiLlmClient:
             logger.warning("Помощник: модель %s отказала: %s", model, _detail(error))
             raise LlmError(_status_text(error)) from error
 
-    def _create(self, model: str, **kwargs: Any):
+    def _create(self, model: str, timeout_s: float, **kwargs: Any):
         try:
-            completion = self._client.chat.completions.create(model=model, temperature=0, **kwargs)
+            completion = self._client.chat.completions.create(
+                model=model, temperature=0, timeout=timeout_s, **kwargs
+            )
         except openai.APITimeoutError as error:
             raise _Unavailable(
-                "Помощник не ответил вовремя. Попробуйте ещё раз.", f"таймаут {self._timeout_s:g} с"
+                "Помощник не ответил вовремя. Попробуйте ещё раз.", f"таймаут {timeout_s:g} с"
             ) from error
         except openai.APIConnectionError as error:
             raise _Unavailable(
@@ -222,8 +227,8 @@ class OpenAiLlmClient:
             raise _Unavailable("Провайдер LLM вернул пустой ответ.", "пустой ответ (нет choices)")
         return completion.choices[0].message
 
-    def _complete_tools(self, model: str, messages: list[Message]) -> LlmResult:
-        message = self._create(model, messages=messages, tools=openai_tools(), tool_choice="auto")
+    def _complete_tools(self, model: str, timeout_s: float, messages: list[Message]) -> LlmResult:
+        message = self._create(model, timeout_s, messages=messages, tools=openai_tools(), tool_choice="auto")
         calls = []
         for call in message.tool_calls or []:
             function = getattr(call, "function", None)
@@ -237,10 +242,10 @@ class OpenAiLlmClient:
                 return LlmResult(calls=parsed, text=None, mode="tools")
         return LlmResult(calls=calls, text=message.content, mode="tools")
 
-    def _complete_json(self, model: str, messages: list[Message]) -> LlmResult:
+    def _complete_json(self, model: str, timeout_s: float, messages: list[Message]) -> LlmResult:
         system, *rest = messages
         prompt = [{"role": "system", "content": f"{system['content']}\n\n{json_mode_instruction()}"}, *rest]
-        message = self._create(model, messages=prompt)
+        message = self._create(model, timeout_s, messages=prompt)
         parsed = parse_json_actions(message.content)
         if parsed is None:
             return LlmResult(calls=[], text=message.content, mode="json")

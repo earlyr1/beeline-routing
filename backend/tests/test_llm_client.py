@@ -356,25 +356,31 @@ def cancel_call():
     return completion(tool_calls=[tool_call("propose_cancel", {"request_id": "R2", "rationale": "Отказ"})])
 
 
+UNAVAILABLE = [
+    (status_error(429, "rate limit"), "частоту запросов"),
+    (status_error(500), "ошибкой 500"),
+    (status_error(503), "ошибкой 503"),
+    (timeout, "таймаут 30 с"),
+    (refuse, "нет связи (connection refused)"),
+    (empty_completion(), "пустой ответ"),
+]
+
+
+# 404 в auto сначала ведёт к JSON-режиму той же модели — у него свой тест ниже.
 @pytest.mark.parametrize(
-    ("failure", "reason"),
-    [
-        (status_error(404, "No endpoints found"), "404"),
-        (status_error(429, "rate limit"), "частоту запросов"),
-        (status_error(500), "ошибкой 500"),
-        (status_error(503), "ошибкой 503"),
-        (timeout, "таймаут 30 с"),
-        (refuse, "нет связи (connection refused)"),
-        (empty_completion(), "пустой ответ"),
-    ],
+    ("mode", "failure", "reason"),
+    [("tools", status_error(404, "No endpoints found"), "404")]
+    + [(mode, failure, reason) for mode in ("tools", "auto") for failure, reason in UNAVAILABLE],
 )
-def test_pool_moves_to_the_next_model_when_the_first_is_unavailable(failure, reason, caplog):
+def test_pool_moves_to_the_next_model_when_the_first_is_unavailable(mode, failure, reason, caplog):
     caplog.set_level(logging.INFO, logger="app.llm.client")
     # Повторы SDK — по умолчанию пула: их нет, иначе второй запрос ушёл бы той же первой модели.
     provider = ScriptedProvider(failure, cancel_call())
-    result = provider.client(mode="tools", models=POOL, max_retries=None).complete(MESSAGES)
+    result = provider.client(mode=mode, models=POOL, max_retries=None).complete(MESSAGES)
 
+    # И в auto недоступная модель не спрашивается второй раз в JSON-режиме: вторая модель — сразу с инструментами.
     assert provider.models() == [FIRST, SECOND]
+    assert all("tools" in body for body in provider.bodies())
     assert (result.model, result.mode) == (SECOND, "tools")
     assert [call.name for call in result.calls] == ["propose_cancel"]
     failed = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
@@ -393,6 +399,17 @@ def test_pool_asks_the_next_model_after_404_in_json_mode_too():
     first_tools, first_json, second = provider.bodies()
     assert "tools" in first_tools and "tools" not in first_json and "tools" in second
     assert (result.model, result.mode) == (SECOND, "tools")
+
+
+def test_pool_in_json_mode_moves_to_the_next_model_too():
+    provider = ScriptedProvider(
+        status_error(404, "No endpoints found"), completion(content='{"actions": []}')
+    )
+    result = provider.client(mode="json", models=POOL, max_retries=None).complete(MESSAGES)
+
+    assert provider.models() == [FIRST, SECOND]
+    assert not any("tools" in body for body in provider.bodies())
+    assert (result.model, result.mode, result.calls) == (SECOND, "json", [])
 
 
 def test_pool_first_model_rejecting_tools_answers_in_json_mode():
@@ -441,7 +458,8 @@ def test_pool_all_models_failed_reports_the_last_reason_and_logs_each(caplog):
     failed = [record.getMessage() for record in caplog.records if record.name == "app.llm.client"]
     assert len(failed) == 2
     assert FIRST in failed[0] and "rate limit" in failed[0]
-    assert SECOND in failed[1] and "таймаут 30 с" in failed[1]
+    # Последняя модель ждёт, как одна: после неё спросить некого.
+    assert SECOND in failed[1] and "таймаут 60 с" in failed[1]
 
 
 def test_pool_waits_less_per_model_than_a_single_model():
@@ -451,6 +469,26 @@ def test_pool_waits_less_per_model_than_a_single_model():
 
     assert (single.model, pool.model) == ("test-model", FIRST)
     assert [request.extensions["timeout"]["read"] for request in provider.requests] == [60.0, 30.0]
+
+
+def test_pool_last_model_waits_as_long_as_a_single_model():
+    """Короткая попытка нужна, чтобы не ждать на недоступной модели, а после последней спросить некого."""
+    third = "gpt://folder/yandexgpt-lite/latest"
+    provider = ScriptedProvider(timeout, status_error(503), cancel_call())
+    result = provider.client(models=(*POOL, third), max_retries=None).complete(MESSAGES)
+
+    assert (provider.models(), result.model) == ([FIRST, SECOND, third], third)
+    assert [request.extensions["timeout"]["read"] for request in provider.requests] == [30.0, 30.0, 60.0]
+
+
+def test_single_model_keeps_one_sdk_retry():
+    # retry-after-ms: SDK повторяет через миллисекунду, а не через полсекунды своей паузы.
+    busy = httpx.Response(503, headers={"retry-after-ms": "1"}, json={"error": {"message": "занята"}})
+    provider = ScriptedProvider(busy, cancel_call())
+    result = provider.client(max_retries=None).complete(MESSAGES)
+
+    assert provider.models() == ["test-model", "test-model"]
+    assert (result.model, [call.name for call in result.calls]) == ("test-model", ["propose_cancel"])
 
 
 def test_single_model_failure_is_the_same_error_as_before():
