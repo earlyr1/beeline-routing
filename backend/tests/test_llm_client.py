@@ -1,4 +1,5 @@
 import json
+import logging
 
 import httpx
 import pytest
@@ -327,3 +328,133 @@ def test_parse_json_actions_edge_cases():
         '{"actions": [{"arguments": {}}, {"tool": "propose_cancel", "arguments": [1]}]}'
     )
     assert [(call.name, call.arguments) for call in calls] == [("", None), ("propose_cancel", None)]
+
+
+# Пул моделей: LLM_MODEL=первая,вторая — вторая спрашивается, только если первая недоступна.
+
+POOL = ("gpt://folder/yandexgpt/rc", "gpt://folder/qwen3-235b-a22b-fp8/latest")
+FIRST, SECOND = POOL
+
+
+def status_error(status, message="недоступна"):
+    return httpx.Response(status, json={"error": {"message": message}})
+
+
+def empty_completion():
+    return {**completion(content="ничего"), "choices": []}
+
+
+def timeout(request):
+    raise httpx.ReadTimeout("read timed out", request=request)
+
+
+def refuse(request):
+    raise httpx.ConnectError("connection refused", request=request)
+
+
+def cancel_call():
+    return completion(tool_calls=[tool_call("propose_cancel", {"request_id": "R2", "rationale": "Отказ"})])
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        (status_error(404, "No endpoints found"), "404"),
+        (status_error(429, "rate limit"), "частоту запросов"),
+        (status_error(500), "ошибкой 500"),
+        (status_error(503), "ошибкой 503"),
+        (timeout, "таймаут 30 с"),
+        (refuse, "нет связи (connection refused)"),
+        (empty_completion(), "пустой ответ"),
+    ],
+)
+def test_pool_moves_to_the_next_model_when_the_first_is_unavailable(failure, reason, caplog):
+    caplog.set_level(logging.INFO, logger="app.llm.client")
+    # Повторы SDK — по умолчанию пула: их нет, иначе второй запрос ушёл бы той же первой модели.
+    provider = ScriptedProvider(failure, cancel_call())
+    result = provider.client(mode="tools", models=POOL, max_retries=None).complete(MESSAGES)
+
+    assert provider.models() == [FIRST, SECOND]
+    assert (result.model, result.mode) == (SECOND, "tools")
+    assert [call.name for call in result.calls] == ["propose_cancel"]
+    failed = [record.getMessage() for record in caplog.records if record.levelno == logging.WARNING]
+    assert len(failed) == 1 and FIRST in failed[0] and reason in failed[0]
+    assert any(f"ответила модель {SECOND}" in record.getMessage() for record in caplog.records)
+
+
+def test_pool_asks_the_next_model_after_404_in_json_mode_too():
+    """404 на инструменты в auto — ещё не «модели нет»: так отвечают и модели без tools. Решает 404 JSON-режима."""
+    provider = ScriptedProvider(
+        status_error(404, "No endpoints found"), status_error(404, "No endpoints found"), cancel_call()
+    )
+    result = provider.client(models=POOL).complete(MESSAGES)
+
+    assert provider.models() == [FIRST, FIRST, SECOND]
+    first_tools, first_json, second = provider.bodies()
+    assert "tools" in first_tools and "tools" not in first_json and "tools" in second
+    assert (result.model, result.mode) == (SECOND, "tools")
+
+
+def test_pool_first_model_rejecting_tools_answers_in_json_mode():
+    provider = ScriptedProvider(
+        status_error(400, "tools are not supported"), completion(content='{"actions": []}')
+    )
+    result = provider.client(models=POOL).complete(MESSAGES)
+
+    assert provider.models() == [FIRST, FIRST]
+    assert (result.model, result.mode, result.calls) == (FIRST, "json", [])
+
+
+def test_pool_json_mode_unavailable_moves_on_but_a_bad_request_does_not():
+    provider = ScriptedProvider(
+        status_error(400, "tools are not supported"), status_error(429, "rate limit"), cancel_call()
+    )
+    result = provider.client(models=POOL).complete(MESSAGES)
+    assert provider.models() == [FIRST, FIRST, SECOND]
+    assert (result.model, result.mode) == (SECOND, "tools")
+
+    # 400 и в JSON-режиме — ошибка самого запроса: вторая модель его тоже не примет.
+    provider = ScriptedProvider(status_error(400, "bad"), status_error(400, "bad"))
+    with pytest.raises(LlmError, match="ответил ошибкой 400"):
+        provider.client(models=POOL).complete(MESSAGES)
+    assert provider.models() == [FIRST, FIRST]
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_pool_stops_on_a_rejected_key(status, caplog):
+    provider = ScriptedProvider(status_error(status, "Access denied by security policy"))
+    with pytest.raises(LlmError, match="LLM_API_KEY"):
+        provider.client(models=POOL).complete(MESSAGES)
+
+    assert provider.models() == [FIRST]
+    [record] = [record for record in caplog.records if record.name == "app.llm.client"]
+    assert FIRST in record.getMessage() and "Access denied" in record.getMessage()
+
+
+def test_pool_all_models_failed_reports_the_last_reason_and_logs_each(caplog):
+    caplog.set_level(logging.INFO, logger="app.llm.client")
+    provider = ScriptedProvider(status_error(429, "rate limit"), timeout)
+    with pytest.raises(LlmError, match="не ответил вовремя"):
+        provider.client(mode="tools", models=POOL).complete(MESSAGES)
+
+    assert provider.models() == [FIRST, SECOND]
+    failed = [record.getMessage() for record in caplog.records if record.name == "app.llm.client"]
+    assert len(failed) == 2
+    assert FIRST in failed[0] and "rate limit" in failed[0]
+    assert SECOND in failed[1] and "таймаут 30 с" in failed[1]
+
+
+def test_pool_waits_less_per_model_than_a_single_model():
+    provider = ScriptedProvider(cancel_call(), cancel_call())
+    single = provider.client(max_retries=None).complete(MESSAGES)
+    pool = provider.client(models=POOL, max_retries=None).complete(MESSAGES)
+
+    assert (single.model, pool.model) == ("test-model", FIRST)
+    assert [request.extensions["timeout"]["read"] for request in provider.requests] == [60.0, 30.0]
+
+
+def test_single_model_failure_is_the_same_error_as_before():
+    provider = ScriptedProvider(status_error(503))
+    with pytest.raises(LlmError, match="ответил ошибкой 503"):
+        provider.client().complete(MESSAGES)
+    assert provider.models() == ["test-model"]

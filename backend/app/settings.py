@@ -20,6 +20,19 @@ DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S = 30
 MAX_DEFAULT_SOLVER_WORKERS = 4
 
 
+def parse_llm_models(value: str | None) -> tuple[str, ...]:
+    """LLM_MODEL: одна модель или пул через запятую, по порядку обращения. Пробелы вокруг имён не в счёт."""
+    if not value:
+        return ()
+    models = tuple(name.strip() for name in value.split(","))
+    if not all(models):
+        raise ValueError(
+            f"LLM_MODEL: пустое имя модели в списке «{value}». Несколько моделей пишутся через запятую, "
+            "без пустых мест и запятой в конце: модель1,модель2"
+        )
+    return models
+
+
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
@@ -31,7 +44,8 @@ class Settings:
     yandex_maps_api_key: str | None
     llm_base_url: str | None
     llm_api_key: str | None
-    llm_model: str | None
+    # Пул моделей из LLM_MODEL по порядку обращения: следующая спрашивается, только если предыдущая недоступна.
+    llm_models: tuple[str, ...]
     geocoder: str
     solver_time_limit_s: int
     solver_time_limit_lunch_s: int = DEFAULT_SOLVER_TIME_LIMIT_LUNCH_S
@@ -52,7 +66,7 @@ class Settings:
 
     @property
     def llm_enabled(self) -> bool:
-        return bool(self.llm_base_url and self.llm_model)
+        return bool(self.llm_base_url and self.llm_models)
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> Settings:
@@ -82,7 +96,7 @@ class Settings:
             yandex_maps_api_key=optional("YANDEX_MAPS_API_KEY"),
             llm_base_url=optional("LLM_BASE_URL"),
             llm_api_key=optional("LLM_API_KEY"),
-            llm_model=optional("LLM_MODEL"),
+            llm_models=parse_llm_models(optional("LLM_MODEL")),
             geocoder=geocoder,
             solver_time_limit_s=int(optional("SOLVER_TIME_LIMIT_S") or DEFAULT_SOLVER_TIME_LIMIT_S),
             solver_time_limit_lunch_s=int(

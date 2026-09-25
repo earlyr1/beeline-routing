@@ -68,12 +68,17 @@ class ScriptedProvider:
     def bodies(self):
         return [json.loads(request.content) for request in self.requests]
 
-    def client(self, mode="auto"):
+    def models(self):
+        """Какой модели шёл каждый запрос, по порядку."""
+        return [body["model"] for body in self.bodies()]
+
+    def client(self, mode="auto", models=("test-model",), max_retries=0):
+        """max_retries=None — повторы SDK по умолчанию клиента: у пула их нет, у одной модели один с паузой."""
         return OpenAiLlmClient(
             base_url="http://llm.test/v1",
-            model="test-model",
+            models=models,
             api_key="test-key",
             mode=mode,
             http_client=httpx.Client(transport=httpx.MockTransport(self.handler)),
-            max_retries=0,
+            max_retries=max_retries,
         )

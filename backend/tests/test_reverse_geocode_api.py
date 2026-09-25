@@ -116,7 +116,7 @@ def test_cache_only_geocoder_gives_no_address(tmp_path):
         yandex_maps_api_key=None,
         llm_base_url=None,
         llm_api_key=None,
-        llm_model=None,
+        llm_models=(),
         geocoder="cache-only",
         solver_time_limit_s=1,
     )

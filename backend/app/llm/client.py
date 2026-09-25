@@ -1,10 +1,12 @@
-"""Клиент OpenAI-совместимого API: вызов инструментов с запасным JSON-режимом."""
+"""Клиент OpenAI-совместимого API: вызов инструментов с запасным JSON-режимом и пул моделей по порядку."""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 import httpx
@@ -15,9 +17,22 @@ from app.llm.tools import json_mode_instruction, openai_tools
 
 Message = dict[str, str]
 
-# Коды, которыми провайдеры без поддержки tools отвечают на запрос с инструментами
+logger = logging.getLogger(__name__)
+
+# Коды, которыми провайдеры без поддержки tools отвечают на запрос с инструментами. 404 бывает и «модели нет»,
+# и «у модели нет инструментов» (OpenRouter: No endpoints found that support tool use): в режиме auto сначала
+# JSON-режим той же модели, и только его 404 значит, что модели нет.
 _FALLBACK_STATUSES = (400, 404, 422)
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+# Одна модель: попытка до минуты и один повтор SDK, как было до пула.
+SINGLE_TIMEOUT_S = 60.0
+SINGLE_MAX_RETRIES = 1
+# Пул: повтор — это следующая модель. Повтор SDK на той же удвоил бы ожидание на недоступной (на 429 SDK ещё и
+# ждёт, сколько скажет провайдер), а nginx фронта ждёт ответа backend 180 секунд на весь перебор.
+POOL_TIMEOUT_S = 30.0
+POOL_MAX_RETRIES = 0
+# Сколько символов ответа провайдера об ошибке попадает в лог.
+_DETAIL_CHARS = 300
 
 
 @dataclass(frozen=True)
@@ -32,10 +47,23 @@ class LlmResult:
     calls: list[ToolCall] = field(default_factory=list)
     text: str | None = None
     mode: str = "tools"
+    # Какая модель пула ответила; None у результатов, собранных не клиентом (тесты разбора).
+    model: str | None = None
 
 
 class LlmError(RuntimeError):
     """Провайдер LLM недоступен или ответил ошибкой. Текст показывается диспетчеру (HTTP 503)."""
+
+
+class _Unavailable(Exception):
+    """Модель не ответила, а следующая в пуле может: нет связи, таймаут, 404, 429, 5xx, пустой ответ.
+
+    Текст исключения — для диспетчера, detail — для лога.
+    """
+
+    def __init__(self, text: str, detail: str | None = None) -> None:
+        super().__init__(text)
+        self.detail = detail or text
 
 
 class LlmClient(Protocol):
@@ -93,22 +121,48 @@ def _status_text(error: openai.APIStatusError) -> str:
     return f"Провайдер LLM ответил ошибкой {error.status_code}."
 
 
+def _model_unavailable(status: int) -> bool:
+    """Код, после которого стоит спросить следующую модель: модели нет, она занята или сломалась.
+
+    401/403 — ключ, он у всех моделей один. 400/422 — сам запрос, другая модель его тоже не примет.
+    """
+    return status in (404, 408, 429) or status >= 500
+
+
+def _detail(error: openai.APIStatusError) -> str:
+    return f"{_status_text(error)} {error.message[:_DETAIL_CHARS]}"
+
+
 class OpenAiLlmClient:
+    """Модели пула спрашиваются по порядку: следующая — только если предыдущая недоступна.
+
+    Отказ ключа (401/403) и ошибка в самом запросе (400/422, которую не обошёл и JSON-режим) перебор не
+    продолжают: у всех моделей пула один ключ и один запрос.
+    """
+
     def __init__(
         self,
         *,
         base_url: str,
-        model: str,
+        models: Sequence[str],
         api_key: str | None = None,
         mode: str = "auto",
         http_client: httpx.Client | None = None,
-        timeout_s: float = 60.0,
-        max_retries: int = 1,
+        timeout_s: float | None = None,
+        max_retries: int | None = None,
     ) -> None:
         if mode not in ("auto", "tools", "json"):
             raise ValueError(f"неизвестный режим LLM: {mode}")
-        self._model = model
+        if not models:
+            raise ValueError("нужна хотя бы одна модель LLM")
+        pool = len(models) > 1
+        if timeout_s is None:
+            timeout_s = POOL_TIMEOUT_S if pool else SINGLE_TIMEOUT_S
+        if max_retries is None:
+            max_retries = POOL_MAX_RETRIES if pool else SINGLE_MAX_RETRIES
+        self._models = tuple(models)
         self._mode = mode
+        self._timeout_s = timeout_s
         self._client = OpenAI(
             base_url=base_url,
             api_key=api_key or "not-needed",
@@ -117,29 +171,59 @@ class OpenAiLlmClient:
             max_retries=max_retries,
         )
 
+    @property
+    def models(self) -> tuple[str, ...]:
+        return self._models
+
     def complete(self, messages: list[Message]) -> LlmResult:
-        if self._mode == "json":
-            return self._complete_json(messages)
+        """Ответ первой доступной модели. Если не ответила ни одна — LlmError с причиной отказа последней."""
+        failure: _Unavailable | None = None
+        for model in self._models:
+            try:
+                result = self._complete_model(model, messages)
+            except _Unavailable as error:
+                logger.warning("Помощник: модель %s не ответила: %s", model, error.detail)
+                failure = error
+                continue
+            logger.info("Помощник: ответила модель %s (%s)", model, result.mode)
+            return replace(result, model=model)
+        assert failure is not None  # в пуле хотя бы одна модель
+        raise LlmError(str(failure)) from failure
+
+    def _complete_model(self, model: str, messages: list[Message]) -> LlmResult:
+        """Ответ одной модели; её недоступность — _Unavailable, остальные ошибки — LlmError."""
         try:
-            return self._complete_tools(messages)
+            if self._mode == "json":
+                return self._complete_json(model, messages)
+            try:
+                return self._complete_tools(model, messages)
+            except openai.APIStatusError as error:
+                if self._mode == "auto" and error.status_code in _FALLBACK_STATUSES:
+                    return self._complete_json(model, messages)
+                raise
         except openai.APIStatusError as error:
-            if self._mode == "auto" and error.status_code in _FALLBACK_STATUSES:
-                return self._complete_json(messages)
+            if _model_unavailable(error.status_code):
+                raise _Unavailable(_status_text(error), _detail(error)) from error
+            logger.warning("Помощник: модель %s отказала: %s", model, _detail(error))
             raise LlmError(_status_text(error)) from error
 
-    def _create(self, **kwargs: Any):
+    def _create(self, model: str, **kwargs: Any):
         try:
-            completion = self._client.chat.completions.create(model=self._model, temperature=0, **kwargs)
+            completion = self._client.chat.completions.create(model=model, temperature=0, **kwargs)
         except openai.APITimeoutError as error:
-            raise LlmError("Помощник не ответил вовремя. Попробуйте ещё раз.") from error
+            raise _Unavailable(
+                "Помощник не ответил вовремя. Попробуйте ещё раз.", f"таймаут {self._timeout_s:g} с"
+            ) from error
         except openai.APIConnectionError as error:
-            raise LlmError("Помощник недоступен: нет связи с провайдером LLM.") from error
+            raise _Unavailable(
+                "Помощник недоступен: нет связи с провайдером LLM.", f"нет связи ({error.__cause__ or error})"
+            ) from error
         if not completion.choices:
-            raise LlmError("Провайдер LLM вернул пустой ответ.")
+            raise _Unavailable("Провайдер LLM вернул пустой ответ.", "пустой ответ (нет choices)")
         return completion.choices[0].message
 
-    def _complete_tools(self, messages: list[Message]) -> LlmResult:
-        message = self._create(messages=messages, tools=openai_tools(), tool_choice="auto")
+    def _complete_tools(self, model: str, messages: list[Message]) -> LlmResult:
+        message = self._create(model, messages=messages, tools=openai_tools(), tool_choice="auto")
         calls = []
         for call in message.tool_calls or []:
             function = getattr(call, "function", None)
@@ -153,13 +237,10 @@ class OpenAiLlmClient:
                 return LlmResult(calls=parsed, text=None, mode="tools")
         return LlmResult(calls=calls, text=message.content, mode="tools")
 
-    def _complete_json(self, messages: list[Message]) -> LlmResult:
+    def _complete_json(self, model: str, messages: list[Message]) -> LlmResult:
         system, *rest = messages
         prompt = [{"role": "system", "content": f"{system['content']}\n\n{json_mode_instruction()}"}, *rest]
-        try:
-            message = self._create(messages=prompt)
-        except openai.APIStatusError as error:
-            raise LlmError(_status_text(error)) from error
+        message = self._create(model, messages=prompt)
         parsed = parse_json_actions(message.content)
         if parsed is None:
             return LlmResult(calls=[], text=message.content, mode="json")
