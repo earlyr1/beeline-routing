@@ -34,6 +34,10 @@ OIDC_JWKS_URL=https://token.actions.githubusercontent.com/.well-known/jwks
 # repo:earlyr1/beeline-routing:… облако отвечает 401 «No matching federated credentials».
 OIDC_SUBJECT=${OIDC_SUBJECT:-"repo:earlyr1@31624290/beeline-routing@1383515516:ref:refs/heads/main"}
 
+# Публичный бакет с готовым графом OSRM стенда (publish_graph.sh). Имя глобальное на весь Object Storage.
+GRAPH_BUCKET=${GRAPH_BUCKET:-beeline-routing-osrm}
+GRAPH_BASE_URL=https://storage.yandexcloud.net
+
 YC_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 STATE_FILE="$YC_DIR/.state.env"
 KNOWN_HOSTS_FILE="$YC_DIR/known_hosts"

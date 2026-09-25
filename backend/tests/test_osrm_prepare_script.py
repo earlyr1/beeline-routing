@@ -1,8 +1,10 @@
 """scripts/osrm_prepare.sh с заглушками curl, osmium и osrm-*: без сети и без настоящего OSRM."""
 
+import hashlib
 import os
 import shutil
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -55,7 +57,7 @@ def _run(
 
 @needs_bash
 def test_prepare_removes_pbf_files_after_graph_is_built(tmp_path):
-    result, data = _run(tmp_path, STUBS, PBF_URL="http://pbf.invalid/region.osm.pbf")
+    result, data = _run(tmp_path, STUBS, GRAPH_URL="", PBF_URL="http://pbf.invalid/region.osm.pbf")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert not (data / "central-fed-district.osm.pbf").exists()
@@ -68,7 +70,7 @@ def test_prepare_removes_pbf_files_after_graph_is_built(tmp_path):
 @needs_bash
 def test_prepare_downloads_pinned_extract_and_falls_back_to_latest(tmp_path):
     """По умолчанию качается выгрузка 22.09.2026, на которой посчитаны ночные планы; если её нет — свежая."""
-    result, data = _run(tmp_path, {**STUBS, "curl": MISSING_DATED})
+    result, data = _run(tmp_path, {**STUBS, "curl": MISSING_DATED}, GRAPH_URL="")
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "central-fed-district-260922.osm.pbf" in result.stdout
@@ -77,3 +79,55 @@ def test_prepare_downloads_pinned_extract_and_falls_back_to_latest(tmp_path):
         in result.stdout
     )
     assert (data / "moscow.osrm.cells").exists()
+
+
+def _graph_archive(tmp_path: Path) -> tuple[Path, str]:
+    """Архив «графа стенда» из двух файлов moscow.osrm.*, как его собирает infra/yc/publish_graph.sh."""
+    files = tmp_path / "graph"
+    files.mkdir()
+    for name in ("moscow.osrm.cells", "moscow.osrm.mldgr"):
+        (files / name).write_bytes(b"graph " + name.encode())
+    archive = tmp_path / "graph.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        for path in sorted(files.iterdir()):
+            tar.add(path, arcname=path.name)
+    return archive, hashlib.sha256(archive.read_bytes()).hexdigest()
+
+
+def _copy_curl(archive: Path) -> str:
+    """curl, который вместо скачивания кладёт в -o готовый архив графа, а PBF — нулями."""
+    return (
+        '#!/bin/sh\nout=""; url=""\n'
+        'while [ $# -gt 0 ]; do if [ "$1" = "-o" ]; then out="$2"; shift; fi; url="$1"; shift; done\n'
+        f'case "$url" in *tar.gz) cp "{archive}" "$out";; *) head -c 2048 /dev/zero > "$out";; esac\n'
+    )
+
+
+@needs_bash
+def test_prepare_downloads_stand_graph_when_checksum_matches(tmp_path):
+    """Готовый граф стенда распаковывается как есть: свой граф не собирается, osrm-* не вызываются."""
+    archive, digest = _graph_archive(tmp_path)
+    stubs = {**STUBS, "curl": _copy_curl(archive), "osrm-extract": "#!/bin/sh\nexit 1\n"}
+
+    result, data = _run(tmp_path, stubs, GRAPH_URL="http://graph.invalid/moscow.tar.gz", GRAPH_SHA256=digest)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (data / "moscow.osrm.cells").read_bytes() == b"graph moscow.osrm.cells"
+    assert (data / ".prepared-36.6_54.6_38.9_56.3").exists()
+    assert not (data / "graph.tar.gz").exists()
+    assert "граф стенда" in result.stdout
+
+
+@needs_bash
+def test_prepare_builds_own_graph_when_checksum_differs(tmp_path):
+    """Архив с чужой контрольной суммой не распаковывается: граф собирается из выгрузки OSM."""
+    archive, _ = _graph_archive(tmp_path)
+
+    result, data = _run(
+        tmp_path, {**STUBS, "curl": _copy_curl(archive)}, GRAPH_URL="http://graph.invalid/moscow.tar.gz"
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "не совпала контрольная сумма" in result.stdout
+    assert (data / "moscow.osrm.ebg").exists()
+    assert (data / "moscow.osrm.cells").read_bytes() == b""

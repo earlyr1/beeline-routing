@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Сносит всё, что создал create.sh: машину с дисками, статический IP, группу безопасности, сеть и подсеть (если
 # их создавали мы, а не взяли готовые: они узнаются по именам routing-*), образы и сам реестр, федерацию GitHub
-# и оба сервисных аккаунта. Спрашивает подтверждение. Запуск: infra/yc/teardown.sh
+# и оба сервисных аккаунта, а также бакет с готовым графом OSRM из publish_graph.sh. Спрашивает подтверждение. Запуск: infra/yc/teardown.sh
 # После него не остаётся ничего, за что Yandex Cloud берёт деньги, включая неактивный статический IP.
 set -euo pipefail
 
@@ -19,6 +19,7 @@ cat <<EOF
   статический IP $ADDRESS_NAME, группа безопасности $SG_NAME
   реестр $REGISTRY_NAME со всеми образами
   федерация $FEDERATION_NAME, сервисные аккаунты $CI_SA_NAME и $VM_SA_NAME
+  бакет $GRAPH_BUCKET с графом OSRM (после него osrm-prepare на чистом клоне соберёт граф сам)
 EOF
 [[ -n $SUBNET_ID ]] && echo "  подсеть $SUBNET_NAME"
 [[ -n $NETWORK_ID ]] && echo "  сеть $NETWORK_NAME"
@@ -73,6 +74,16 @@ if [[ -n $REGISTRY_ID ]]; then
   yc_ container registry delete --id "$REGISTRY_ID" >/dev/null
 else
   echo "Нет реестра $REGISTRY_NAME, пропускаю"
+fi
+
+step "Бакет с графом OSRM"
+if [[ -n $(id_of storage bucket get --name "$GRAPH_BUCKET") ]]; then
+  # Непустой бакет не удаляется: сначала все объекты.
+  "$YC" storage s3 rm --recursive "s3://$GRAPH_BUCKET/" >/dev/null
+  echo "Удаляю бакет $GRAPH_BUCKET"
+  yc_ storage bucket delete --name "$GRAPH_BUCKET" >/dev/null
+else
+  echo "Нет бакета $GRAPH_BUCKET, пропускаю"
 fi
 
 step "Доступ GitHub и сервисные аккаунты"
