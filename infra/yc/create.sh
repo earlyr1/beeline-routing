@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Поднимает в Yandex Cloud всё для сервера жюри: реестр образов, сервисные аккаунты для CI и для машины,
-# федерацию GitHub OIDC, статический IP, группу безопасности и саму машину с cloud-init.
+# Поднимает в Yandex Cloud всё для сервера жюри: реестр образов, сервисные аккаунты для CI, для машины и для
+# помощника (модели Yandex AI Studio), федерацию GitHub OIDC, статический IP, группу безопасности и машину.
 # Запуск: infra/yc/create.sh [--delete-old]
 #   --delete-old  заодно удалить старую машину transit-2gis вместе с её дисками.
 #
@@ -102,10 +102,23 @@ VM_SA_ID=$(service_account "$VM_SA_NAME" "Машина жюри: скачива�
   echo "Не удалось найти или создать сервисный аккаунт $VM_SA_NAME" >&2
   exit 1
 }
+LLM_SA_ID=$(service_account "$LLM_SA_NAME" "Помощник диспетчера: модели Yandex AI Studio по API-ключу") || {
+  echo "Не удалось найти или создать сервисный аккаунт $LLM_SA_NAME" >&2
+  exit 1
+}
 echo "$CI_SA_NAME: $CI_SA_ID"
 echo "$VM_SA_NAME: $VM_SA_ID"
+echo "$LLM_SA_NAME: $LLM_SA_ID"
 registry_role container-registry.images.pusher "$CI_SA_ID"
 registry_role container-registry.images.puller "$VM_SA_ID"
+# Модели Yandex AI Studio — ресурс папки, поэтому роль помощнику выдаётся на папку, а не на реестр.
+if yc_ resource-manager folder list-access-bindings --id "$FOLDER_ID" --format json |
+  jq -e --arg role "$LLM_ROLE" --arg sa "$LLM_SA_ID" 'any(.[]?; .role_id == $role and .subject.id == $sa)' >/dev/null; then
+  echo "Роль $LLM_ROLE у $LLM_SA_ID уже есть"
+else
+  yc_ resource-manager folder add-access-binding --id "$FOLDER_ID" --role "$LLM_ROLE" --service-account-id "$LLM_SA_ID" >/dev/null
+  echo "Выдана роль $LLM_ROLE на папку для $LLM_SA_ID"
+fi
 
 step "Федерация GitHub OIDC $FEDERATION_NAME"
 # У федерации нет get --name (yc требует federation_id), поэтому ищем по имени в списке каталога.
@@ -201,6 +214,7 @@ REGISTRY_ID=$REGISTRY_ID
 REGISTRY=cr.yandex/$REGISTRY_ID
 CI_SA_ID=$CI_SA_ID
 VM_SA_ID=$VM_SA_ID
+LLM_SA_ID=$LLM_SA_ID
 FEDERATION_ID=$FEDERATION_ID
 CREDENTIAL_ID=$CREDENTIAL_ID
 ADDRESS_ID=$ADDRESS_ID
@@ -260,10 +274,16 @@ cat <<EOF
 Реестр:          $REGISTRY_ID (cr.yandex/$REGISTRY_ID)
 CI:              $CI_SA_NAME $CI_SA_ID
 Машина читает:   $VM_SA_NAME $VM_SA_ID
+Помощник:        $LLM_SA_NAME $LLM_SA_ID
 Федерация:       $FEDERATION_ID, sub $OIDC_SUBJECT
 IP:              $VM_IP
 Машина:          $INSTANCE_ID
 Состояние:       $STATE_FILE
+
+Ключ помощника — секрет, скрипт его не создаёт. Если в .env ещё нет LLM_API_KEY от $LLM_SA_NAME:
+  $YC iam api-key create --service-account-name $LLM_SA_NAME --scopes $LLM_KEY_SCOPE --folder-id $FOLDER_ID --format json | jq -r .secret
+Вывод — в .env: LLM_API_KEY=<ключ>, LLM_BASE_URL=https://llm.api.cloud.yandex.net/v1,
+  LLM_MODEL=gpt://$FOLDER_ID/yandexgpt/rc,gpt://$FOLDER_ID/qwen3-235b-a22b-fp8/latest
 
 Дальше: uv run infra/github/set_secrets.py — секреты и переменные GitHub.
 EOF

@@ -56,13 +56,30 @@ ssh-keygen -t ed25519 -N '' -C deploy@beeline-routing -f ~/.ssh/beeline_routing_
 infra/yc/create.sh               # или с --delete-old: заодно удалить старую машину transit-2gis с дисками
 ```
 
-Скрипт создаёт реестр `routing`, сервисные аккаунты `routing-ci` (роль `container-registry.images.pusher` на реестр) и `routing-vm` (`container-registry.images.puller`), федерацию `routing-github` для GitHub OIDC с доступом только прогонам из `main`, статический IP, группу безопасности `routing-sg` и машину `routing`. Сеть берётся `default`; если её нет, создаётся своя. Идентификаторы печатаются и пишутся в `infra/yc/.state.env`.
+Скрипт создаёт реестр `routing`, сервисные аккаунты `routing-ci` (роль `container-registry.images.pusher` на реестр), `routing-vm` (`container-registry.images.puller`) и `routing-llm` для помощника (`ai.languageModels.user` на папку), федерацию `routing-github` для GitHub OIDC с доступом только прогонам из `main`, статический IP, группу безопасности `routing-sg` и машину `routing`. Сеть берётся `default`; если её нет, создаётся своя. Идентификаторы печатаются и пишутся в `infra/yc/.state.env`.
 
 Потом скрипт ждёт конца первой загрузки (обычно 3–6 минут) и снимает ключи хоста с вывода последовательного порта машины в `infra/yc/known_hosts`. Так ключ хоста закреплён из облака, а не с первого подключения вслепую. В конце он заходит на машину по SSH и проверяет, что Docker на месте и `deploy` может с ним работать; SSH и Docker проверяются порознь, и сообщение говорит, что из двух не так. Оба файла в `.gitignore`.
 
 Повторный запуск ничего не пересоздаёт и ключи хоста второй раз не ждёт, если они уже в `known_hosts`: после перезагрузки (`resize.sh`) cloud-init их больше не печатает. С `--delete-old` скрипт проверяет, не остался ли после старой машины зарезервированный IP: без машины он стоит 0,6039 ₽/ч, и скрипт печатает, как его удалить (сам не удаляет — вдруг нужен).
 
 Если Docker на первой загрузке не встал (скрипт ждёт блокировку apt до 10 минут и пробует трижды): лог — `sudo cat /var/log/cloud-init-output.log`, поставить заново — `sudo /usr/local/sbin/install-docker.sh` на машине.
+
+**Ключ помощника.** Помощник на стенде ходит в Yandex AI Studio: OpenRouter российские IP не пускает. Ключ — секрет, поэтому `create.sh` его не выпускает, только печатает команду в конце. Выпустить API-ключ аккаунта `routing-llm` со scope только на модели:
+
+```bash
+yc iam api-key create --service-account-name routing-llm --scopes yc.ai.languageModels.execute \
+  --folder-id b1g640095ie8rkbcvrde --format json | jq -r .secret
+```
+
+Секрет показывается один раз. Он идёт в `.env` в корне вместе с адресом и пулом моделей, а оттуда `set_secrets.py` (шаг 5) отправит всё в секреты GitHub:
+
+```bash
+LLM_BASE_URL=https://llm.api.cloud.yandex.net/v1
+LLM_API_KEY=<секрет>
+LLM_MODEL=gpt://b1g640095ie8rkbcvrde/yandexgpt/rc,gpt://b1g640095ie8rkbcvrde/qwen3-235b-a22b-fp8/latest
+```
+
+Без `create.sh` аккаунт и роль делаются руками: `yc iam service-account create --name routing-llm`, потом `yc resource-manager folder add-access-binding b1g640095ie8rkbcvrde --role ai.languageModels.user --service-account-name routing-llm`. Отозвать ключ: `yc iam api-key list --service-account-name routing-llm`, потом `yc iam api-key delete <id>`.
 
 **4. Репозиторий GitHub.** Создать пустой приватный `earlyr1/beeline-routing` — без README, лицензии и `.gitignore`: в вебе (New repository) или `gh repo create earlyr1/beeline-routing --private`. Пушить пока нельзя: без секретов первый же пуш запустит выкат, и тот упадёт. Пушится потом только `main` (шаг 6).
 
@@ -169,6 +186,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
 |---|---|
 | Сменить пароль жюри | `uv run infra/github/set_secrets.py`, новый пароль, потом Run workflow у `ci` |
 | Поменять ключ карт или модели | поправить `.env` локально, `set_secrets.py` (Enter вместо пароля), Run workflow у `ci` |
+| Какая модель ответила помощнику | в логе backend строки «Помощник: ответила модель …» и «… не ответила: …», по одной на модель пула |
 | Логи | `ssh … deploy@<IP> 'cd app && docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f --tail 100 backend'` |
 | Лог первой загрузки | `sudo cat /var/log/cloud-init-output.log` на машине; Docker заново — `sudo /usr/local/sbin/install-docker.sh` |
 | Место на диске | после каждого выката старые образы удаляются, откат скачает свой тег заново |
@@ -188,6 +206,8 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
 - Сторонние actions (`yc-actions/yc-cr-login@v3`, `docker/setup-buildx-action@v3`, `docker/build-push-action@v6`) закреплены тегами. Надёжнее — полным SHA коммита: `git ls-remote --tags https://github.com/docker/build-push-action` покажет коммит нужной версии (у аннотированного тега — строка с `^{}`), и в workflow пишется `uses: docker/build-push-action@<sha> # v6.x.y`.
 
 ## Сколько стоит
+
+Помощник платится отдельно, по токенам Yandex AI Studio из гранта: промпт — 6–8 тысяч токенов на сообщение диспетчера, ответ намного короче. Пока помощником не пользуются, он не стоит ничего.
 
 Цены с НДС: vCPU Ice Lake — 0,52 ₽/ч при доле 20%, 0,75 ₽/ч при 50%, 1,24 ₽/ч при 100%; RAM — 0,33 ₽ за ГБ в час; публичный IP на работающей машине — 0,26352 ₽/ч; network-hdd — 0,0048 ₽ за ГБ в час; реестр — 0,004575 ₽ за ГБ в час. Первые 100 ГБ исходящего трафика в месяц бесплатны, жюри столько не выкачает.
 
@@ -211,4 +231,4 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --no-build
 infra/yc/teardown.sh
 ```
 
-Скрипт спросит подтверждение словом «удалить» и удалит машину с дисками (вместе с базой дня, графом и сертификатами), статический IP, группу безопасности, свою сеть `routing-net` и подсеть `routing-ru-central1-d` (их узнаёт по имени, так что найдёт и после сбоя `create.sh` на середине), все образы и реестр, федерацию и оба сервисных аккаунта. После него в папке не остаётся ничего, за что берутся деньги. Секреты и переменные в GitHub остаются, но ведут уже в никуда.
+Скрипт спросит подтверждение словом «удалить» и удалит машину с дисками (вместе с базой дня, графом и сертификатами), статический IP, группу безопасности, свою сеть `routing-net` и подсеть `routing-ru-central1-d` (их узнаёт по имени, так что найдёт и после сбоя `create.sh` на середине), все образы и реестр, федерацию и сервисные аккаунты, включая `routing-llm` с его API-ключами и ролью на папку (`LLM_API_KEY` после этого не работает). После него в папке не остаётся ничего, за что берутся деньги. Секреты и переменные в GitHub остаются, но ведут уже в никуда.

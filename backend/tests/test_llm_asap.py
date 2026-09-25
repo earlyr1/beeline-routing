@@ -179,6 +179,14 @@ def test_prompt_mentions_asap_rule_and_asap_requests():
     session = named_session(ctx)
     system, _ = build_messages("Авария на Дубининской, приезжайте как можно скорее", session)
     assert "как можно скорее" in system["content"] and "asap=true" in system["content"]
+    # Авария без окна — «как можно скорее», а не повод спросить окно (yandexgpt/rc спрашивал).
+    [rule] = [line for line in system["content"].splitlines() if line.startswith("8. ")]
+    assert "Авария или срочная заявка без названного окна" in rule
+    assert "не спрашивай про окно через ask_clarification" in rule and "вопрос про окно здесь лишний" in rule
+    # Правило общее, без адреса в примере: адрес мог бы совпасть с заявкой дня (ул. Окская, д. 32 — заявка
+    # 84627 Востока) и тянул бы к новой срочной заявке вместо изменения существующей по правилу 6.
+    assert "новую аварию или срочный вызов по адресу без названного времени" in rule
+    assert "ул." not in rule and "д. " not in rule
 
     [draft] = run([ToolCall("propose_urgent_request", {**URGENT, "asap": True})], ctx, session).drafts
     updated = apply_event(session, draft.event, ctx)

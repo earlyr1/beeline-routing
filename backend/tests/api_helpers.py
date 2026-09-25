@@ -56,7 +56,7 @@ def make_client(tmp_path, bundle=None, geocoder=None, **limits):
         yandex_maps_api_key="test-key",
         llm_base_url=None,
         llm_api_key=None,
-        llm_model=None,
+        llm_models=(),
         geocoder="cache-only",
         **{"solver_time_limit_s": 1, "solver_time_limit_lunch_s": 1, **limits},
     )

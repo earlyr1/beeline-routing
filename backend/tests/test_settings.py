@@ -70,7 +70,7 @@ def test_solver_workers_default_to_the_cores_up_to_four_and_one_turns_the_pool_o
             yandex_maps_api_key=None,
             llm_base_url=None,
             llm_api_key=None,
-            llm_model=None,
+            llm_models=(),
             geocoder="cache-only",
             solver_time_limit_s=1,
         ).solver_workers
