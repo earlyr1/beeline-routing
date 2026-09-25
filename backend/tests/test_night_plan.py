@@ -1,9 +1,12 @@
 """Ночной план: отпечаток задачи, выбор утреннего плана при сборке дня, API и scripts/night_plan.py. Без сети."""
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
+from pathlib import Path
 
 import httpx
 import pytest
@@ -21,13 +24,14 @@ from app.planning.night import (
     NightMetrics,
     NightPlan,
     load_night_plan,
+    night_plan_file,
     night_plan_path,
     plan_routes,
     problem_fingerprint,
     save_night_plan,
 )
 from app.planning.session import apply_event, day_problem, start_session
-from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, workload_weights
+from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, WORKLOAD_LEVELS, workload_weights
 from app.settings import BACKEND_DIR, Settings
 from app.solvers.assemble import build_plan
 from app.solvers.fcfs import FcfsSolver
@@ -55,6 +59,11 @@ SECOND_CREW = {"E2": ["R1", "R2", "R3"]}
 LATE_ORDER = {"E1": ["R3", "R1", "R2"]}
 
 
+def night_file(directory, level=DEFAULT_WORKLOAD_LEVEL, lunch=True, region=REGION):
+    """Файл ночного плана пары (уровень нагрузки, обед); по умолчанию — «Обычный день» с обедом."""
+    return night_plan_path(directory, region, level, lunch)
+
+
 def write_night_plan(
     directory,
     ctx,
@@ -64,10 +73,12 @@ def write_night_plan(
     night_routes=None,
     fingerprint=None,
     level=DEFAULT_WORKLOAD_LEVEL,
+    lunch=True,
     region=REGION,
 ):
-    """Ночной план дня в каталоге directory, как его пишет scripts/night_plan.py. Отпечаток — по задаче дня."""
-    problem = day_problem(requests or day_requests(), engineers or day_engineers(), ctx, level, True)
+    """Ночной план дня в каталоге directory, как его пишет scripts/night_plan.py: в файл своей пары (уровень
+    нагрузки, обед). Отпечаток — по задаче дня."""
+    problem = day_problem(requests or day_requests(), engineers or day_engineers(), ctx, level, lunch)
     weights = workload_weights(level)
     if night_routes is None:
         plan = OrToolsSolver(time_limit_s=1, weights=weights).solve(problem)
@@ -82,7 +93,7 @@ def write_night_plan(
         workers=4,
         computed_at=COMPUTED_AT,
         workload_level=level,
-        lunch_enabled=True,
+        lunch_enabled=lunch,
         cost=plan_cost(problem, plan, weights),
         metrics=NightMetrics(
             engineers_used=plan.metrics.engineers_used,
@@ -92,13 +103,13 @@ def write_night_plan(
         ),
         routes=night_routes,
     )
-    save_night_plan(night, night_plan_path(directory, region))
+    save_night_plan(night, night_file(directory, level, lunch, region))
     return night
 
 
 def patch_night_file(directory, **fields):
     """Правит поля записанного ночного плана прямо в файле: так в него попадают маршруты, которых нет в дне."""
-    path = night_plan_path(directory, REGION)
+    path = night_file(directory)
     data = json.loads(path.read_text(encoding="utf-8"))
     data.update(fields)
     path.write_text(json.dumps(data), encoding="utf-8")
@@ -291,22 +302,110 @@ def test_events_replan_from_the_night_plan_and_keep_its_origin(tmp_path):
     assert replanned.precomputed == session.precomputed
 
 
-def test_night_plan_of_another_workload_level_seeds_the_live_search(tmp_path, monkeypatch, caplog):
+def test_night_plan_of_another_task_seeds_the_live_search(tmp_path, monkeypatch, caplog):
+    # Та же пара, но задача ночью была другой (заявки, бригады, OSRM или 2ГИС): маршруты файла ещё допустимы.
+    ctx = context(night_plan_dir=tmp_path)
+    write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW, fingerprint="0" * 64)
+    searches = Searches(monkeypatch)
+
+    with caplog.at_level("INFO", logger="app.planning.night"):
+        session = new_session(ctx)
+
+    assert session.precomputed is None
+    assert len(searches) == 1 and routes(searches[0]) == {"E1": [], **SECOND_CREW}
+    # Поиск от маршрутов ночного плана не хуже их по цели.
+    weights = workload_weights(DEFAULT_WORKLOAD_LEVEL)
+    assert plan_cost(session.problem, session.plan, weights) <= plan_cost(
+        session.problem, searches[0], weights
+    )
+    assert "отпечаток задачи другой" in caplog.text and "поиск стартует от его маршрутов" in caplog.text
+
+
+# --- ночной план своей пары (уровень нагрузки, обед) ---
+
+PAIRS = [(level, lunch) for level in range(len(WORKLOAD_LEVELS)) for lunch in (True, False)]
+
+
+def test_night_plan_file_is_named_by_workload_level_and_lunch():
+    # «Обычный день» с обедом — прежнее имя: файлы, посчитанные до планов на другие пары, остаются в силе.
+    assert night_plan_file(DEFAULT_WORKLOAD_LEVEL, True) == "night_plan.json"
+    assert night_plan_file(2, True) == "night_plan_level2.json"
+    assert night_plan_file(0, False) == "night_plan_level0_nolunch.json"
+    assert night_plan_file(DEFAULT_WORKLOAD_LEVEL, False) == "night_plan_level1_nolunch.json"
+    assert len({night_plan_file(*pair) for pair in PAIRS}) == len(PAIRS)
+    assert night_plan_path(Path("bundles"), "east", 2, True) == Path("bundles/east/night_plan_level2.json")
+    with pytest.raises(ValueError, match="уровень нагрузки"):
+        night_plan_file(len(WORKLOAD_LEVELS), True)
+
+
+@pytest.mark.parametrize("level, lunch", PAIRS, ids=lambda value: str(value))
+def test_night_plan_of_the_day_pair_is_the_morning_plan(tmp_path, monkeypatch, level, lunch):
+    ctx = context(night_plan_dir=tmp_path)
+    write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW, level=level, lunch=lunch)
+    Searches(monkeypatch, forbid=True)
+
+    session = new_session(ctx, workload_level=level, lunch_enabled=lunch)
+
+    assert routes(session.plan) == {"E1": [], **SECOND_CREW}
+    assert session.precomputed == PrecomputedPlan(search_minutes=120, computed_at=COMPUTED_AT)
+    assert (session.workload_level, session.lunch_enabled) == (level, lunch)
+
+
+def test_night_plan_of_another_pair_is_not_taken_for_the_default_day(tmp_path, monkeypatch, caplog):
+    # В каталоге только файл «На пределе»: день «Обычный» с обедом ищется с нуля, чужих маршрутов поиск не видит.
+    ctx = context(night_plan_dir=tmp_path)
+    write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW, level=EXACT_TRAVEL_LEVEL)
+    searches = Searches(monkeypatch)
+
+    with caplog.at_level("INFO", logger="app.planning.night"):
+        session = new_session(ctx)
+
+    assert session.precomputed is None and searches == [None]
+    assert f"файла {night_file(tmp_path)} нет, план ищется при загрузке" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "day_pair",
+    [(EXACT_TRAVEL_LEVEL, True), (DEFAULT_WORKLOAD_LEVEL, False)],
+    ids=["level 2 day", "day without lunch"],
+)
+def test_day_without_its_own_file_starts_from_the_default_night_plan(tmp_path, monkeypatch, caplog, day_pair):
+    # Своего файла у пары дня нет, есть только «Обычный день» с обедом: утренним планом он не становится,
+    # но поиск стартует от его маршрутов, как до раздельных файлов.
     ctx = context(night_plan_dir=tmp_path)
     write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW)
     searches = Searches(monkeypatch)
 
     with caplog.at_level("INFO", logger="app.planning.night"):
-        session = new_session(ctx, workload_level=EXACT_TRAVEL_LEVEL)
+        session = new_session(ctx, workload_level=day_pair[0], lunch_enabled=day_pair[1])
 
     assert session.precomputed is None
     assert len(searches) == 1 and routes(searches[0]) == {"E1": [], **SECOND_CREW}
-    # Поиск от маршрутов ночного плана не хуже их по цели при весах нового уровня.
-    weights = workload_weights(EXACT_TRAVEL_LEVEL)
-    assert plan_cost(session.problem, session.plan, weights) <= plan_cost(
-        session.problem, searches[0], weights
-    )
-    assert "отпечаток задачи другой" in caplog.text and "поиск стартует от его маршрутов" in caplog.text
+    assert f"файла {night_file(tmp_path, *day_pair)} нет" in caplog.text
+    assert "поиск стартует от маршрутов ночного плана «Обычного дня» с обедом" in caplog.text
+
+
+def test_night_plan_of_another_pair_under_the_day_file_name_is_not_taken(tmp_path, monkeypatch, caplog):
+    # План «На пределе» по ошибке лежит под именем файла «Обычного дня»: пара в файле не та, и файл не даёт
+    # ни утреннего плана, ни старта поиску.
+    ctx = context(night_plan_dir=tmp_path)
+    write_night_plan(tmp_path, ctx, night_routes=SECOND_CREW, level=EXACT_TRAVEL_LEVEL)
+    night_file(tmp_path, EXACT_TRAVEL_LEVEL).rename(night_file(tmp_path))
+    searches = Searches(monkeypatch)
+
+    with caplog.at_level("INFO", logger="app.planning.night"):
+        session = new_session(ctx)
+
+    assert session.precomputed is None and searches == [None]
+    assert "посчитан для другого дня (нагрузка «На пределе» с обедом)" in caplog.text
+    assert "а день — нагрузка «Обычный день» с обедом" in caplog.text
+
+
+def test_log_names_the_pair_of_the_day(tmp_path, caplog):
+    with caplog.at_level("INFO", logger="app.planning.night"):
+        new_session(context(night_plan_dir=tmp_path), workload_level=EXACT_TRAVEL_LEVEL, lunch_enabled=False)
+    assert "для дня (нагрузка «На пределе» без обеда) файла" in caplog.text
+    assert "night_plan_level2_nolunch.json нет" in caplog.text
 
 
 def test_night_plan_of_another_day_with_invalid_routes_is_ignored(tmp_path, monkeypatch, caplog):
@@ -366,7 +465,7 @@ def test_night_plan_with_foreign_routes_is_rejected(tmp_path, monkeypatch, caplo
 )
 def test_broken_night_plan_file_falls_back_to_the_live_search(tmp_path, monkeypatch, caplog, content):
     ctx = context(night_plan_dir=tmp_path)
-    path = night_plan_path(tmp_path, REGION)
+    path = night_file(tmp_path)
     path.parent.mkdir(parents=True)
     path.write_bytes(content)
     searches = Searches(monkeypatch)
@@ -503,6 +602,33 @@ def test_state_says_where_the_morning_plan_came_from(api, tmp_path):
     assert back["precomputed"] == precomputed
 
 
+def test_replanned_day_takes_the_night_plan_of_its_new_pair(api, tmp_path):
+    # Нагрузку и обед меняют в шапке уже открытого дня: пересборка берёт файл новой пары.
+    client, deps = api()
+    bundle = sample_bundle()
+    night = write_night_plan(
+        tmp_path / "bundles",
+        deps.ingest.planning,
+        bundle.requests,
+        bundle.engineers,
+        night_routes=SECOND_CREW,
+        level=EXACT_TRAVEL_LEVEL,
+    )
+    dataset_id = upload(client, "bundle.json", bundle.model_dump_json().encode())
+    base = f"/api/datasets/{dataset_id}"
+    assert client.get(f"{base}/state").json()["precomputed"] is None
+
+    edge = client.post(f"{base}/plan", json={"workload_level": EXACT_TRAVEL_LEVEL}).json()
+    assert edge["precomputed"] == {"search_minutes": 120.0, "computed_at": COMPUTED_AT}
+    assert {r["engineer_id"]: [v["request_id"] for v in r["visits"]] for r in edge["plan"]["routes"]} == {
+        "E1": [],
+        **night.routes,
+    }
+    # Та же нагрузка без обеда — другая пара, её файла нет.
+    no_lunch = client.post(f"{base}/plan", json={"workload_level": EXACT_TRAVEL_LEVEL, "lunch": False}).json()
+    assert no_lunch["precomputed"] is None
+
+
 def test_scenario_day_takes_the_night_plan_of_its_region(api, tmp_path):
     """Подготовленный регион идёт тем же путём, что и загрузка файла, поэтому и ночной план подхватывает так же."""
     bundle = prepared_bundle("east", "Восток")
@@ -547,9 +673,7 @@ def test_raw_csv_of_a_prepared_region_has_the_fingerprint_of_its_bundle(api, tmp
         problem_fingerprint(deps.registry.get(dataset_id).session.problem, weights)
         for dataset_id in (from_bundle, from_csv)
     ]
-    assert (
-        prints[0] == prints[1] == load_night_plan(night_plan_path(tmp_path / "bundles", REGION)).fingerprint
-    )
+    assert prints[0] == prints[1] == load_night_plan(night_file(tmp_path / "bundles")).fingerprint
     assert client.get(f"/api/datasets/{from_csv}").json()["report"]["source"] == "beeline_csv"
     assert client.get(f"/api/datasets/{from_csv}/state").json()["precomputed"] is not None
 
@@ -586,7 +710,7 @@ def test_script_round_trips_on_a_tiny_day(tmp_path, capsys):
     assert "caffeinate -i" in out and "записан:" in out and "поиск 1 с на регион" in out
     # Точка сравнения — поиск, как у сервиса при загрузке, на той же задаче; report.md подписан как другой расчёт.
     assert "живой поиск 1 с, как у сервиса:" in out and "report.md (30 с, без 2ГИС):" in out
-    night = load_night_plan(night_plan_path(tmp_path / "bundles", REGION))
+    night = load_night_plan(night_file(tmp_path / "bundles"))
     assert (night.region, night.time_limit_s, night.workers, night.workload_level, night.lunch_enabled) == (
         REGION,
         1,
@@ -609,9 +733,75 @@ def test_script_round_trips_on_a_tiny_day(tmp_path, capsys):
     assert run_cli(tmp_path) == 0
     out = capsys.readouterr().out
     assert "маршруты допустимы" in out and "старт от прежнего ночного плана" in out
-    again = load_night_plan(night_plan_path(tmp_path / "bundles", REGION))
+    again = load_night_plan(night_file(tmp_path / "bundles"))
     assert again.fingerprint == night.fingerprint and again.cost <= night.cost
     assert again.search_s > night.search_s
+
+
+REPORT = (
+    "| План | Инженеров | Км | Назначено | Не назначено | Нарушений |\n"
+    "|---|---|---|---|---|---|\n"
+    "| Базовый (FCFS по ТЗ) | 12 | 359.57 | 49 | 17 | 0 |\n"
+    "| Оптимизированный (OR-Tools) | 8 | 269.54 | 66 | 0 | 0 |\n"
+)
+
+
+def test_script_computes_the_night_plan_of_another_pair_into_its_own_file(tmp_path, capsys):
+    bundle = save_region(tmp_path)
+    (tmp_path / "bundles" / REGION / "report.md").write_text(REPORT, encoding="utf-8")
+
+    assert run_cli(tmp_path, "--level", "2") == 0
+
+    out = capsys.readouterr().out
+    assert "нагрузка «На пределе» с обедом; регионов: 1" in out
+    assert f"Тест ({REGION}), нагрузка «На пределе» с обедом: матрица" in out
+    # report.md посчитан при сборке бандла для «Обычного дня» с обедом: для этой пары это другая задача.
+    assert "там нагрузка «Обычный день» с обедом" in out
+    night = load_night_plan(night_file(tmp_path / "bundles", 2))
+    assert (night.workload_level, night.lunch_enabled) == (2, True)
+    assert not night_file(tmp_path / "bundles").exists()
+    # Задача, веса и запас на дорогу — как у сервиса для этой пары: он берёт план без поиска. Для «Обычного дня»
+    # файла нет, и его день ищется при загрузке.
+    settings = Settings.from_env({"DATA_DIR": str(tmp_path)})
+    ctx = planning_context(settings, None, None, time_limit_s=1, time_limit_lunch_s=1)
+    args = ("d_night", REGION, OFFICE, bundle.requests, bundle.engineers, None, ctx)
+    session = start_session(*args, workload_level=2)
+    assert session.precomputed == night.precomputed() and plan_routes(session.plan) == night.routes
+    assert start_session(*args).precomputed is None
+
+    # Второй запуск той же пары читает её файл и продолжает её поиск.
+    assert run_cli(tmp_path, "--level", "2") == 0
+    assert "старт от прежнего ночного плана" in capsys.readouterr().out
+    again = load_night_plan(night_file(tmp_path / "bundles", 2))
+    assert again.fingerprint == night.fingerprint and again.search_s > night.search_s
+
+
+def test_script_without_lunch_searches_like_the_service_day_without_lunch(tmp_path, capsys):
+    bundle = save_region(tmp_path)
+    argv = ["--region", REGION, "--minutes", "0.02", *ONE_PROCESS, "--osrm", "off", "--no-lunch"]
+    argv += ["--out", str(tmp_path / "bundles")]
+    # Лимиты разные: по строке живого поиска видно, что он взял лимит дня без обеда, как сервис.
+    env = {
+        "DATA_DIR": str(tmp_path),
+        "SOLVER_WORKERS": "1",
+        "SOLVER_TIME_LIMIT_S": "1",
+        "SOLVER_TIME_LIMIT_LUNCH_S": "3",
+    }
+
+    assert cli.main(argv, env=env) == 0
+
+    out = capsys.readouterr().out
+    assert "нагрузка «Обычный день» без обеда" in out and "живой поиск 1 с, как у сервиса:" in out
+    night = load_night_plan(night_file(tmp_path / "bundles", lunch=False))
+    assert (night.workload_level, night.lunch_enabled) == (DEFAULT_WORKLOAD_LEVEL, False)
+    assert night_file(tmp_path / "bundles", lunch=False).name == "night_plan_level1_nolunch.json"
+    assert not night_file(tmp_path / "bundles").exists()
+    settings = Settings.from_env({"DATA_DIR": str(tmp_path)})
+    ctx = planning_context(settings, None, None, time_limit_s=1, time_limit_lunch_s=1)
+    session = start_session(
+        "d_night", REGION, OFFICE, bundle.requests, bundle.engineers, None, ctx, lunch_enabled=False
+    )
+    assert session.precomputed == night.precomputed() and plan_routes(session.plan) == night.routes
 
 
 def test_script_keeps_a_cheaper_night_plan_with_the_same_fingerprint(tmp_path, capsys, monkeypatch):
@@ -627,7 +817,7 @@ def test_script_keeps_a_cheaper_night_plan_with_the_same_fingerprint(tmp_path, c
     assert run_cli(tmp_path) == 0
 
     assert "оставлен прежний: он дешевле по цели" in capsys.readouterr().out
-    assert load_night_plan(night_plan_path(tmp_path / "bundles", REGION)) == kept
+    assert load_night_plan(night_file(tmp_path / "bundles")) == kept
 
 
 def test_script_starts_the_long_search_from_the_live_search_of_the_same_task(tmp_path, capsys, monkeypatch):
@@ -650,7 +840,7 @@ def test_script_starts_the_long_search_from_the_live_search_of_the_same_task(tmp
     assert "старт от плана живого поиска" in capsys.readouterr().out
     ctx = planning_context(Settings.from_env({"DATA_DIR": str(tmp_path)}), None, None)
     problem = day_problem(bundle.requests, bundle.engineers, ctx, DEFAULT_WORKLOAD_LEVEL, True)
-    night = load_night_plan(night_plan_path(tmp_path / "bundles", REGION))
+    night = load_night_plan(night_file(tmp_path / "bundles"))
     assert night.cost <= plan_cost(problem, live_plan, workload_weights(DEFAULT_WORKLOAD_LEVEL))
 
 
@@ -672,7 +862,7 @@ def test_script_records_how_long_the_search_really_ran_and_carries_it_over(tmp_p
     out = capsys.readouterr().out
     assert "поиск шёл 1 с из 1 мин — похоже, Mac засыпал" in out
     # Короткий запуск от двухчасового плана той же задачи продолжает его: пометка остаётся «2 ч», а не «1 с».
-    night = load_night_plan(night_plan_path(tmp_path / "bundles", REGION))
+    night = load_night_plan(night_file(tmp_path / "bundles"))
     assert (night.search_s, night.time_limit_s) == (7200, 60) and night.computed_at != COMPUTED_AT
     assert "поиск с прежним вместе: 2 ч" in out
 
@@ -703,15 +893,15 @@ def test_script_does_not_write_when_osrm_did_not_give_the_matrix(tmp_path, capsy
 
     out = capsys.readouterr().out
     assert "матрица haversine" in out and "не посчитан: OSRM не отдал матрицу" in out
-    assert load_night_plan(night_plan_path(tmp_path / "bundles", REGION)) == good
+    assert load_night_plan(night_file(tmp_path / "bundles")) == good
 
 
 def test_script_writes_into_another_directory(tmp_path, capsys):
     save_region(tmp_path)
     out = tmp_path / "night"
     assert run_cli(tmp_path, "--out", str(out)) == 0
-    assert load_night_plan(night_plan_path(out, REGION)) is not None
-    assert not night_plan_path(tmp_path / "bundles", REGION).exists()
+    assert load_night_plan(night_file(out)) is not None
+    assert not night_file(tmp_path / "bundles").exists()
     # Вне data/bundles файлы в образ не попадают: про пересборку образа не напоминаем.
     assert "docker compose up -d --build backend" not in capsys.readouterr().out
 
@@ -720,6 +910,8 @@ def test_script_refuses_an_unknown_region_and_a_silent_osrm(tmp_path, capsys):
     save_region(tmp_path)
     assert cli.main(["--region", "nowhere"], env={"DATA_DIR": str(tmp_path)}) == 2
     assert "Нет бандла региона «nowhere»" in capsys.readouterr().err
+    assert cli.main(["--region", REGION, "--level", "3"], env={"DATA_DIR": str(tmp_path)}) == 2
+    assert "--level: уровень нагрузки должен быть от 0 до 2" in capsys.readouterr().err
     assert (
         cli.main(["--region", REGION, "--osrm", "http://127.0.0.1:9"], env={"DATA_DIR": str(tmp_path)}) == 2
     )
@@ -727,7 +919,56 @@ def test_script_refuses_an_unknown_region_and_a_silent_osrm(tmp_path, capsys):
     # Без OSRM план по прямой не подойдёт сервису из docker-compose: в data/bundles он пишется только по --out.
     assert cli.main(["--region", REGION, "--osrm", "off"], env={"DATA_DIR": str(tmp_path)}) == 2
     assert "Укажите каталог явно: --out" in capsys.readouterr().err
-    assert not night_plan_path(tmp_path / "bundles", REGION).exists()
+    assert not night_file(tmp_path / "bundles").exists()
+
+
+def make_night(*overrides: str) -> subprocess.CompletedProcess[str]:
+    """make -n night из корня репозитория: команда, которую запустила бы цель, без самого расчёта.
+
+    Внешний make (make test) и окружение не подмешивают свои LEVEL, LUNCH и флаги: цель видит только overrides.
+    """
+    outer = {"MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL", "LEVEL", "LUNCH", "MINUTES", "REGION"}
+    env = {name: value for name, value in os.environ.items() if name not in outer}
+    return subprocess.run(
+        ["make", "-n", "-C", str(BACKEND_DIR.parent), "night", *overrides],
+        env=env,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+
+
+needs_make = pytest.mark.skipif(
+    shutil.which("make") is None or not (BACKEND_DIR.parent / "Makefile").exists(),
+    reason="нужны make и Makefile",
+)
+
+
+@needs_make
+@pytest.mark.parametrize(
+    ("overrides", "flags"),
+    [
+        ((), []),
+        (("LEVEL=2",), ["--level 2"]),
+        (("LEVEL=2", "LUNCH=0"), ["--level 2", "--no-lunch"]),
+        (("LUNCH=1",), []),
+    ],
+)
+def test_make_night_passes_the_pair_of_the_night_plan(overrides, flags):
+    run = make_night(*overrides)
+    assert run.returncode == 0, run.stderr
+    assert "python -m scripts.night_plan --region all --minutes 120" in run.stdout
+    assert [flag for flag in ("--level 2", "--no-lunch") if flag in run.stdout] == flags
+
+
+@needs_make
+@pytest.mark.parametrize("lunch", ["no", "false", "off", "нет"])
+def test_make_night_refuses_a_lunch_other_than_0_or_1(lunch):
+    # Иначе LUNCH=no молча считал бы пару с обедом, и ночь расчёта ушла бы не на тот файл.
+    run = make_night("LEVEL=2", f"LUNCH={lunch}")
+    assert run.returncode != 0
+    assert f"LUNCH={lunch}" in run.stderr and "0 — без обеда" in run.stderr
+    assert "scripts.night_plan" not in run.stdout
 
 
 def test_script_defaults_keep_every_process_on_its_own_core():
@@ -750,13 +991,7 @@ def test_script_defaults_keep_every_process_on_its_own_core():
 
 def test_script_reads_the_30_second_row_of_the_bundle_report(tmp_path):
     report = tmp_path / "report.md"
-    report.write_text(
-        "| План | Инженеров | Км | Назначено | Не назначено | Нарушений |\n"
-        "|---|---|---|---|---|---|\n"
-        "| Базовый (FCFS по ТЗ) | 12 | 359.57 | 49 | 17 | 0 |\n"
-        "| Оптимизированный (OR-Tools) | 8 | 269.54 | 66 | 0 | 0 |\n",
-        encoding="utf-8",
-    )
+    report.write_text(REPORT, encoding="utf-8")
     assert cli.report_metrics(report) == NightMetrics(
         engineers_used=8, total_km=269.54, assigned=66, unassigned=0
     )
@@ -765,7 +1000,7 @@ def test_script_reads_the_30_second_row_of_the_bundle_report(tmp_path):
 
 def test_night_plan_file_holds_only_ids_and_numbers(tmp_path):
     night = write_night_plan(tmp_path, context())
-    data = json.loads(night_plan_path(tmp_path, REGION).read_text(encoding="utf-8"))
+    data = json.loads(night_file(tmp_path).read_text(encoding="utf-8"))
     assert set(data) == {
         "fingerprint",
         "region",
@@ -779,4 +1014,4 @@ def test_night_plan_file_holds_only_ids_and_numbers(tmp_path):
         "metrics",
         "routes",
     }
-    assert load_night_plan(night_plan_path(tmp_path, REGION)) == night
+    assert load_night_plan(night_file(tmp_path)) == night

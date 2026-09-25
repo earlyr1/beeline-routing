@@ -6,14 +6,16 @@
 это ежедневный батч: ночью план каждого региона ищется столько, сколько не жалко, а утром сервис берёт готовый план,
 и события дня пересчитываются от почти оптимального плана за секунды.
 
-Файл лежит рядом с бандлом, data/bundles/<регион>/night_plan.json, и попадает в образ backend вместе с ним. В файле
-только номера и числа: отпечаток задачи, маршруты номерами заявок по бригадам и итоги. Минут 2ГИС в нём нет,
-отпечаток — хэш SHA-256, из которого их не восстановить.
+Файл лежит рядом с бандлом и попадает в образ backend вместе с ним. Файл свой у каждой пары (уровень нагрузки, обед):
+«Обычный день» с обедом — data/bundles/<регион>/night_plan.json, остальные — night_plan_level<N>.json с обедом
+и night_plan_level<N>_nolunch.json без обеда. В файле только номера и числа: отпечаток задачи, маршруты номерами
+заявок по бригадам и итоги. Минут 2ГИС в нём нет, отпечаток — хэш SHA-256, из которого их не восстановить.
 
-Сервис берёт ночной план, только если отпечаток задачи дня совпал с отпечатком из файла, а маршруты файла на задаче
-дня проходят проверку всех ограничений (build_plan и simulate_route) и назначают столько же заявок. Иначе план
-ищется при загрузке, как раньше; если маршруты файла на задаче дня всё ещё допустимы, поиск стартует от них и
-не может дать план хуже ночного по цели при текущих весах.
+Сервис читает только файл пары дня; файла нет — план ищется при загрузке с нуля. Ночной план из файла становится
+утренним, только если отпечаток задачи дня совпал с отпечатком из файла, а маршруты файла на задаче дня проходят
+проверку всех ограничений (build_plan и simulate_route) и назначают столько же заявок. Иначе план ищется при
+загрузке, как раньше; если маршруты файла на задаче дня всё ещё допустимы, поиск стартует от них и не может дать
+план хуже ночного по цели при текущих весах.
 """
 
 from __future__ import annotations
@@ -29,6 +31,13 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.domain.models import Engineer, Plan, Request
 from app.planning.models import PrecomputedPlan
+from app.planning.workload import (
+    DEFAULT_WORKLOAD_LEVEL,
+    WORKLOAD_LEVELS,
+    is_workload_level,
+    workload,
+    workload_weights,
+)
 from app.solvers.assemble import build_plan
 from app.solvers.eligibility import exclusion
 from app.solvers.ortools_solver import ObjectiveWeights, OrToolsSolver
@@ -36,6 +45,7 @@ from app.solvers.problem import Problem
 
 logger = logging.getLogger(__name__)
 
+# Файл пары по умолчанию, «Обычный день» с обедом: имя осталось с тех пор, когда ночной план был один на регион.
 NIGHT_PLAN_FILE = "night_plan.json"
 # Версия способа считать отпечаток: при его изменении старые файлы перестают совпадать, а не совпадают по ошибке.
 FINGERPRINT_VERSION = 1
@@ -52,7 +62,7 @@ class NightMetrics(BaseModel):
 
 
 class NightPlan(BaseModel):
-    """Содержимое night_plan.json. Только номера и числа: данных 2ГИС в файле нет."""
+    """Содержимое файла ночного плана. Только номера и числа: данных 2ГИС в файле нет."""
 
     fingerprint: str
     region: str
@@ -62,6 +72,7 @@ class NightPlan(BaseModel):
     search_s: int = Field(gt=0)
     workers: int = Field(ge=1)  # сколько процессов искали одновременно
     computed_at: str  # когда поиск закончился, ISO 8601 с часовым поясом
+    # Пара, для которой посчитан план: сервис сверяет её с парой дня и файл чужой пары не берёт.
     workload_level: int
     lunch_enabled: bool
     cost: int  # стоимость по цели OR-Tools при весах уровня нагрузки (app/solvers/portfolio.py, plan_cost)
@@ -73,9 +84,34 @@ class NightPlan(BaseModel):
         return PrecomputedPlan(search_minutes=self.search_s / 60, computed_at=self.computed_at)
 
 
-def night_plan_path(directory: Path, region: str) -> Path:
-    """Файл ночного плана региона: рядом с его бандлом."""
-    return Path(directory) / region / NIGHT_PLAN_FILE
+def night_plan_file(workload_level: int, lunch_enabled: bool) -> str:
+    """Имя файла ночного плана пары (уровень нагрузки, обед). Бросает ValueError, если уровня нет.
+
+    «Обычный день» с обедом — night_plan.json, как было, пока план был один на регион; остальные пары —
+    night_plan_level<N>.json с обедом и night_plan_level<N>_nolunch.json без обеда.
+    """
+    workload(workload_level)  # уровня нет — ValueError, а не файл с номером, которого не бывает
+    if workload_level == DEFAULT_WORKLOAD_LEVEL and lunch_enabled:
+        return NIGHT_PLAN_FILE
+    return f"night_plan_level{workload_level}{'' if lunch_enabled else '_nolunch'}.json"
+
+
+def night_plan_path(directory: Path, region: str, workload_level: int, lunch_enabled: bool) -> Path:
+    """Файл ночного плана региона для пары (уровень нагрузки, обед): рядом с его бандлом."""
+    return Path(directory) / region / night_plan_file(workload_level, lunch_enabled)
+
+
+def pair_text(workload_level: int, lunch_enabled: bool) -> str:
+    """Пара дня словами для лога и сводки скрипта, например: нагрузка «На пределе» с обедом.
+
+    Уровень, которого нет (его мог записать в файл кто угодно), выводится числом.
+    """
+    level = (
+        f"нагрузка «{WORKLOAD_LEVELS[workload_level].title}»"
+        if is_workload_level(workload_level)
+        else f"уровень нагрузки {workload_level}"
+    )
+    return f"{level} {'с обедом' if lunch_enabled else 'без обеда'}"
 
 
 def plain_region(region: str) -> bool:
@@ -256,29 +292,78 @@ class NightChoice:
     seed: Plan | None = None
 
 
+def default_pair_seed(
+    directory: Path, region: str, problem: Problem, workload_level: int, lunch_enabled: bool
+) -> Plan | None:
+    """Старт поиска для дня, у пары которого своего ночного файла нет: маршруты ночного плана «Обычного дня» с обедом.
+
+    Утренним планом они не становятся — у дня другие веса, запас на дорогу или обед, — но если на задаче дня они
+    допустимы, поиск стартует от них и не даёт план хуже их по цели. Для самой пары по умолчанию и при битом или
+    чужом файле старта нет.
+    """
+    if (workload_level, lunch_enabled) == (DEFAULT_WORKLOAD_LEVEL, True):
+        return None
+    try:
+        night = load_night_plan(night_plan_path(directory, region, DEFAULT_WORKLOAD_LEVEL, True))
+    except NightPlanUnreadable:
+        return None
+    if night is None or night.region != region:
+        return None
+    if (night.workload_level, night.lunch_enabled) != (DEFAULT_WORKLOAD_LEVEL, True):
+        return None
+    plan, _ = routes_plan(problem, night.routes)
+    return plan
+
+
 def choose_night_plan(
-    directory: Path | None, region: str, problem: Problem, weights: ObjectiveWeights
+    directory: Path | None, region: str, problem: Problem, workload_level: int, lunch_enabled: bool
 ) -> NightChoice:
     """Решает, брать ли ночной план региона утренним планом, и пишет в лог одну строку, почему да или нет.
 
-    directory — каталог ночных планов (<каталог>/<регион>/night_plan.json); None — ночные планы не подключены.
+    directory — каталог ночных планов (<каталог>/<регион>/night_plan*.json, файл по паре night_plan_path); None —
+    ночные планы не подключены. problem — задача дня, собранная для уровня нагрузки workload_level и обеда
+    lunch_enabled: ищется файл только этой пары, и план из файла другой пары не берётся, даже если его положили
+    под чужим именем.
     """
     if directory is None:
         return NightChoice()
     if not plain_region(region):
         logger.warning("Ночной план региона %r не ищется: регион не имя каталога", region)
         return NightChoice()
-    path = night_plan_path(directory, region)
+    weights = workload_weights(workload_level)
+    pair = pair_text(workload_level, lunch_enabled)
+    path = night_plan_path(directory, region, workload_level, lunch_enabled)
     try:
         night = load_night_plan(path)
     except NightPlanUnreadable as error:
         logger.warning("Ночной план региона %s не подошёл: файл %s не читается (%s)", region, path, error)
         return NightChoice()
     if night is None:
-        logger.info("Ночной план региона %s не подошёл: файла %s нет, план ищется при загрузке", region, path)
-        return NightChoice()
+        seed = default_pair_seed(directory, region, problem, workload_level, lunch_enabled)
+        logger.info(
+            "Ночной план региона %s не подошёл: для дня (%s) файла %s нет, %s",
+            region,
+            pair,
+            path,
+            "поиск стартует от маршрутов ночного плана «Обычного дня» с обедом"
+            if seed is not None
+            else "план ищется при загрузке",
+        )
+        return NightChoice(seed=seed)
     if night.region != region:
         logger.info("Ночной план региона %s не подошёл: файл посчитан для региона %s", region, night.region)
+        return NightChoice()
+    if (night.workload_level, night.lunch_enabled) != (workload_level, lunch_enabled):
+        # Отпечаток другой пары и так не совпал бы (в нём веса, запас на дорогу и обед), но и стартовать поиск
+        # от маршрутов файла, положенного под чужим именем, не нужно: такой файл — ошибка раскладки.
+        logger.warning(
+            "Ночной план региона %s не подошёл: файл %s посчитан для другого дня (%s), а день — %s; "
+            "план ищется с нуля",
+            region,
+            path,
+            pair_text(night.workload_level, night.lunch_enabled),
+            pair,
+        )
         return NightChoice()
     plan, problem_text = routes_plan(problem, night.routes)
     if problem_fingerprint(problem, weights) != night.fingerprint:
@@ -291,8 +376,8 @@ def choose_night_plan(
             )
             return NightChoice()
         logger.info(
-            "Ночной план региона %s не подошёл: отпечаток задачи другой (нагрузка, обед, заявки, бригады или "
-            "матрицы не те, что ночью); поиск стартует от его маршрутов",
+            "Ночной план региона %s не подошёл: отпечаток задачи другой (заявки, бригады или матрицы не те, что "
+            "ночью); поиск стартует от его маршрутов",
             region,
         )
         return NightChoice(seed=plan)
@@ -315,9 +400,10 @@ def choose_night_plan(
         return NightChoice(seed=plan)
     precomputed = night.precomputed()
     logger.info(
-        "Ночной план региона %s взят утренним планом без поиска: отпечаток задачи совпал, поиск %g мин, "
+        "Ночной план региона %s взят утренним планом без поиска: %s, отпечаток задачи совпал, поиск %g мин, "
         "посчитан %s",
         region,
+        pair,
         round(precomputed.search_minutes, 1),
         night.computed_at,
     )

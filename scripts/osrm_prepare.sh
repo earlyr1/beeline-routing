@@ -5,7 +5,7 @@ set -euo pipefail
 
 DATA_DIR="${DATA_DIR:-/data}"
 # Сначала скачивается готовый граф стенда жюри (infra/yc/publish_graph.sh): на нём посчитаны ночные планы
-# (data/bundles/<регион>/night_plan.json), и только с ним их отпечаток задачи совпадает. Граф, собранный заново
+# (data/bundles/<регион>/night_plan*.json), и только с ним их отпечаток задачи совпадает. Граф, собранный заново
 # даже из той же выгрузки OSM, расходится со стендом на метры в отдельных парах точек, и ночные планы не
 # подхватываются. GRAPH_URL= (пусто) — не скачивать, а собрать свой. Готовый граф — только для bbox по умолчанию.
 GRAPH_URL="${GRAPH_URL-https://storage.yandexcloud.net/beeline-routing-osrm/moscow-osrm-260922.tar.gz}"

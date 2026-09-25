@@ -60,8 +60,9 @@ class PlanningContext:
     # Сетка окон визита (SynthConfig.window_grid): по ней помощник кладёт на слот окно, которое он назвал, — окно
     # клиенту называют слотом. Пустая сетка — её никто не задал (планировщик в тестах, скрипты), и окно идёт как есть.
     window_grid: Sequence[TimeSlot] = ()
-    # Каталог ночных планов (app/planning/night.py): <каталог>/<регион>/night_plan.json, в сервисе это data/bundles.
-    # None — ночные планы не ищутся, утренний план всегда ищется при загрузке.
+    # Каталог ночных планов (app/planning/night.py): <каталог>/<регион>/night_plan*.json, файл на пару (уровень
+    # нагрузки, обед); в сервисе это data/bundles. None — ночные планы не ищутся, утренний план всегда ищется при
+    # загрузке.
     night_plan_dir: Path | None = None
 
     def day_time_limit_s(self, lunch_enabled: bool) -> int:
@@ -217,14 +218,15 @@ def start_session(
 ) -> PlanningSession:
     """План всего дня с нуля: предподсчёт загрузки и пересборка дня. Лимит OR-Tools зависит от обеда.
 
-    Сначала ищется ночной план региона (app/planning/night.py): если отпечаток задачи совпал и маршруты проходят
-    проверку, он и есть утренний план, и поиска нет. Иначе план ищется, как всегда; если маршруты ночного плана
-    на этой задаче допустимы, поиск стартует от них. FCFS считается в любом случае.
+    Сначала ищется ночной план региона для уровня нагрузки и обеда дня (app/planning/night.py): если отпечаток
+    задачи совпал и маршруты проходят проверку, он и есть утренний план, и поиска нет. Иначе план ищется, как
+    всегда; если маршруты ночного плана на этой задаче допустимы, поиск стартует от них. FCFS считается в любом
+    случае.
     """
     problem = day_problem(requests, engineers, ctx, workload_level, lunch_enabled)
     warn_stale_transit(region, problem, ctx.transit)
     try:
-        night = choose_night_plan(ctx.night_plan_dir, region, problem, workload_weights(workload_level))
+        night = choose_night_plan(ctx.night_plan_dir, region, problem, workload_level, lunch_enabled)
     except Exception:  # noqa: BLE001 - ночной план только ускоряет утро и не должен мешать загрузке дня
         logger.exception("Ночной план региона %r не проверен из-за ошибки: план ищется при загрузке", region)
         night = NightChoice()

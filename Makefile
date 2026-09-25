@@ -1,10 +1,14 @@
 # Частые команды проекта одним словом. `make` без цели печатает список.
 #
-# Переменные можно переопределять: make test UV=~/.local/bin/uv, make night MINUTES=10.
+# Переменные можно переопределять: make test UV=~/.local/bin/uv, make night MINUTES=10 LEVEL=2.
 UV ?= uv
 COMPOSE ?= docker compose
 REGION ?= all
 MINUTES ?= 120
+# Пара ночного плана: уровень нагрузки (пусто — по умолчанию скрипта, «Обычный день»)
+# и обед (1 — с обедом, 0 — без обеда).
+LEVEL ?=
+LUNCH ?= 1
 OSRM_URL ?= http://localhost:5050
 # Учётные данные базы дня: те же значения по умолчанию, что подставляет docker-compose.yml.
 POSTGRES_USER ?= routing
@@ -108,8 +112,11 @@ bundles:  ## пересобрать бандлы регионов (нужен OS
 # Долгий расчёт не должен прерываться сном машины: caffeinate есть только на macOS, на остальных системах пусто.
 KEEP_AWAKE := $(shell command -v caffeinate >/dev/null 2>&1 && echo caffeinate -i)
 
-night:  ## ночной поиск утренних планов: make night MINUTES=120 REGION=all
-	cd backend && $(KEEP_AWAKE) $(UV) run python -m scripts.night_plan --region $(REGION) --minutes $(MINUTES)
+# LUNCH, кроме 0 и 1, — ошибка до расчёта: иначе LUNCH=no молча потратил бы ночь на пару с обедом.
+night:  ## ночной поиск утренних планов: make night MINUTES=120 REGION=all [LEVEL=2] [LUNCH=0]
+	$(if $(filter-out 0 1,$(LUNCH)),$(error LUNCH=$(LUNCH): 0 — без обеда или 1 — с обедом))
+	cd backend && $(KEEP_AWAKE) $(UV) run python -m scripts.night_plan --region $(REGION) --minutes $(MINUTES) \
+		$(if $(LEVEL),--level $(LEVEL)) $(if $(filter 0,$(LUNCH)),--no-lunch)
 
 transit-dry:  ## сколько запросов демо-ключа 2ГИС стоит пересчёт матриц
 	cd backend && $(UV) run python -m scripts.transit_matrix --region $(REGION) --dry-run
