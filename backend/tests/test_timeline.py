@@ -5,10 +5,11 @@ import pytest
 from app.domain.enums import EventType, RequestStatus
 from app.domain.models import Event
 from app.ingest.geocode import GeoResult
-from app.planning.session import EventRejected, apply_event, geocode_entry
+from app.planning.facts import EventRejected, geocode_entry
+from app.planning.session import apply_event
 from app.planning.timeline import Timeline, check_known, entry_token, known_requests, replay_step
 from app.planning.variants import VARIANTS, assign_variant
-from tests.helpers import req
+from tests.helpers import eng, req
 from tests.planning_helpers import busy_engineer, context, new_session
 from tests.timeline_helpers import cancel, fcfs_solves, replay_all, restore
 
@@ -18,10 +19,11 @@ def solves(monkeypatch):
     return fcfs_solves(monkeypatch)
 
 
-def _added(timeline, *events):
+def _added(timeline, *events, variant=None):
+    """Ставит события на шкалу. variant — стратегия сразу, как у /events; без неё её решает правило окна выбора."""
     entries = []
     for event in events:
-        entry = timeline.create(event)
+        entry = timeline.create(event, variant=variant)
         timeline.insert(entry)
         entries.append(entry)
     return entries
@@ -63,7 +65,9 @@ def test_snapshot_after_entries_equals_sequential_application(solves):
 
     walk = replay_all(timeline, base, ctx)
 
-    sequential = apply_event(apply_event(base, cancel("R3", "11:00"), ctx), cancel("R2", "14:00"), ctx)
+    # Отмены без брошенных заявок: пересчёт ничего не спасает, и шкала применяет их с «Ничего не менять».
+    kept = apply_event(base, cancel("R3", "11:00"), ctx, variant="keep")
+    sequential = apply_event(kept, cancel("R2", "14:00"), ctx, variant="keep")
     assert walk.done == 2 and walk.session.plan == sequential.plan
     assert walk.session.requests == sequential.requests
     assert walk.session.events == sequential.events
@@ -123,15 +127,16 @@ def test_inserting_an_entry_that_is_rejected_keeps_later_steps(solves):
 
 
 def test_accepted_earlier_entry_invalidates_only_later_steps(solves):
+    """Стратегия выбрана сразу: у каждого события один шаг и одно решение."""
     ctx = context()
     base = new_session(ctx)
     timeline = Timeline()
-    _added(timeline, cancel("R3", "11:00"), cancel("R2", "14:00"))
+    _added(timeline, cancel("R3", "11:00"), cancel("R2", "14:00"), variant="optimal")
     before = replay_all(timeline, base, ctx)
     assert solves == ["00:00", "11:00", "14:00"]
     solves.clear()
 
-    _added(timeline, restore("R3", "12:00"))
+    _added(timeline, restore("R3", "12:00"), variant="optimal")
     walk = replay_all(timeline, base, ctx)
 
     assert solves == ["12:00", "14:00"]
@@ -144,17 +149,24 @@ def test_removing_an_entry_drops_its_steps_and_prune_keeps_the_current_path(solv
     ctx = context()
     base = new_session(ctx)
     timeline = Timeline()
-    _, restored, _ = _added(timeline, cancel("R3", "11:00"), restore("R3", "12:00"), cancel("R2", "14:00"))
+    events = (cancel("R3", "11:00"), restore("R3", "12:00"), cancel("R2", "14:00"))
+    _, restored, _ = _added(timeline, *events, variant="optimal")
     replay_all(timeline, base, ctx)
-    assert any(restored.id in {key[1], *key[0]} for key in timeline.steps)
+    assert any(restored.id in _entries(key) for key in timeline.steps)
 
     timeline.remove(restored.id)
 
-    assert not any(restored.id in {key[1], *key[0]} for key in timeline.steps)
+    assert not any(restored.id in _entries(key) for key in timeline.steps)
     walk = replay_all(timeline, base, ctx)
     assert walk.session.request("R3").status == RequestStatus.CANCELLED
     timeline.prune(walk)
     assert set(timeline.steps) == set(walk.keys) and len(walk.keys) == 2
+
+
+def _entries(key):
+    """Номера событий в ключе шага, без стратегий."""
+    prefix, token = key
+    return {item.split("@", 1)[0] for item in (*prefix, token)}
 
 
 def test_apply_event_takes_the_version_it_is_given():
@@ -298,7 +310,8 @@ def _variants_of(timeline, base, ctx, entry):
     return walk
 
 
-def test_walk_stops_at_a_breaking_event_without_a_choice_until_its_variants_are_known(solves):
+def test_walk_stops_at_an_event_that_needs_a_choice_once_its_variants_are_known(solves):
+    """Недоступность занятого инженера: «Ничего не менять» бросает его заявки, пересчёт отдаёт их второму."""
     ctx = context()
     base = new_session(ctx)
     busy = busy_engineer(base.plan)
@@ -334,18 +347,20 @@ def test_chosen_variant_is_applied_and_changing_it_replays_later_events_with_the
     assert chosen.variant == "keep" and timeline.find(breaking.id) is chosen
     walk = replay_all(timeline, base, ctx)
     assert walk.awaiting is None and walk.done == 2
+    # Отмена R1 в 16:00 отклонена (работа по R1 уже сделана): её шаг — шаг optimal, выбора он не требует.
     assert walk.keys[0] == ((), f"{breaking.id}@keep")
-    assert walk.keys[1] == ((f"{breaking.id}@keep",), later.id)
+    assert walk.keys[1] == ((f"{breaking.id}@keep",), f"{later.id}@optimal")
+    assert walk.steps[1].reason is not None
     kept_plan = walk.steps[0].session.plan
 
     timeline.set_variant(breaking.id, "optimal")
     walk = replay_all(timeline, base, ctx)
-    assert walk.keys[1] == ((f"{breaking.id}@optimal",), later.id)
+    assert walk.keys[1] == ((f"{breaking.id}@optimal",), f"{later.id}@optimal")
     assert walk.steps[0].session.plan != kept_plan
     assert timeline.set_variant("tl_404", "keep") is None
 
 
-def test_rejected_breaking_event_needs_no_choice(solves):
+def test_rejected_event_needs_no_choice(solves):
     ctx = context()
     base = new_session(ctx)
     timeline = Timeline()
@@ -418,3 +433,86 @@ def test_a_step_counted_again_keeps_the_plan_the_dispatcher_saw(solves):
     timeline.store(walk, entry, replay_step(session, entry, context(), 3))
 
     assert timeline.steps[(walk.prefix, entry_token(entry))] is shown
+
+
+# --- Правило окна выбора (правило Б): окно по результату, а не по типу события ----------------------------------
+
+
+def test_an_event_with_nothing_to_choose_goes_on_with_keep_and_is_marked_auto(solves):
+    """Отмена без брошенных заявок: пересчёт ничего не спасает, и шкала идёт дальше по «Ничего не менять»."""
+    ctx = context()
+    base = new_session(ctx)
+    timeline = Timeline()
+    (entry,) = _added(timeline, cancel("R3", "11:00"))
+
+    walk = replay_all(timeline, base, ctx)
+
+    assert (walk.awaiting, walk.keys) == (None, [((), f"{entry.id}@keep")])
+    assert walk.session.plan == apply_event(base, cancel("R3", "11:00"), ctx, variant="keep").plan
+    # Все три стратегии посчитаны: диспетчер сменит вариант без пересчёта.
+    assert {key[1] for key in timeline.steps} == {f"{entry.id}@{variant}" for variant in VARIANTS}
+    items, ready = timeline.view(base, 12 * 60)
+    assert ready and [(item.status, item.variant, item.auto) for item in items] == [("applied", "keep", True)]
+    # Решение известно и до того, как часы дошли до события.
+    early, _ = timeline.view(base, 10 * 60)
+    assert [(item.status, item.variant, item.auto) for item in early] == [("pending", "keep", True)]
+
+    # Тот же вариант, выбранный диспетчером, — уже его выбор: признака нет, шаг тот же, решатель не нужен.
+    solves.clear()
+    timeline.set_variant(entry.id, "keep")
+    walk = replay_all(timeline, base, ctx)
+    items, _ = timeline.view(base, 12 * 60)
+    assert [(item.variant, item.auto) for item in items] == [("keep", False)] and solves == []
+
+
+def test_an_urgent_request_waits_for_a_choice_because_keep_leaves_it_without_an_engineer(solves):
+    ctx = context()
+    base = new_session(ctx)
+    timeline = Timeline()
+    urgent = Event(type=EventType.URGENT, time="12:00", request=req("U1", 0.5, 0.5, "13:00", "17:00"))
+    (entry,) = _added(timeline, urgent)
+
+    walk = replay_all(timeline, base, ctx)
+
+    assert (walk.awaiting, walk.done) == (entry, 0)
+    kept = timeline.step(walk, entry, "keep")
+    assert "U1" in {item.request_id for item in kept.session.plan.unassigned}
+    items, _ = timeline.view(base, 13 * 60)
+    assert [(item.status, item.variant, item.auto) for item in items] == [("awaiting", None, False)]
+
+
+def test_a_cancellation_asks_for_a_choice_when_the_freed_brigade_can_take_an_abandoned_request(solves):
+    """A и X в одно время, бригада одна: X утром без инженера. Клиент A отказался — бригада успевает к X.
+
+    «Ничего не менять» оставляет X без инженера, пересчёт отдаёт её освободившейся бригаде: окно выбора.
+    """
+    ctx = context()
+    requests = [req("A", 1, 0, "10:00", "11:00", duration=90), req("X", 1, 0, "10:00", "11:00", duration=90)]
+    base = new_session(ctx, requests=requests, engineers=[eng("E1")], lunch_enabled=False)
+    [abandoned] = [item.request_id for item in base.plan.unassigned]
+    served = "A" if abandoned == "X" else "X"
+    timeline = Timeline()
+    (entry,) = _added(timeline, cancel(served, "09:00"))
+
+    walk = replay_all(timeline, base, ctx)
+
+    assert walk.awaiting == entry
+    kept = timeline.step(walk, entry, "keep").session.plan
+    optimal = timeline.step(walk, entry, "optimal").session.plan
+    assert [item.request_id for item in kept.unassigned] == [abandoned] and optimal.unassigned == []
+
+
+def test_the_choice_is_decided_again_when_an_earlier_event_changes_the_day(solves):
+    """Отмена R3 в 14:00 сначала проходит по «Ничего не менять». Затем раньше по времени выбывает бригада R2 и
+    R3, и её заявки оставлены без инженера: теперь пересчёт на той же отмене спасает R2, и отмена ждёт выбора."""
+    ctx = context()
+    base = new_session(ctx)
+    busy = busy_engineer(base.plan)
+    timeline = Timeline()
+    (later,) = _added(timeline, cancel("R3", "14:00"))
+    assert replay_all(timeline, base, ctx).awaiting is None
+
+    _added(timeline, unavailable(busy, "11:00"), variant="keep")
+    walk = replay_all(timeline, base, ctx)
+
+    assert (walk.awaiting, walk.done) == (later, 1)

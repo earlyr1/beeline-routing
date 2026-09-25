@@ -1,42 +1,39 @@
-"""Варианты исправления плана на «ломающее» событие дня: стратегии, сравнение итогов и рекомендация.
+"""Варианты исправления плана на событие дня: стратегии, правило окна выбора, сравнение итогов и рекомендация.
 
-Спецификация: docs/superpowers/specs/2026-09-17-event-variants-design.md. «Ломающие» события — те, после которых
-есть разные способы спасти день: недоступность, смена транспорта, задержка инженера, срочная заявка и
-переназначение заявки диспетчером. Возврат и изменение заявки применяются одним планом, как раньше. Отмена
-плана не ломает и окна выбора не открывает, но стратегию ей диспетчер задаёт: см. takes_variant.
+Спецификации: docs/superpowers/specs/2026-09-17-event-variants-design.md (стратегии и сравнение) и
+docs/superpowers/specs/2026-09-24-unified-events-design.md (единый поток событий). Классов событий нет: у любого
+события считаются три стратегии, и окно выбора открывается по результату (needs_choice) — если «Ничего не менять»
+ломает больше, чем лучший из пересчётов. Иначе событие молча применяется с «Ничего не менять», а сменить вариант
+диспетчер может в любой момент.
 
-У срочной заявки к трём посчитанным заранее вариантам добавляется четвёртый — «отдать заявку названной
-бригаде» (стратегия «assign:<инженер>»). Его считают по запросу диспетчера и сравнивают с «Оптимально по дню»:
-так видно, чего стоит решение отдать заявку не туда, куда её кладёт оптимум.
+У события об одной заявке, которая после события остаётся в плане (app/planning/facts.assignable), к трём
+вариантам добавляется четвёртый — «отдать заявку названной бригаде» (стратегия «assign:<инженер>»). Его считают
+по запросу диспетчера и сравнивают с «Оптимально по дню»: так видно, чего стоит решение отдать заявку не туда,
+куда её кладёт оптимум.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from app.domain.enums import TRANSPORT_RU, EventType, ReasonCode, request_label
-from app.domain.models import Event, Plan, Unassigned, Visit, dispatch_order
+from app.domain.enums import SKILL_RU, TRANSPORT_RU, ReasonCode, request_label
+from app.domain.models import Event, Plan, Request, Unassigned, Visit, dispatch_order
+from app.planning.facts import subject_request_id
 from app.planning.models import BaseVariant, EventChoice, EventVariant, PlanDiff, VariantOption
 from app.solvers.assemble import build_plan
 from app.solvers.problem import EngineerState, Problem
 from app.solvers.simulate import simulate_route
 
 VARIANTS: tuple[BaseVariant, ...] = ("optimal", "stable", "keep")
-BREAKING_EVENTS = frozenset(
-    {
-        EventType.URGENT,
-        EventType.ENGINEER_UNAVAILABLE,
-        EventType.ENGINEER_TRANSPORT_CHANGED,
-        EventType.ENGINEER_DELAYED,
-        EventType.REQUEST_REASSIGNED,
-    }
-)
-# События, у которых apply_event слушает стратегию из запроса: «ломающие» и отмена заявки.
-VARIANT_EVENTS = BREAKING_EVENTS | {EventType.CANCEL}
+# Пересчёты, с которыми правило окна выбора сравнивает «Ничего не менять».
+REPLANS: tuple[BaseVariant, ...] = ("optimal", "stable")
 # «Минимум перестановок»: условные 500 км за перенос заявки к другому инженеру вместо 20. Снять заявку всё равно
 # дороже (drop_normal), поэтому заявки пострадавшей бригады уходят другим, а чужие маршруты почти не трогаются.
 STABLE_REASSIGNMENT = 500_000
+# Сколько очередей распределения у заявок (app/domain/models.dispatch_order): по ним правило окна выбора взвешивает
+# поломки важностью заявки.
+_QUEUES = 4
 VARIANT_TITLES: dict[EventVariant, str] = {
     "optimal": "Оптимально по дню",
     "stable": "Минимум перестановок",
@@ -45,48 +42,14 @@ VARIANT_TITLES: dict[EventVariant, str] = {
 VARIANT_SUMMARIES: dict[EventVariant, str] = {
     "optimal": "Пересчитать остаток дня целиком",
     "stable": "Чужие маршруты почти не трогаем",
-    "keep": "Оставить маршруты как есть",
-}
-# У переназначения заявки «keep» не оставляет всё как есть, а вставляет заявку в маршрут выбранной бригады.
-EVENT_VARIANT_TITLES: dict[EventType, dict[EventVariant, str]] = {
-    EventType.REQUEST_REASSIGNED: {"keep": "Вставить в маршрут"},
-}
-EVENT_VARIANT_SUMMARIES: dict[EventType, dict[EventVariant, str]] = {
-    EventType.REQUEST_REASSIGNED: {
-        "keep": "Бригада пропускает, на что не успевает, остальные маршруты как есть"
-    },
+    "keep": "Только само событие, остальные маршруты как есть",
 }
 # Стратегия «отдать заявку бригаде»: «assign:E07». Бригада называется в заголовке варианта.
 ASSIGN_PREFIX = "assign:"
 ASSIGN_SUMMARY = "Выбор диспетчера"
-KEEP_TEXT = "Вариант «Ничего не менять»: план не пересчитан, заявку никто не забрал."
-INSERT_TITLE = EVENT_VARIANT_TITLES[EventType.REQUEST_REASSIGNED]["keep"]
-INSERT_TEXT = f"Вариант «{INSERT_TITLE}»: план не пересчитан, заявку никто не забрал."
+KEEP_TITLE = VARIANT_TITLES["keep"]
+KEEP_TEXT = f"Вариант «{KEEP_TITLE}»: план не пересчитан, заявку никто не забрал."
 MAX_LINES = 3
-
-
-def is_choosable(event: Event) -> bool:
-    """Событие, на котором план останавливается и диспетчер выбирает вариант в окне."""
-    return event.type in BREAKING_EVENTS
-
-
-def takes_variant(event: Event) -> bool:
-    """Событие, у которого стратегия из запроса меняет план.
-
-    «Диспетчер может выбрать» и «часы встают на событии» — разные вещи. У отмены заявки часы не встают и окна
-    выбора нет: спасать нечего, клиент сам отказался. Но пересчитывать из-за него остаток дня или оставить
-    маршруты как есть, отдав бригаде окно, — решает диспетчер, и стратегия события это решение хранит.
-    """
-    return event.type in VARIANT_EVENTS
-
-
-def is_assignable(event: Event) -> bool:
-    """Событие, у которого диспетчер может отдать заявку выбранной бригаде.
-
-    Только срочная заявка: остальные «ломающие» события двигают целую пачку заявок, а переназначение само
-    называет бригаду.
-    """
-    return event.type == EventType.URGENT
 
 
 def assign_variant(engineer_id: str) -> EventVariant:
@@ -101,29 +64,18 @@ def assigned_engineer(variant: EventVariant | None) -> str | None:
     return variant[len(ASSIGN_PREFIX) :] or None
 
 
-def choice_request_id(event: Event) -> str | None:
-    """Заявка, о которой событие, если оно об одной заявке: срочная и переназначение. Иначе None."""
-    if event.type == EventType.URGENT:
-        return event.request.id if event.request is not None else None
-    if event.type == EventType.REQUEST_REASSIGNED:
-        return event.request_id
-    return None
-
-
-def variant_title(
-    variant: EventVariant, event_type: EventType, names: Mapping[str, str] | None = None
-) -> str:
+def variant_title(variant: EventVariant, names: Mapping[str, str] | None = None) -> str:
     """Название варианта для диспетчера; у «отдать бригаде» — имя бригады из names (иначе её номер)."""
     engineer_id = assigned_engineer(variant)
     if engineer_id is not None:
         return f"Отдать: {(names or {}).get(engineer_id, engineer_id)}"
-    return EVENT_VARIANT_TITLES.get(event_type, {}).get(variant, VARIANT_TITLES[variant])
+    return VARIANT_TITLES[variant]
 
 
-def variant_summary(variant: EventVariant, event_type: EventType) -> str:
+def variant_summary(variant: EventVariant) -> str:
     if assigned_engineer(variant) is not None:
         return ASSIGN_SUMMARY
-    return EVENT_VARIANT_SUMMARIES.get(event_type, {}).get(variant, VARIANT_SUMMARIES[variant])
+    return VARIANT_SUMMARIES[variant]
 
 
 def late_visits(plan: Plan) -> int:
@@ -131,41 +83,116 @@ def late_visits(plan: Plan) -> int:
     return sum(1 for route in plan.routes for visit in route.visits if visit.late_min > 0)
 
 
+def _dropped(plan: Plan) -> list[str]:
+    """Заявки без инженера, которых мог бы взять хоть какой-то вариант: перенесённые не в счёт.
+
+    Перенесённую заявку («Сегодня не приедем») решатель не получает ни в одном варианте: она без инженера везде
+    одинаково, и сравнивать варианты по ней нечего.
+    """
+    return [item.request_id for item in plan.unassigned if item.reason_code != ReasonCode.POSTPONED]
+
+
+def breakages(plan: Plan) -> int:
+    """Поломки плана для правила окна выбора: заявки без инженера и нарушения маршрутов.
+
+    Нарушения плана (app/solvers/simulate.py) — визит позже окна (по одному на визит), работа после конца смены,
+    обед, оборудование, навык, транспорт и плечо: то, что план обещает и не выполнит. Заявки, которые без инженера
+    во всех вариантах одинаково, и опоздание уже начатой работы на сравнение вариантов не влияют.
+    """
+    return len(_dropped(plan)) + plan.metrics.violations
+
+
+def _by_queue(plan: Plan, queues: Mapping[str, int]) -> tuple[int, ...]:
+    """Поломки плана по очередям распределения, от важной к остальным: сколько заявок каждой очереди осталось
+    без инженера или ждёт опоздавшего инженера.
+
+    queues — очередь заявки по номеру (dispatch_order): 0 — закреплённые диспетчером, 1 — аварии и срочные,
+    2 — подключения, 3 — остальные. Заявка, которой там нет, считается в последней очереди.
+    """
+    counts = [0] * _QUEUES
+    broken = _dropped(plan)
+    broken += [visit.request_id for route in plan.routes for visit in route.visits if visit.late_min > 0]
+    for request_id in broken:
+        counts[queues.get(request_id, _QUEUES - 1)] += 1
+    return tuple(counts)
+
+
+def needs_choice(plans: Mapping[BaseVariant, Plan], requests: Iterable[Request] = ()) -> bool:
+    """Нужно ли окно выбора (правило Б): «Ничего не менять» ломает больше, чем лучший из пересчётов.
+
+    plans — планы трёх базовых стратегий после события, requests — заявки дня после него. Поломки сравниваются
+    двумя счетами: числом (breakages) и по важности заявок (_by_queue — сначала закреплённые, затем аварии и
+    срочные, подключения, остальные). Окно нужно, если keep хуже лучшего пересчёта хоть по одному из них. Одного
+    числа мало: в заполненном дне keep оставляет без инженера новую срочную заявку, а пересчёт ради неё снимает
+    обычную — поломок поровну, но молча бросить срочную нельзя.
+
+    Если выбор не нужен, событие применяется с «Ничего не менять»: пересчёт чужих маршрутов ничего бы не спас,
+    а клиентам, которым уже назвали время, звонить незачем.
+    """
+    keep, replans = plans["keep"], [plans[variant] for variant in REPLANS]
+    if breakages(keep) > min(breakages(plan) for plan in replans):
+        return True
+    queues = {request.id: dispatch_order(request) for request in requests}
+    return _by_queue(keep, queues) > min(_by_queue(plan, queues) for plan in replans)
+
+
 def keep_plan(problem: Problem, unassigned_before: Collection[str] = ()) -> Plan:
     """«Ничего не менять»: прежние маршруты без решателя на задаче после события.
 
     Порядок заявок инженера — его несделанная часть плана до события (Problem.previous_order из pin_problem).
     Маршруты прогоняются обычной симуляцией: опоздания и переработки видны в визитах и нарушениях. Заявки
-    инженера, которому больше нельзя работать (недоступен или задержан до конца смены), и заявки, которым нужен
-    транспорт, которого у инженера теперь нет, остаются без инженера. Новая срочная заявка ни в чей маршрут
-    не попадает. unassigned_before — заявки без инженера в плане до события: их причину считает build_plan,
-    как обычно, а не пишет этот вариант.
+    инженера, которому больше нельзя работать (недоступен или задержан до конца смены), и заявки, которые инженер
+    больше не может взять (нужен навык или транспорт, которого у него нет), остаются без инженера. Новая срочная
+    заявка ни в чей маршрут не попадает. unassigned_before — заявки без инженера в плане до события: их причину
+    считает build_plan, как обычно, а не пишет этот вариант.
 
     Времена визитов тоже остаются прежними (Problem.previous_start): маршрут, из которого заявка ушла, не
     сжимается, бригада получает окно, а следующим клиентам не приходится звонить, что инженер приедет раньше.
     Опоздать визит по-прежнему может: задержку и объезд времена держать не мешают.
+
+    Единственное, что вариант делает сам, — общее правило закреплённых заявок: заявка, закреплённая за бригадой
+    (Request.fixed_engineer_id — переназначение диспетчера или «отдать бригаде»), которой нет в маршруте этой
+    бригады, встаёт в него (_insert). Бригада пропускает то, на что со вставкой не успевает; её маршрут меняется
+    нарочно, и времена в нём считаются заново, а остальные маршруты держат прежние.
     """
-    sequences, fixed = _previous_routes(problem, KEEP_TEXT)
-    return _routes_plan(problem, sequences, fixed, unassigned_before, KEEP_TEXT, problem.previous_start)
+    sequences, fixed = _previous_routes(problem)
+    before = set(unassigned_before)
+    rerouted: set[str] = set()
+    for request_id in problem.open_request_ids:
+        engineer_id = problem.request(request_id).fixed_engineer_id
+        if engineer_id is None or request_id in sequences.get(engineer_id, []):
+            continue
+        for sequence in sequences.values():
+            if request_id in sequence:
+                sequence.remove(request_id)
+        fixed.pop(request_id, None)
+        if _insert(problem, sequences, fixed, request_id, engineer_id):
+            rerouted.add(engineer_id)
+        else:
+            # Заявку не вставить никуда: её причину считает build_plan.
+            before.add(request_id)
+    changed = {request_id for engineer_id in rerouted for request_id in sequences[engineer_id]}
+    held = {rid: start for rid, start in problem.previous_start.items() if rid not in changed}
+    return _routes_plan(problem, sequences, fixed, before, held)
 
 
-def insert_plan(
-    problem: Problem, request_id: str, engineer_id: str, unassigned_before: Collection[str] = ()
-) -> Plan:
-    """«Вставить в маршрут» для переназначения заявки: без решателя, меняется только маршрут выбранной бригады.
+def _insert(
+    problem: Problem,
+    sequences: dict[str, list[str]],
+    fixed: dict[str, Unassigned],
+    request_id: str,
+    engineer_id: str,
+) -> bool:
+    """Вставляет закреплённую заявку request_id в маршрут бригады engineer_id; False — не вставить никуда.
 
-    Заявка request_id уходит из прежнего маршрута и встаёт в оставшийся маршрут бригады engineer_id. Для каждого
-    места вставки маршрут идёт по порядку «заявки до места, новая заявка, заявки после места». Бригада берёт новую
-    заявку и добавляет к ней свои по очереди распределения (dispatch_order): сначала закреплённые диспетчером,
-    затем аварии и срочные, затем подключения, затем ремонт и дозаказ, в каждой группе — по прежнему порядку.
-    Заявка берётся, если маршрут со всеми взятыми остаётся не хуже прежнего (_no_worse), иначе бригада её
+    Для каждого места вставки маршрут идёт по порядку «заявки до места, новая заявка, заявки после места». Бригада
+    берёт новую заявку и добавляет к ней свои по очереди распределения (dispatch_order): сначала закреплённые
+    диспетчером, затем аварии и срочные, затем подключения, затем ремонт и дозаказ, в каждой группе — по прежнему
+    порядку. Заявка берётся, если маршрут со всеми взятыми остаётся не хуже прежнего (_no_worse), иначе бригада её
     пропускает. Из мест берётся то, где пропущено меньше закреплённых заявок, затем аварий, затем подключений,
-    затем всех, затем короче маршрут; при равенстве — место раньше. Пропущенные заявки остаются без инженера. Маршруты
-    остальных бригад прежние, заявки без инженера до события сохраняют свою причину, как в keep_plan.
+    затем всех, затем короче маршрут; при равенстве — место раньше. Пропущенные заявки остаются без инженера
+    с причиной в fixed, sequences получает новый маршрут бригады.
     """
-    routes, fixed = _previous_routes(problem, INSERT_TEXT)
-    sequences = {eid: [rid for rid in sequence if rid != request_id] for eid, sequence in routes.items()}
-    fixed.pop(request_id, None)
     state = problem.state(engineer_id)
     route = sequences.get(engineer_id, [])
     fits = _no_worse(problem, state, route)
@@ -190,25 +217,23 @@ def insert_plan(
         )
         if best is None or key < best[0]:
             best = (key, kept, skipped)
-    if best is not None:
-        _, kept, skipped = best
-        sequences[engineer_id] = kept
-        label = request_label(request_id, problem.request(request_id).priority)
-        text = f"Вариант «{INSERT_TITLE}»: {state.engineer.name} пропускает заявку, чтобы успеть к заявке {label}."
-        # Заявку, на которую у бригады уже не осталось оборудования, она пропускает не из-за времени: взять
-        # единицу днём негде, и «чтобы успеть» про неё было бы неправдой.
-        no_equipment = state.equipment_left - problem.equipment_used(kept) <= 0
-        short = (
-            f"Вариант «{INSERT_TITLE}»: у {state.engineer.name} не осталось оборудования на эту заявку: "
-            f"утром бригада взяла {state.engineer.equipment_stock} ед."
-        )
-        for rid in skipped:
-            reason = short if no_equipment and problem.request(rid).needs_equipment else text
-            fixed[rid] = Unassigned(
-                request_id=rid, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=reason
-            )
-    # Если заявку не вставить никуда, её причину считает build_plan.
-    return _routes_plan(problem, sequences, fixed, [*unassigned_before, request_id], INSERT_TEXT)
+    if best is None:
+        return False
+    _, kept, skipped = best
+    sequences[engineer_id] = kept
+    label = request_label(request_id, problem.request(request_id).priority)
+    text = f"Вариант «{KEEP_TITLE}»: {state.engineer.name} пропускает заявку, чтобы успеть к заявке {label}."
+    # Заявку, на которую у бригады уже не осталось оборудования, она пропускает не из-за времени: взять
+    # единицу днём негде, и «чтобы успеть» про неё было бы неправдой.
+    no_equipment = state.equipment_left - problem.equipment_used(kept) <= 0
+    short = (
+        f"Вариант «{KEEP_TITLE}»: у {state.engineer.name} не осталось оборудования на эту заявку: "
+        f"утром бригада взяла {state.engineer.equipment_stock} ед."
+    )
+    for rid in skipped:
+        reason = short if no_equipment and problem.request(rid).needs_equipment else text
+        fixed[rid] = Unassigned(request_id=rid, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=reason)
+    return True
 
 
 def _no_worse(
@@ -277,11 +302,11 @@ def _long_legs(problem: Problem, state: EngineerState, visits: Sequence[Visit]) 
     return long_legs
 
 
-def _previous_routes(problem: Problem, text: str) -> tuple[dict[str, list[str]], dict[str, Unassigned]]:
-    """Прежние маршруты на задаче после события и заявки, которые из них выпадают, с причиной варианта text.
+def _previous_routes(problem: Problem) -> tuple[dict[str, list[str]], dict[str, Unassigned]]:
+    """Прежние маршруты на задаче после события и заявки, которые из них выпадают, с причиной «Ничего не менять».
 
-    Выпадают заявки инженера, которому больше нельзя работать, и заявки, которым нужен транспорт, которого у
-    инженера теперь нет.
+    Выпадают заявки инженера, которому больше нельзя работать, и заявки, которые он больше не может взять: нужен
+    навык или транспорт, которого у него нет (сменился транспорт инженера или изменили заявку).
     """
     open_ids = set(problem.open_request_ids)
     sequences: dict[str, list[str]] = {}
@@ -295,14 +320,20 @@ def _previous_routes(problem: Problem, text: str) -> tuple[dict[str, list[str]],
             request = problem.request(request_id)
             if state.available_from >= state.available_until:
                 fixed[request_id] = Unassigned(
-                    request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text
+                    request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=KEEP_TEXT
+                )
+            elif request.skill not in engineer.skills:
+                fixed[request_id] = Unassigned(
+                    request_id=request_id,
+                    reason_code=ReasonCode.NO_SKILL,
+                    reason_text=f"{KEEP_TEXT} У {engineer.name} нет навыка «{SKILL_RU[request.skill]}».",
                 )
             elif request.transport_required is not None and request.transport_required != engineer.transport:
                 fixed[request_id] = Unassigned(
                     request_id=request_id,
                     reason_code=ReasonCode.NO_TRANSPORT,
                     reason_text=(
-                        f"{text} Нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
+                        f"{KEEP_TEXT} Нужен транспорт «{TRANSPORT_RU[request.transport_required]}», "
                         f"у {engineer.name} «{TRANSPORT_RU[engineer.transport]}»."
                     ),
                 )
@@ -317,20 +348,18 @@ def _routes_plan(
     sequences: dict[str, list[str]],
     fixed: dict[str, Unassigned],
     unassigned_before: Collection[str],
-    text: str,
-    not_before: Mapping[str, int] | None = None,
+    not_before: Mapping[str, int],
 ) -> Plan:
-    """План варианта без решателя. Открытые заявки вне маршрутов получают причину text, кроме бывших без инженера.
+    """План «Ничего не менять». Открытые заявки вне маршрутов получают причину варианта, кроме бывших без инженера.
 
-    not_before — времена визитов, которые вариант держит: их задаёт только «Ничего не менять». «Вставить
-    в маршрут» меняет маршрут бригады нарочно, и времена в нём считаются заново.
+    not_before — времена визитов, которые вариант держит: прежние, кроме маршрутов, куда встала закреплённая заявка.
     """
     before = set(unassigned_before)
     placed = {request_id for sequence in sequences.values() for request_id in sequence}
     for request_id in problem.open_request_ids:
         if request_id not in placed and request_id not in fixed and request_id not in before:
             fixed[request_id] = Unassigned(
-                request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=text
+                request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text=KEEP_TEXT
             )
     return build_plan(problem, "ortools", sequences, fixed_unassigned=fixed, not_before=not_before)
 
@@ -449,8 +478,14 @@ def build_choice(
     outcomes: Sequence[Outcome],
     current: EventVariant | None,
     names: Mapping[str, str] | None = None,
+    *,
+    assignable: bool = False,
 ) -> EventChoice:
     """Варианты в порядке VARIANTS с рекомендацией и строками «лучше / хуже»; names — имена бригад по номеру.
+
+    event — событие, как его сохранил план (с полями, которые заполняет backend: окно называет, что изменилось).
+    assignable — заявку события можно отдать выбранной бригаде (app/planning/facts.assignable по заявкам после
+    события).
 
     Базовые варианты сравниваются с рекомендованным, рекомендованный — со следующим по ключу рекомендации.
     Если у него те же числа, рекомендованный сравнивается с ближайшим вариантом, у которого они другие: сравнение
@@ -460,12 +495,12 @@ def build_choice(
     Вариант «отдать бригаде» идёт последним, в рекомендации не участвует и всегда сравнивается с «Оптимально
     по дню»: диспетчер видит цену своего решения относительно оптимума дня.
     """
-    request_id = choice_request_id(event)
+    request_id = subject_request_id(event)
     options = [
         VariantOption(
             variant=outcome.variant,
-            title=variant_title(outcome.variant, event.type, names),
-            summary=variant_summary(outcome.variant, event.type),
+            title=variant_title(outcome.variant, names),
+            summary=variant_summary(outcome.variant),
             metrics=outcome.plan.metrics,
             late=late_visits(outcome.plan),
             moved=len(outcome.diff.moved),
@@ -501,5 +536,5 @@ def build_choice(
         late_before=late_visits(before),
         variants=described,
         current=current,
-        assignable=is_assignable(event),
+        assignable=assignable,
     )

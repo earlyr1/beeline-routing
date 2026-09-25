@@ -80,13 +80,16 @@ def test_plan_timeline_cursor_and_calls_survive_a_restart(api, monkeypatch):
     assert client.put(f"{base}/timeline/events/tl_1/variant", json={"variant": "keep"}).status_code == 200
     background.run()
     assert client.post(f"{base}/cursor", json={"time": "12:30"}).status_code == 200
-    window = {"window": {"start": "14:00", "end": "16:00", "asap": False}, "version": 2}
-    assert client.put(f"{base}/agreed/R2", json=window).status_code == 200
+    window = {"start": "14:00", "end": "16:00", "asap": False}
+    call = {"type": "client_agreed", "time": "12:30", "request_id": "R2", "agreed_window": window}
+    # Стратегия сразу: проверяется, что звонок переживает перезапуск, а не нужно ли после него окно выбора.
+    response = client.post(f"{base}/timeline/events", params={"variant": "keep"}, json=call)
+    assert response.status_code == 200
     background.run()
     before = client.get(f"{base}/state").json()
     assert before["cursor"] == "12:30"
-    assert [item["variant"] for item in before["timeline"]] == ["keep"]
-    assert before["agreed"]["R2"]["window"] == {"start": "14:00", "end": "16:00", "asap": False}
+    assert [item["variant"] for item in before["timeline"]] == ["keep", "keep"]
+    assert before["agreed"]["R2"] == {"window": window, "entry_id": "tl_2"}
 
     after = restart(api, monkeypatch).get(f"{base}/state").json()
     assert after == before
@@ -198,7 +201,8 @@ def test_a_restart_that_caught_the_solver_keeps_clock_and_plan_together(api):
     dataset_id = base.rsplit("/", 1)[-1]
     with deps.state.cursor() as cur:
         cur.execute("DELETE FROM plans WHERE dataset_id = %s AND token LIKE 'tl_2%%'", (dataset_id,))
-        assert cur.rowcount == 1
+        # Стратегию отмены диспетчер не выбирал: в базе шаги всех трёх, и пропадают все.
+        assert cur.rowcount == 3
 
     fresh, _, fresh_background = reopen(api)
     caught = fresh.get(f"{base}/state").json()

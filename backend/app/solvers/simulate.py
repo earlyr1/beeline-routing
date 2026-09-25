@@ -10,6 +10,9 @@ from app.domain.models import LUNCH_MIN, Lunch, Visit
 from app.domain.timeutil import fmt_hhmm
 from app.solvers.problem import EngineerState, Problem
 
+# Заявка вне работы дня в маршруте — нарушение: ни решатель, ни «Ничего не менять» таких не получают.
+_INACTIVE_TEXT = {RequestStatus.CANCELLED: "заявка отменена", RequestStatus.POSTPONED: "заявка перенесена"}
+
 
 @dataclass
 class SimResult:
@@ -121,7 +124,7 @@ def _drive(
         late = max(0, start - request.window_end)
         end = start + request.duration_min
         if request.status != RequestStatus.ACTIVE:
-            violations.append(f"{request_id}: заявка отменена")
+            violations.append(f"{request_id}: {_INACTIVE_TEXT[request.status]}")
         if request.skill not in engineer.skills:
             violations.append(f"{request_id}: у {engineer.name} нет навыка «{SKILL_RU[request.skill]}»")
         if request.transport_required is not None and request.transport_required != engineer.transport:

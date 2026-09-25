@@ -1,11 +1,11 @@
-"""Варианты исправления плана на «ломающее» событие: стратегии, сравнение и тексты. Без шкалы и API."""
+"""Варианты исправления плана на событие: стратегии, правило окна выбора, сравнение и тексты. Без шкалы и API."""
 
 from dataclasses import replace
 
 import pytest
 
-from app.domain.enums import EventType, ReasonCode, Skill, Transport
-from app.domain.models import Event, Metrics, Plan, Route, Visit
+from app.domain.enums import EventType, Priority, ReasonCode, RequestTier, Skill, Transport
+from app.domain.models import Event, Metrics, Plan, Route, Unassigned, Visit
 from app.planning import session as session_module
 from app.planning.models import DiffMove, PlanDiff
 from app.planning.session import apply_event
@@ -15,12 +15,11 @@ from app.planning.variants import (
     VARIANTS,
     Outcome,
     assign_variant,
+    breakages,
     build_choice,
-    insert_plan,
-    is_choosable,
     keep_plan,
     late_visits,
-    takes_variant,
+    needs_choice,
     variant_summary,
     variant_title,
 )
@@ -51,18 +50,110 @@ def _upcoming(plan, engineer_id, minute):
     return [visit.request_id for visit in route.visits if visit.start >= minute]
 
 
-def test_only_events_that_break_the_plan_are_choosable():
-    choosable = {
-        EventType.URGENT,
-        EventType.ENGINEER_UNAVAILABLE,
-        EventType.ENGINEER_TRANSPORT_CHANGED,
-        EventType.ENGINEER_DELAYED,
-        EventType.REQUEST_REASSIGNED,
-    }
-    for event_type in EventType:
-        event = Event.model_construct(type=event_type, time=780)
-        assert is_choosable(event) is (event_type in choosable)
+def _broken(unassigned=0, violations=0):
+    """План без маршрутов: unassigned заявок без инженера и violations нарушений."""
+    return Plan(
+        solver="ortools",
+        routes=[],
+        unassigned=[
+            Unassigned(request_id=f"N{k}", reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text="")
+            for k in range(unassigned)
+        ],
+        metrics=Metrics(
+            engineers_used=0,
+            km_per_engineer={},
+            total_km=0,
+            assigned=0,
+            unassigned=unassigned,
+            violations=violations,
+        ),
+        violations=[f"V{k}" for k in range(violations)],
+    )
+
+
+def test_breakages_count_requests_without_an_engineer_and_route_violations():
+    assert (breakages(_broken()), breakages(_broken(2)), breakages(_broken(2, 3))) == (0, 2, 5)
+
+
+def test_choice_is_needed_only_when_keep_breaks_more_than_the_best_replan():
+    """Правило Б: окно открывается по результату, а не по типу события."""
+    assert needs_choice({"keep": _broken(1), "optimal": _broken(0), "stable": _broken(1)}) is True
+    assert needs_choice({"keep": _broken(1), "optimal": _broken(2), "stable": _broken(0)}) is True
+    # Опоздание и переработка — тоже поломки: «Ничего не менять» с опозданием хуже пересчёта без него.
+    assert needs_choice({"keep": _broken(violations=1), "optimal": _broken(), "stable": _broken()}) is True
+    # Поровну с лучшим пересчётом — выбирать не из чего: событие применяется с «Ничего не менять».
+    assert needs_choice({"keep": _broken(1), "optimal": _broken(1), "stable": _broken(2)}) is False
+    assert needs_choice({"keep": _broken(), "optimal": _broken(), "stable": _broken()}) is False
+    # Пересчёты, которые ломают больше, окна тоже не открывают.
+    assert needs_choice({"keep": _broken(1), "optimal": _broken(3), "stable": _broken(2)}) is False
     assert VARIANTS == ("optimal", "stable", "keep")
+
+
+def _broken_for(unassigned=(), late=()):
+    """План, в котором без инженера заявки unassigned, а к заявкам late инженер опаздывает (по нарушению на визит)."""
+    visits = [
+        Visit(request_id=request_id, arrival=600, start=600, end=630, leg_km=1, leg_min=5, late_min=10)
+        for request_id in late
+    ]
+    return _broken(violations=len(late)).model_copy(
+        update={
+            "routes": [Route(engineer_id="E1", visits=visits, total_km=0, total_travel_min=0)],
+            "unassigned": [
+                Unassigned(request_id=request_id, reason_code=ReasonCode.NO_FREE_ENGINEER, reason_text="")
+                for request_id in unassigned
+            ],
+        }
+    )
+
+
+def test_choice_weighs_breakages_by_the_importance_of_the_request():
+    """Поломок поровну, но «Ничего не менять» бросает срочную заявку, а пересчёт ради неё снимает обычную: окно
+    нужно. Важность — очередь распределения заявки (dispatch_order): закреплённые, аварии и срочные, подключения,
+    остальные."""
+    requests = [
+        req("U1", 0, 0, "12:00", "13:00", priority=Priority.URGENT),
+        req("C1", 0, 0, "12:00", "13:00", tier=RequestTier.CONNECTION),
+        req("P1", 0, 0, "12:00", "13:00").model_copy(update={"fixed_engineer_id": "E1"}),
+        *(req(f"N{k}", 0, 0, "12:00", "13:00") for k in range(3)),
+    ]
+
+    def choice_needed(keep, replan):
+        return needs_choice({"keep": keep, "optimal": replan, "stable": replan}, requests)
+
+    assert choice_needed(_broken_for(["U1", "N0"]), _broken_for(["N0", "N1"])) is True
+    # Опоздание — поломка той же очереди, что и заявка: keep опаздывает к срочной, пересчёт — к обычной.
+    assert choice_needed(_broken_for(late=["U1"]), _broken_for(late=["N0"])) is True
+    # Ради срочной пересчёт снимает даже две обычные: и это повод спросить диспетчера, хоть поломок у keep меньше.
+    assert choice_needed(_broken_for(["U1"]), _broken_for(["N0", "N1"])) is True
+    assert choice_needed(_broken_for(["C1"]), _broken_for(["N0"])) is True
+    # Закреплённая диспетчером заявка важнее срочной: пересчёт, который её бросает, keep не лучше.
+    assert choice_needed(_broken_for(["U1"]), _broken_for(["P1"])) is False
+    # Те же поломки той же важности — выбирать не из чего.
+    assert choice_needed(_broken_for(["N2"]), _broken_for(["N0"])) is False
+    # Без заявок важность не видна: заявка без очереди считается в последней, остаётся одно число поломок.
+    assert (
+        needs_choice({"keep": _broken_for(["U1"]), "optimal": _broken_for(["N0"]), "stable": _broken(1)})
+        is False
+    )
+
+
+def test_an_urgent_request_in_a_full_day_asks_for_a_choice_though_the_replan_drops_another_one():
+    """Настоящий OR-Tools. Бригада одна, день заполнен: утром две заявки без инженера. Срочная заявка в 09:00:
+    «Ничего не менять» оставляет её без инженера, пересчёт ради неё снимает обычную — поломок поровну, но
+    молча бросить срочную нельзя."""
+    ctx = context()
+    requests = [req(f"R{k}", 1, 0, "09:00", "18:00", duration=110) for k in range(6)]
+    base = new_session(ctx, requests=requests, engineers=[eng("E1")], lunch_enabled=False)
+    urgent = req("U1", 1, 0, "09:00", "18:00", duration=110).model_copy(update={"asap": True})
+    event = Event(type=EventType.URGENT, time="09:00", request=urgent)
+
+    after = {variant: apply_event(base, event, ctx, variant=variant) for variant in VARIANTS}
+    plans = {variant: session.plan for variant, session in after.items()}
+
+    assert "U1" in {item.request_id for item in plans["keep"].unassigned}
+    assert "U1" not in {item.request_id for item in plans["optimal"].unassigned}
+    assert breakages(plans["keep"]) == breakages(plans["optimal"])
+    assert needs_choice(plans, after["keep"].requests) is True
 
 
 def test_keep_leaves_the_upcoming_visits_of_an_unavailable_engineer_without_an_engineer(solves):
@@ -216,14 +307,22 @@ def test_stable_moves_fewer_requests_to_other_brigades_than_optimal_with_or_tool
     assert stable.plan.metrics.total_km > optimal.plan.metrics.total_km
 
 
-def test_events_that_do_not_break_the_plan_ignore_the_variant(solves):
+def test_every_event_takes_the_strategy(solves):
+    """Классов событий нет: стратегия меняет план любого события, и возврата заявки тоже.
+
+    «Ничего не менять» возвращает заявку в день, но ни в чей маршрут её не ставит: это делает пересчёт.
+    """
     ctx = context()
     base = new_session(ctx)
     cancelled = apply_event(base, Event(type=EventType.CANCEL, time="09:30", request_id="R2"), ctx)
     restore = Event(type=EventType.RESTORE, time="10:30", request_id="R2")
-    assert (
-        apply_event(cancelled, restore, ctx, variant="keep").plan == apply_event(cancelled, restore, ctx).plan
-    )
+
+    kept = apply_event(cancelled, restore, ctx, variant="keep")
+    replanned = apply_event(cancelled, restore, ctx)
+
+    assert {item.request_id: item.reason_text for item in kept.plan.unassigned}["R2"] == KEEP_TEXT
+    assert routes(kept.plan) == routes(cancelled.plan)
+    assert any("R2" in visits for visits in routes(replanned.plan).values())
 
 
 def test_a_cancelled_request_can_leave_the_other_routes_untouched(solves):
@@ -246,8 +345,6 @@ def test_a_cancelled_request_can_leave_the_other_routes_untouched(solves):
     assert all(
         visit_times(kept.plan, other) == visit_times(base.plan, other) for other in before if other != owner
     )
-    # Стратегия у отмены есть, а окна выбора нет: часы на ней не останавливаются.
-    assert takes_variant(kept.events[-1].event) and not is_choosable(kept.events[-1].event)
     # Без решателя: «Ничего не менять» его не вызывает.
     assert solves == []
 
@@ -339,7 +436,7 @@ def test_choice_recommends_by_clients_then_brigades_then_moves_then_km_and_expla
     assert [option.variant for option in choice.variants] == ["optimal", "stable", "keep"]
     assert [option.recommended for option in choice.variants] == [True, False, False]
     assert by_variant["optimal"].title == "Оптимально по дню"
-    assert by_variant["keep"].summary == "Оставить маршруты как есть"
+    assert by_variant["keep"].summary == "Только само событие, остальные маршруты как есть"
     assert (by_variant["keep"].late, by_variant["optimal"].moved) == (1, 5)
     assert (choice.metrics_before, choice.late_before, choice.current) == (before.metrics, 0, None)
     # Рекомендованный сравнивается со следующим по ключу («Минимум перестановок»).
@@ -391,23 +488,39 @@ def test_choice_compares_the_recommended_variant_with_the_nearest_one_that_diffe
     assert by_variant["optimal"].cons == []
 
 
-def test_choice_for_a_reassignment_offers_to_insert_into_the_route():
+def test_choice_titles_are_the_same_for_every_event_and_the_brigade_card_is_up_to_the_caller():
     before = _plan(0, 5, 100.0)
     outcomes = [Outcome(variant, before, _diff(before, before, 1)) for variant in VARIANTS]
-    event = Event(type=EventType.REQUEST_REASSIGNED, time="12:00", request_id="R1", engineer_id="E2")
+    reassigned = Event(type=EventType.REQUEST_REASSIGNED, time="12:00", request_id="R1", engineer_id="E2")
+    edited = Event(
+        type=EventType.REQUEST_UPDATED,
+        time="12:00",
+        request_id="R1",
+        request=req("R1", 0, 0, "14:00", "16:00"),
+    )
+    unavailable = Event(type=EventType.ENGINEER_UNAVAILABLE, time="12:00", engineer_id="E1")
+    cancelled = Event(type=EventType.CANCEL, time="12:00", request_id="R1")
 
-    choice = build_choice("tl_3", event, before, outcomes, None)
-
-    assert [(option.title, option.summary) for option in choice.variants] == [
-        ("Оптимально по дню", "Пересчитать остаток дня целиком"),
-        ("Минимум перестановок", "Чужие маршруты почти не трогаем"),
-        ("Вставить в маршрут", "Бригада пропускает, на что не успевает, остальные маршруты как есть"),
+    choices = [
+        build_choice("tl_3", event, before, outcomes, None)
+        for event in (reassigned, edited, unavailable, cancelled)
     ]
-    assert variant_title("keep", EventType.URGENT) == "Ничего не менять"
-    assert variant_summary("keep", EventType.URGENT) == "Оставить маршруты как есть"
-    # Бригаду выбирают только у срочной заявки: переназначение её и так называет.
-    assert choice.assignable is False
-    assert all(option.request_engineer_id is None for option in choice.variants)
+
+    for choice in choices:
+        assert [(option.title, option.summary) for option in choice.variants] == [
+            ("Оптимально по дню", "Пересчитать остаток дня целиком"),
+            ("Минимум перестановок", "Чужие маршруты почти не трогаем"),
+            ("Ничего не менять", "Только само событие, остальные маршруты как есть"),
+        ]
+        # Заявки R1 в маршрутах этих планов нет.
+        assert all(option.request_engineer_id is None for option in choice.variants)
+    assert (variant_title("keep"), variant_summary("keep")) == (
+        "Ничего не менять",
+        "Только само событие, остальные маршруты как есть",
+    )
+    # Можно ли отдать заявку бригаде, решают заявки после события (facts.assignable): окно берёт это как есть.
+    assert [choice.assignable for choice in choices] == [False] * 4
+    assert build_choice("tl_3", edited, before, outcomes, None, assignable=True).assignable is True
 
 
 def test_choice_adds_giving_the_request_to_a_brigade_as_a_fourth_option_priced_against_the_optimum():
@@ -424,7 +537,7 @@ def test_choice_adds_giving_the_request_to_a_brigade_as_a_fourth_option_priced_a
     ]
     event = Event(type=EventType.URGENT, time="12:00", request=req("U1", 0, 0, "12:00", "13:00"))
 
-    choice = build_choice("tl_1", event, before, outcomes, None, {"E9": "Бригада Зверев"})
+    choice = build_choice("tl_1", event, before, outcomes, None, {"E9": "Бригада Зверев"}, assignable=True)
 
     assert choice.assignable is True
     assert [option.variant for option in choice.variants] == ["optimal", "stable", "keep", "assign:E9"]
@@ -438,12 +551,44 @@ def test_choice_adds_giving_the_request_to_a_brigade_as_a_fourth_option_priced_a
     assert (chosen.pros, chosen.cons) == ([], ["на 1 бригаду больше", "на 30,0 км больше"])
 
 
+def test_keep_puts_every_pinned_request_into_its_brigade_route_whatever_the_event():
+    """Общее правило закреплённых заявок: «Ничего не менять» не спрашивает, какое событие было.
+
+    B закреплена за E2, а стоит в маршруте E1; C закреплена за E1 и была без инженера. Обе встают к своим бригадам,
+    маршруты которых теперь меняются нарочно: времена в них считаются заново, а не держатся прежними.
+    """
+    requests = [
+        req("A", 1, 0, "10:00", "12:00"),
+        req("B", 2, 0, "12:00", "14:00").model_copy(update={"fixed_engineer_id": "E2"}),
+        req("C", 3, 0, "14:00", "16:00").model_copy(update={"fixed_engineer_id": "E1"}),
+    ]
+    problem = replace(
+        problem_of(requests, [eng("E1"), eng("E2")]),
+        previous_order={"E1": ["A", "B"], "E2": []},
+        previous_start={"A": 11 * 60, "B": 12 * 60},
+    )
+
+    plan = keep_plan(problem, unassigned_before=["C"])
+
+    assert (routes(plan), plan.unassigned, plan.violations) == ({"E1": ["A", "C"], "E2": ["B"]}, [], [])
+    # Маршрут E1 изменился вставкой: A больше не ждёт прежнего времени 11:00 и начинается с окном.
+    assert starts(plan, "E1")["A"] == 10 * 60
+
+
 # --- Оборудование в вариантах без решателя ---------------------------------------------------------------------
 
 
-def _equipment_day(stock):
-    """День из трёх заявок с оборудованием и бригады с запасом stock; прежний маршрут бригады — R0."""
-    requests = [req(f"R{k}", 1, k / 10, "10:00", "18:00", duration=30, equipment=True) for k in range(3)]
+def _equipment_day(stock, pinned=None):
+    """День из трёх заявок с оборудованием и бригады с запасом stock; прежний маршрут бригады — R0 и R1.
+
+    pinned — заявка, которую диспетчер закрепил за бригадой: «Ничего не менять» ставит её в маршрут бригады.
+    """
+    requests = [
+        req(f"R{k}", 1, k / 10, "10:00", "18:00", duration=30, equipment=True).model_copy(
+            update={"fixed_engineer_id": "E1" if f"R{k}" == pinned else None}
+        )
+        for k in range(3)
+    ]
     problem = problem_of(requests, [eng("E1", equipment_stock=stock)])
     return replace(problem, previous_order={"E1": ["R0", "R1"]}, previous_assignment={"R0": "E1", "R1": "E1"})
 
@@ -457,9 +602,11 @@ def test_keep_shows_that_the_previous_route_no_longer_has_equipment():
 
 
 def test_insert_skips_the_own_request_when_the_brigade_has_one_unit_left():
-    """«Вставить в маршрут»: бригада с одной единицей берёт переназначенную заявку и пропускает свою."""
-    problem = replace(_equipment_day(1), previous_order={"E1": ["R0"]}, previous_assignment={"R0": "E1"})
-    plan = insert_plan(problem, "R1", "E1")
+    """Закреплённая заявка встаёт в маршрут: бригада с одной единицей берёт её и пропускает свою."""
+    problem = replace(
+        _equipment_day(1, pinned="R1"), previous_order={"E1": ["R0"]}, previous_assignment={"R0": "E1"}
+    )
+    plan = keep_plan(problem)
     assert routes(plan)["E1"] == ["R1"]
     assert [item.request_id for item in plan.unassigned] == ["R0", "R2"]
     assert plan.metrics.violations == 0
@@ -471,12 +618,12 @@ def test_skipped_because_of_equipment_is_not_explained_by_time():
     Все окна до 18:00, маршрут без опозданий и переработок (plan.violations пуст), так что «чтобы успеть
     к заявке R2» было бы неправдой: единицы оборудования кончились, а днём их не берут.
     """
-    plan = insert_plan(_equipment_day(2), "R2", "E1")
+    plan = keep_plan(_equipment_day(2, pinned="R2"))
     assert (routes(plan)["E1"], plan.violations) == (["R0", "R2"], [])
     assert [(item.request_id, item.reason_text) for item in plan.unassigned] == [
         (
             "R1",
-            "Вариант «Вставить в маршрут»: у Инженер E1 не осталось оборудования на эту заявку: "
+            "Вариант «Ничего не менять»: у Инженер E1 не осталось оборудования на эту заявку: "
             "утром бригада взяла 2 ед.",
         )
     ]

@@ -12,14 +12,11 @@ import {
   getScenarios,
   getTimelineVariants,
   moveCursor,
-  setAgreedWindow,
   setTimelineVariant,
   startScenario as startScenarioRequest,
   uploadFile,
 } from '../api/client';
 import type {
-  AgreedWindow,
-  AgreedWindows,
   ClientConfig,
   DatasetStatus,
   EventChoice,
@@ -29,14 +26,14 @@ import type {
   PlanningState,
   ScenarioInfo,
   TimelineItem,
+  TimeWindow,
 } from '../api/types';
-import { agreedWindow } from '../lib/communications';
+import { agreedMarks, agreedWindow, agreementEvent, type AgreedMarks } from '../lib/communications';
 import { eventRequestId, type PickedPoint } from '../lib/events';
 import { fromMinutes, isValidTime, requestLabel, toMinutes } from '../lib/format';
 import { byId } from '../lib/planView';
 import { NO_TIMELINE_MOVE, newlyRejected, pausesAt, playEnd, rejectedNotice, timelineMove, type TimelineMove } from '../lib/timeBar';
 import { dayScale } from '../lib/timeline';
-import { CHOOSABLE_EVENTS } from '../lib/variants';
 import { DEFAULT_LUNCH_ENABLED, DEFAULT_WORKLOAD_LEVEL, clampWorkloadLevel, lunchEnabledOf } from '../lib/workload';
 
 export const POLL_INTERVAL_MS = 1000;
@@ -119,6 +116,8 @@ export interface AppData {
   resumeAfterChoice: { time: HHMM; play: boolean } | null;
   /** Событие, окно которого закрыли без выбора: ответы сервера его не открывают, пока часы не пойдут дальше. */
   dismissedChoice: string | null;
+  /** Окно «Итоги дня»: выпадает, когда часы дошли до конца шкалы, и открывается снова кнопкой у часов. */
+  daySummaryOpen: boolean;
   busy: boolean;
   error: string | null;
   pickMode: boolean;
@@ -145,10 +144,10 @@ export interface AppData {
   lunchEnabled: boolean;
   /**
    * Что уже согласовано с клиентом: номер заявки → окно, которое ему назвали (null — сказали, что сегодня
-   * не приедем). Приходит с планом от сервера, поэтому есть в любой вкладке, открывшей этот день, и переживает перезапуск сервиса.
-   * С ним вкладка «Коммуникации» сравнивает план; отметка снимается сама, когда окно снова уедет.
+   * не приедем), и событие «Коммуникация» на шкале. Приходит с планом от сервера, поверх — отметки, чьё событие
+   * ещё в пути. С ним вкладка «Коммуникации» сравнивает план.
    */
-  agreed: AgreedWindows;
+  agreed: AgreedMarks;
   /** Отмена заявки в уведомлении «Заявка … отменена»: на сервер она ещё не ушла. */
   pendingCancel: PendingCancel | null;
 }
@@ -164,6 +163,7 @@ export interface AppActions {
   /**
    * Поставить событие на шкалу дня. Сначала сервер переводит план на время часов, чтобы событие у часов применилось сразу.
    * variant — стратегия события сразу, без окна выбора: так отменяется заявка отказавшегося клиента.
+   * Без неё окно выбора откроется, только если сервер остановил время на событии (pending_choice в ответе).
    */
   applyEvent(event: PlanEvent, variant?: EventVariant): Promise<boolean>;
   /**
@@ -187,6 +187,9 @@ export interface AppActions {
   previewAssign(engineerId: string): Promise<void>;
   /** Закрыть окно без выбора: часы стоят на событии. */
   closeChoice(): void;
+  /** Открыть окно «Итоги дня». */
+  openDaySummary(): void;
+  closeDaySummary(): void;
   /** Вернуть план, открытый до перезагрузки страницы. */
   restoreSession(): Promise<void>;
   setPlanningState(state: PlanningState): void;
@@ -213,7 +216,10 @@ export interface AppActions {
   closeWhy(): void;
   setTab(tabId: string): void;
   setUnassignedOnly(value: boolean): void;
-  /** Отметить, что клиенту назвали окно заявки из текущего плана (или сказали, что сегодня не приедем). */
+  /**
+   * Отметить звонок: клиенту назвали окно по текущему плану (или сказали, что сегодня не приедем). Уходит событием
+   * «Коммуникация» на шкалу во время часов; снять отметку — удалить это событие (deleteTimelineEvent).
+   */
   markAgreed(requestId: string): Promise<void>;
   /** Выбрать нагрузку инженеров для следующего расчёта плана с нуля. */
   setWorkloadLevel(level: number): void;
@@ -267,6 +273,7 @@ export const initialAppData: AppData = {
   assignLoading: false,
   resumeAfterChoice: null,
   dismissedChoice: null,
+  daySummaryOpen: false,
   busy: false,
   error: null,
   pickMode: false,
@@ -361,13 +368,22 @@ const isCurrent = (value: number) => value === generation;
 let addressLookup = 0;
 
 /**
- * Отметки «Согласовано», чей запрос ещё не дошёл до сервера: номер заявки → названное окно.
- * Ответы других запросов приходят с прежним словарём отметок, и без этого набора отметка на секунду
- * пропадала бы с экрана. Запись уходит, как только сервер ответил — своим ответом или отказом.
+ * Отметки «Согласовано», чьё событие ещё не дошло до сервера: номер заявки → названное окно.
+ * Звонок проходит план, как любое событие, и ответы других запросов приходят без него: без этого набора
+ * строка на глазах у диспетчера прыгала бы обратно в список звонков. Запись уходит, как только сервер
+ * ответил — своим ответом или отказом.
  */
-const agreedInFlight = new Map<string, AgreedWindow>();
+const agreedInFlight = new Map<string, TimeWindow | null>();
 
-const inFlightAgreed = (): AgreedWindows => Object.fromEntries(agreedInFlight);
+/**
+ * Отметки на экране: договорённости и звонки, ждущие выбора варианта, из плана сервера, и поверх них — те, что
+ * ещё в пути (без события на шкале).
+ */
+function shownAgreed(state: PlanningState | null): AgreedMarks {
+  const marks = agreedMarks(state);
+  for (const [requestId, window] of agreedInFlight) marks[requestId] = { window, entry_id: null, applied: false };
+  return marks;
+}
 
 /** Запрос ждал очереди, а диспетчер уже открыл другой файл: такой запрос не отправляется. */
 class StaleSession extends Error {}
@@ -460,13 +476,13 @@ export const useAppStore = create<AppState>()((set, get) => {
       // Нагрузка и обед сессии на сервере: «Применить» и восстановленный план продолжают с ними.
       workloadLevel: clampWorkloadLevel(next.workload_level),
       lunchEnabled: lunchEnabledOf(next.lunch_enabled),
-      // Отметки звонков живут на сервере и приходят с планом: их ставит и очищает он. Поверх ответа
-      // остаются отметки, чей запрос ещё в очереди: ответ более раннего запроса о них ещё не знает,
-      // и без этого строка «Согласовано» на глазах у диспетчера прыгала бы обратно в список звонков.
-      agreed: { ...(next.agreed ?? {}), ...inFlightAgreed() },
+      // Отметки звонков — события шкалы: их приносит план сервера. Поверх ответа остаются отметки, чьё событие
+      // ещё в очереди: ответ более раннего запроса о них ещё не знает.
+      agreed: shownAgreed(next),
       ...(rejected.length > 0 ? { error: rejectedMessage(rejected, next) } : {}),
     });
-    // Время плана остановилось на «ломающем» событии без выбора: часы ждут на нём, открывается окно выбора.
+    // Время плана остановилось на событии, которое ждёт выбора (у любого типа события: «Ничего не менять» ломает план
+    // больше пересчёта): часы ждут на нём, открывается окно выбора.
     const pending = next.pending_choice ?? null;
     // Закрытое окно помнится, только пока план стоит на том же событии: часы ушли назад — дойдя до него, снова спросят.
     if (get().dismissedChoice !== (pending?.entry_id ?? null)) set({ dismissedChoice: null });
@@ -648,6 +664,7 @@ export const useAppStore = create<AppState>()((set, get) => {
       mapMenu: null,
       ...NO_ADDRESS_LOOKUP,
       ...NO_CHOICE,
+      daySummaryOpen: false,
       // Другой день: отмена заявки прежнего дня пропадает, не уходя на сервер (отсчёт снял resetAppSession).
       pendingCancel: null,
     });
@@ -729,17 +746,17 @@ export const useAppStore = create<AppState>()((set, get) => {
       const { datasetId, clock } = get();
       if (!datasetId) return false;
       const current = generation;
-      // «Ломающее» событие на время часов или раньше: сервер сразу попросит выбрать вариант, окно ждёт его ответа.
-      const asks = CHOOSABLE_EVENTS.has(event.type) && isValidTime(event.time) && isValidTime(clock) && toMinutes(event.time) <= toMinutes(clock);
-      set({ busy: true, error: null, ...(asks ? { choice: null, choiceLoading: true, assignLoading: false, dismissedChoice: null } : {}) });
+      // Нужно ли окно выбора, решает результат, а не тип события: заранее окно не открывается, его откроет ответ
+      // с pending_choice. Событие на время часов или раньше диспетчер ждёт применённым сейчас: если время стоит
+      // на событии, окно которого закрыли без выбора, ответ снова его покажет — иначе новое событие молча
+      // встало бы в очередь за ним.
+      const atClock = isValidTime(event.time) && isValidTime(clock) && toMinutes(event.time) <= toMinutes(clock);
+      set({ busy: true, error: null, ...(atClock ? { dismissedChoice: null } : {}) });
       try {
         // Диспетчер видит на часах их время и ждёт, что событие в это время применится сразу.
         await get().commitClock();
         const state = await enqueue(current, () => addTimelineEvent(datasetId, event, variant));
         if (!isCurrent(current)) return false;
-        // Окно «Считаем варианты…» закрыли до ответа: как закрытое без выбора, оно откроется на «Запустить» или сдвиге вперёд.
-        const { choice, choiceLoading } = get();
-        if (asks && !choiceLoading && choice === null) set({ dismissedChoice: state.pending_choice?.entry_id ?? null });
         get().setPlanningState(state);
         return true;
       } catch (error) {
@@ -747,8 +764,6 @@ export const useAppStore = create<AppState>()((set, get) => {
         return false;
       } finally {
         if (isCurrent(current)) set({ busy: false });
-        // Сервер не остановил время на событии (или отклонил его): окно, ждавшее варианты, закрывается.
-        if (isCurrent(current) && get().choiceLoading) set({ choiceLoading: false });
       }
     },
 
@@ -898,6 +913,14 @@ export const useAppStore = create<AppState>()((set, get) => {
       set({ dismissedChoice: get().choice?.entry_id ?? null, choice: null, choiceLoading: false, assignLoading: false, resumeAfterChoice: null });
     },
 
+    openDaySummary() {
+      set({ daySummaryOpen: true });
+    },
+
+    closeDaySummary() {
+      set({ daySummaryOpen: false });
+    },
+
     async restoreSession() {
       const datasetId = savedDatasetId();
       if (!datasetId || get().state) {
@@ -1043,29 +1066,23 @@ export const useAppStore = create<AppState>()((set, get) => {
     },
 
     async markAgreed(requestId) {
-      const { state, datasetId, agreed, config } = get();
+      const { state, datasetId, clock, config } = get();
       if (!state || !datasetId) return;
-      // Запоминаем окно, которое клиент теперь знает (в окно заявки план не попал — то, которое назвали вместо него):
-      // когда обещание снова разойдётся с планом, отметка сама перестанет совпадать. Названное окно — слот сетки.
-      // Какое именно окно назвали, считает вкладка: «клиенту называют слот» — правило разговора, а не модели.
+      // Окно, которое клиент теперь знает (в окно заявки план не попал — то, которое назвали вместо него), сервер
+      // сделает окном заявки. Названное окно — слот сетки: какое именно окно назвали, считает вкладка, потому что
+      // «клиенту называют слот» — правило разговора, а не модели.
       const window = agreedWindow(state, requestId, config?.window_grid ?? []);
       const current = generation;
-      // Строка уходит вниз сразу, не дожидаясь ответа: диспетчер уже положил трубку. Пока запрос в очереди,
-      // отметка держится и поверх ответов других запросов — они о ней ещё не знают.
+      // Строка уходит вниз сразу, не дожидаясь ответа: диспетчер уже положил трубку, а звонок ещё проходит план.
       agreedInFlight.set(requestId, window);
-      set({ agreed: { ...agreed, [requestId]: window } });
+      set({ agreed: shownAgreed(state) });
       try {
-        const next = await enqueue(current, () => setAgreedWindow(datasetId, requestId, window));
+        // Звонок — событие шкалы во время на часах: применяется и открывает окно выбора, как любое событие.
+        // Отказ сервера applyEvent показывает сам; строка тогда возвращается в список звонков.
+        await get().applyEvent(agreementEvent(requestId, window, clock));
+      } finally {
         agreedInFlight.delete(requestId);
-        if (isCurrent(current)) get().setPlanningState(next);
-      } catch (error) {
-        agreedInFlight.delete(requestId);
-        if (!isCurrent(current) || error instanceof StaleSession) return;
-        // Сервер отметку не принял: возвращаем в список звонков только эту строку — соседнюю могли отметить
-        // рядом, и снимок начала запроса её бы потерял. Если отметка у заявки была и раньше, она остаётся.
-        const previous = agreed[requestId];
-        const { [requestId]: _rejected, ...kept } = get().agreed;
-        set({ agreed: previous === undefined ? kept : { ...kept, [requestId]: previous }, error: errorMessage(error) });
+        if (isCurrent(current)) set({ agreed: shownAgreed(get().state) });
       }
     },
 

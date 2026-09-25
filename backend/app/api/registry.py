@@ -19,7 +19,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
-from app.api.schemas import AgreedWindow, DatasetStatus, Progress, UploadReport
+from app.api.schemas import DatasetStatus, Progress, UploadReport
 from app.domain.models import Engineer, Event, Office, Plan, Request
 from app.ingest.geocode import GeoResult
 from app.planning.models import EventVariant
@@ -66,7 +66,6 @@ class _DaySnapshot:
     cursor: int
     day_revision: int
     last_version: int
-    agreed: dict[str, AgreedWindow]
 
 
 @dataclass
@@ -103,8 +102,6 @@ class DatasetRecord:
     # Время, на котором стояли часы до перезапуска, если план до него ещё не досчитан: часы стоят на времени
     # последнего посчитанного шага, а досчёт возвращает их сюда (см. _restore_plan и precompute).
     resume_cursor: int | None = None
-    # Что уже согласовано с клиентами: номер заявки → окно, которое клиенту назвали по телефону.
-    agreed: dict[str, AgreedWindow] = field(default_factory=dict)
     # Куда пишется день; пустышка — день живёт только в памяти процесса.
     store: DayWriter = field(default_factory=NullDayWriter)
 
@@ -126,7 +123,6 @@ class DatasetRecord:
             cursor=self.cursor,
             day_revision=self.day_revision,
             last_version=self.last_version,
-            agreed=dict(self.agreed),
         )
         try:
             yield
@@ -140,7 +136,6 @@ class DatasetRecord:
             self.cursor = snapshot.cursor
             self.day_revision = snapshot.day_revision
             self.last_version = snapshot.last_version
-            self.agreed = snapshot.agreed
             raise
 
     def day_base(self) -> PlanningSession:
@@ -175,7 +170,7 @@ class DatasetRecord:
         """План дня с нуля: таймлайн пустой, текущее время 00:00. Номера событий tl_<n> не начинаются заново.
 
         Событий по умолчанию на шкале нет: отмены, срочные заявки и прочее диспетчер добавляет сам.
-        Обзвон тоже начинается заново: в новом дне клиентам ещё не звонили.
+        Обзвон тоже начинается заново: отметки звонков — события шкалы, и они уходят вместе с ней.
         """
         with self.lock, self._saved():
             if prepared is not None:
@@ -187,7 +182,6 @@ class DatasetRecord:
             self.timeline.clear()
             self.day_revision = self.timeline.revision
             self.last_version = max(self.last_version, session.version)
-            self.agreed = {}
             if self.prepared is not None:
                 self.store.save_day(
                     self.prepared,
@@ -253,7 +247,7 @@ class DatasetRecord:
             return entry
 
     def choose_variant(self, entry_id: str, variant: EventVariant) -> TimelineEntry | None:
-        """Выбор или смена стратегии «ломающего» события."""
+        """Выбор или смена стратегии события."""
         with self.lock, self._saved():
             revision = self.timeline.revision
             entry = self.timeline.set_variant(entry_id, variant)
@@ -297,20 +291,6 @@ class DatasetRecord:
             self.resume_cursor = None
             if changed:
                 self.store.save_cursor(cursor)
-
-    def mark_agreed(self, request_id: str, window: AgreedWindow) -> None:
-        """Клиенту назвали окно (или сказали, что сегодня не приедем)."""
-        with self.lock, self._saved():
-            self.agreed[request_id] = window
-            self.store.save_agreed(request_id, window)
-
-    def unmark_agreed(self, request_id: str) -> bool:
-        """Снимает отметку «договорились»; False — её и не было."""
-        with self.lock, self._saved():
-            if self.agreed.pop(request_id, None) is None:
-                return False
-            self.store.drop_agreed(request_id)
-            return True
 
 
 # Сколько последних наборов данных живёт в памяти. Экран показывает один, прежние нужны только вкладке, которую
@@ -416,7 +396,6 @@ def _restored(state: DayState, writer: DayWriter) -> DatasetRecord:
         cursor=state.cursor,
         day_revision=state.day_revision,
         last_version=state.last_version,
-        agreed=dict(state.agreed),
         store=writer,
     )
     record.timeline.entries = sorted(state.entries, key=lambda entry: entry.order)
@@ -441,7 +420,7 @@ def _restore_plan(record: DatasetRecord) -> None:
         record.cursor = walk.awaiting.event.time
     elif walk.done < count:
         # Шага не хватает: перезапуск застал солвер за работой. Часы встают на время последнего посчитанного
-        # шага, как move_cached делает на «ломающем» событии без выбора, иначе на экране были бы часы на 11:00
+        # шага, как move_cached делает на событии, которое ждёт выбора, иначе на экране были бы часы на 11:00
         # и план на 10:00 — с заявкой, которую диспетчер только что отменил. Досчёт вернёт часы обратно.
         record.resume_cursor = record.cursor
         record.cursor = record.timeline.entries[walk.done - 1].event.time if walk.done else 0

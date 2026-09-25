@@ -1,5 +1,4 @@
 import type {
-  AgreedWindow,
   ApproveAllResponse,
   ApproveResponse,
   ChatResponse,
@@ -108,6 +107,7 @@ export const postEvent = (datasetId: string, event: PlanEvent) =>
 /**
  * Событие на шкалу дня: время плана не меняется, событие позже него остаётся впереди.
  * variant — стратегия события сразу, без окна выбора: так отменяется заявка отказавшегося клиента.
+ * Без variant сервер сам решает по результату, нужен ли выбор: тогда в ответе pending_choice.
  */
 export const addTimelineEvent = (datasetId: string, event: PlanEvent, variant?: EventVariant) =>
   request<PlanningState>(
@@ -119,7 +119,7 @@ export const deleteTimelineEvent = (datasetId: string, entryId: string) =>
   request<PlanningState>(`${dataset(datasetId)}/timeline/events/${encodeURIComponent(entryId)}`, { method: 'DELETE' });
 
 /**
- * Варианты исправления для «ломающего» события шкалы. С assign сервер считает ещё один план — с заявкой
+ * Варианты исправления для события шкалы (кроме отклонённого). С assign сервер считает ещё один план — с заявкой
  * у выбранной бригады — и присылает его четвёртым вариантом.
  */
 export const getTimelineVariants = (datasetId: string, entryId: string, assign?: string) =>
@@ -138,10 +138,6 @@ export const clearTimeline = (datasetId: string) =>
 /** План на время дня: применены все события шкалы не позже этого времени. */
 export const moveCursor = (datasetId: string, time: HHMM) =>
   request<PlanningState>(`${dataset(datasetId)}/cursor`, postJson({ time } satisfies CursorRequest));
-
-/** Клиенту назвали окно (или сказали, что сегодня не приедем): отметка «Согласовано» уходит на сервер. */
-export const setAgreedWindow = (datasetId: string, requestId: string, window: AgreedWindow) =>
-  request<PlanningState>(`${dataset(datasetId)}/agreed/${encodeURIComponent(requestId)}`, putJson(window));
 
 export const getExplanation = (datasetId: string, requestId: string) =>
   request<Explanation>(`${dataset(datasetId)}/explain/${encodeURIComponent(requestId)}`);

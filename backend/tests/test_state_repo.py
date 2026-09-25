@@ -8,7 +8,6 @@ postgres_state (tests/conftest.py) — та же, на которой стоят
 import pytest
 
 from app.api.registry import PreparedDay
-from app.api.schemas import AgreedWindow, TimeWindow
 from app.llm.schemas import Proposal
 from app.planning.timeline import Timeline, TimelineStep, entry_token, replay_step
 from app.state.memory import MemoryStateRepo
@@ -19,14 +18,6 @@ from tests.timeline_helpers import cancel
 
 def prepared_day():
     return PreparedDay("t", "Тест", OFFICE, day_requests(), day_engineers(), None, False)
-
-
-def agreed_on(start, end, version):
-    return AgreedWindow(
-        window=TimeWindow(start=start, end=end),
-        request_window=TimeWindow(start=start, end=end),
-        version=version,
-    )
 
 
 def test_memory_repo_keeps_nothing():
@@ -92,7 +83,6 @@ def test_the_whole_day_comes_back(repo, reopen):
     step = replay_step(morning, entry, context(), 2)
     writer.add_step((walk.prefix, entry_token(entry)), step, last_version=2)
     writer.save_cursor(600)
-    writer.save_agreed("R1", agreed_on("10:00", "12:00", 2))
     writer.save_proposals(
         [
             Proposal(
@@ -117,7 +107,6 @@ def test_the_whole_day_comes_back(repo, reopen):
     assert restored.session.plan.model_dump_json() == step.session.plan.model_dump_json()
     assert restored.applied.event.model_dump() == step.applied.event.model_dump()
     assert (day.cursor, day.last_number, day.last_version) == (600, 1, 2)
-    assert day.agreed["R1"].window.model_dump() == {"start": 600, "end": 720, "asap": False}
     assert [p.id for p in day.proposals] == ["pr_1"] and day.urgent_number == 4
 
 
@@ -140,10 +129,13 @@ def test_the_plan_the_dispatcher_saw_is_not_overwritten(repo, reopen):
 
 
 def test_rejected_step_keeps_the_previous_plan(repo, reopen):
-    """У отклонённого шага своего плана нет: на подъёме он берёт план предыдущего шага."""
+    """У отклонённого шага своего плана нет: на подъёме он берёт план предыдущего шага.
+
+    Стратегия выбрана сразу: у каждого события один шаг, и проход идёт по нему без правила окна выбора.
+    """
     writer, morning = saved_day(repo)
     timeline = Timeline()
-    first = timeline.create(cancel("R2", "09:00"))
+    first = timeline.create(cancel("R2", "09:00"), variant="optimal")
     timeline.insert(first)
     writer.add_entry(first, revision=1, expect=0)
     walk = timeline.walk(morning)
@@ -151,7 +143,7 @@ def test_rejected_step_keeps_the_previous_plan(repo, reopen):
     timeline.store(walk, first, step)
     writer.add_step((walk.prefix, entry_token(first)), step, last_version=2)
     # Второе событие отклонено: заявку уже отменили.
-    second = timeline.create(cancel("R2", "10:00"))
+    second = timeline.create(cancel("R2", "10:00"), variant="optimal")
     timeline.insert(second)
     writer.add_entry(second, revision=2, expect=1)
     walk = timeline.walk(morning)
@@ -187,12 +179,11 @@ def test_day_built_anew_forgets_events_and_calls(repo, reopen):
     entry = timeline.create(cancel("R2", "09:00"))
     timeline.insert(entry)
     writer.add_entry(entry, revision=1, expect=0)
-    writer.save_agreed("R1", agreed_on("10:00", "12:00", 1))
     # Пересборка дня: номера событий не начинаются заново, всё остальное — начинается.
     writer.save_day(prepared_day(), morning, revision=2, day_revision=2, last_number=1, last_version=5)
 
     day = reopen().load("d_pg")
-    assert day.entries == [] and day.steps == {} and day.agreed == {}
+    assert day.entries == [] and day.steps == {}
     assert (day.cursor, day.last_number, day.last_version) == (0, 1, 5)
     assert day.revision == day.day_revision == 2
 
@@ -216,17 +207,18 @@ def test_an_orphan_continuation_does_not_pass_for_a_step_of_the_new_plan(repo, r
     """Продолжение шага, которого в базе не оказалось, не выдаёт себя за продолжение пересчитанного.
 
     Решатель недетерминирован: пересчитанный шаг — другой план, и цепочка от прежнего к нему не относится.
+    Стратегия выбрана сразу: у каждого события один шаг.
     """
     writer, morning = saved_day(repo)
     timeline = Timeline()
-    first = timeline.create(cancel("R2", "09:00"))
+    first = timeline.create(cancel("R2", "09:00"), variant="optimal")
     timeline.insert(first)
     writer.add_entry(first, revision=1, expect=0)
     walk = timeline.walk(morning)
     step = replay_step(morning, first, context(), 2)
     timeline.store(walk, first, step)
     key = (walk.prefix, entry_token(first))
-    second = timeline.create(cancel("R3", "10:00"))
+    second = timeline.create(cancel("R3", "10:00"), variant="optimal")
     timeline.insert(second)
     writer.add_entry(second, revision=2, expect=1)
     child = timeline.walk(morning, 2)
@@ -300,3 +292,53 @@ def test_a_day_the_process_still_holds_is_not_pushed_out_of_the_base(repo):
     assert repo.load("d_held") is not None
     # А тот, кого никто не держит, честно уезжает: база не копит дни без счёта.
     assert repo.load("d_new_0") is None
+
+
+def test_steps_of_a_day_saved_before_the_unified_flow_move_under_the_new_keys(repo, reopen):
+    """Миграция 0002: событие без выбора прежняя сборка считала с «Оптимально по дню» под токеном без стратегии
+    («tl_1»). Теперь проход ищет шаги под «tl_1@optimal»: день поднимается с теми же планами, и шкала проходится
+    до конца без пересчёта, а событие получает стратегию, с которой его шаг и был посчитан."""
+    from app.state.migrate import MIGRATIONS_DIR
+
+    writer, morning = saved_day(repo)
+    timeline = Timeline()
+    first, second = timeline.create(cancel("R2", "09:00")), timeline.create(cancel("R3", "10:00"))
+    for number, entry in enumerate((first, second), start=1):
+        timeline.insert(entry)
+        writer.add_entry(entry, revision=number, expect=number - 1)
+    # Так ключи писала прежняя сборка: номер события без стратегии и в токене, и в префиксе.
+    step = replay_step(morning, first, context(), 2)
+    writer.add_step(((), "tl_1"), step, last_version=2)
+    after = replay_step(step.session, second, context(), 3)
+    writer.add_step((("tl_1",), "tl_2"), after, last_version=3)
+
+    with repo.cursor() as cur:
+        cur.execute((MIGRATIONS_DIR / "0002.unified-event-steps.sql").read_text(encoding="utf-8"))
+
+    day = reopen().load("d_pg")
+    assert [(entry.id, entry.variant) for entry in day.entries] == [("tl_1", "optimal"), ("tl_2", "optimal")]
+    assert set(day.steps) == {((), "tl_1@optimal"), (("tl_1@optimal",), "tl_2@optimal")}
+    restored = Timeline(entries=day.entries, steps=day.steps)
+    walk = restored.walk(day.base)
+    assert (walk.done, walk.awaiting) == (2, None)
+    assert walk.session.plan.model_dump_json() == after.session.plan.model_dump_json()
+
+
+def test_the_table_of_call_marks_is_gone_and_comes_back_empty_on_rollback(repo):
+    """Миграция 0003: отметка звонка — событие шкалы, отдельной таблицы у неё больше нет. Откат возвращает таблицу
+    пустой, и миграция поверх отката снова её сносит: пара файлов сходится."""
+    from app.state.migrate import MIGRATIONS_DIR
+
+    def table():
+        with repo.cursor() as cur:
+            cur.execute("SELECT to_regclass('agreed_windows')::text")
+            row = cur.fetchone()
+        return row[0] if row else None
+
+    assert table() is None
+    with repo.cursor() as cur:
+        cur.execute((MIGRATIONS_DIR / "0003.drop-agreed-windows.rollback.sql").read_text(encoding="utf-8"))
+    assert table() == "agreed_windows"
+    with repo.cursor() as cur:
+        cur.execute((MIGRATIONS_DIR / "0003.drop-agreed-windows.sql").read_text(encoding="utf-8"))
+    assert table() is None

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PlanEvent, ServiceRequest } from '../api/types';
+import { agreementEvent } from './communications';
 import {
   makeAsapRequest,
   makeDataUrgentState,
@@ -89,7 +90,8 @@ describe('events', () => {
   it('warns that an event before the first shift replans the whole day', () => {
     const { engineers } = makePlanningState();
     expect(beforeShiftsHint('09:59', engineers)).toBe(BEFORE_SHIFTS_HINT);
-    expect(BEFORE_SHIFTS_HINT).toBe('Событие до начала смен: план дня пересчитается целиком');
+    // Пересчитает ли сервер план, решает результат: подсказка не обещает пересчёт, а говорит, каким он будет.
+    expect(BEFORE_SHIFTS_HINT).toBe('Событие до начала смен: пересчёт, если понадобится, захватит весь день');
     expect(beforeShiftsHint('10:00', engineers)).toBeNull();
     expect(beforeShiftsHint('9', engineers)).toBeNull();
     expect(beforeShiftsHint('00:00', [])).toBeNull();
@@ -289,6 +291,18 @@ describe('events', () => {
     const urgent = makePlanningState().events[2].event;
     expect(describeEvent(urgent, engineers, requests)).toBe('Срочная заявка URG-001 в 13:00');
     expect(describeEvent({ ...urgent, request: makeAsapRequest() }, engineers, requests)).toBe('Срочная заявка URG-002 как можно скорее, 13:00');
+    // Звонок клиенту: что ему сказали и когда.
+    const window = { start: '16:00', end: '18:00', asap: false };
+    expect(describeEvent(agreementEvent('86160', window, '13:05'), engineers, requests)).toBe(
+      'Клиент 86160: окно 16:00–18:00, звонок в 13:05',
+    );
+    expect(describeEvent(agreementEvent('18754', null, '13:05'), engineers, requests)).toBe(
+      'Клиент 18754: сегодня не приедем, звонок в 13:05',
+    );
+    const asap = { start: '13:00', end: '22:00', asap: true };
+    expect(describeEvent(agreementEvent('URG-001', asap, '13:05'), engineers, requests)).toBe(
+      'Клиент URG-001: как можно скорее с 13:00, звонок в 13:05',
+    );
   });
 
   it('names an urgent request of the day with the URG- prefix, while the event keeps the raw number', () => {
@@ -634,6 +648,18 @@ describe('engineer delay', () => {
       'Без перепланирования была бы переработка 25 мин',
     ]);
   });
+
+  it('speaks of the forecast as a fact when the delay went with «ничего не менять»', () => {
+    // План и есть план без перепланирования: опоздания в нём остались, «бы» тут неправда.
+    expect(forecastLines(makeDelayForecast(), requests, engineers, true)).toEqual(['Опоздаем к 2 клиентам на 35–45 мин']);
+    expect(forecastLines(makeDelayForecast({ overtime_without_replan_min: 25 }), requests, engineers, true)).toEqual([
+      'Опоздаем к 2 клиентам на 35–45 мин и переработка 25 мин',
+    ]);
+    expect(forecastLines(makeDelayForecast({ late_without_replan: [], overtime_without_replan_min: 25 }), requests, engineers, true)).toEqual([
+      'Переработка 25 мин',
+    ]);
+    expect(forecastLines(makeDelayForecast({ late_without_replan: [] }), requests, engineers, true)).toEqual(['Задержка не привела к опозданиям']);
+  });
 });
 
 describe('request reassignment', () => {
@@ -669,6 +695,7 @@ describe('request reassignment', () => {
     expect(eventRequestId(cancelEvent('10135', '09:30'))).toBe('10135');
     expect(eventRequestId(makeRequestUpdateEvent())).toBe('50104');
     expect(eventRequestId(state.events[2].event)).toBe('URG-001');
+    expect(eventRequestId(agreementEvent('86160', null, '13:05'))).toBe('86160');
     expect(eventRequestId(unavailableEvent('E03', '13:00'))).toBeNull();
     expect(eventRequestId(makeDelayEvent())).toBeNull();
   });
@@ -709,6 +736,11 @@ describe('request reassignment', () => {
     expect(lockOf(requestOf('74198'))).toEqual({ disabled: true, title: 'Работа уже началась, переназначить нельзя' });
     expect(lockOf(requestOf('50104'), { clock: '14:30' })).toEqual({ disabled: true, title: 'Работа уже началась, переназначить нельзя' });
     expect(lockOf(requestOf('10135'))).toEqual({ disabled: true, title: 'Заявка отменена' });
+    // Клиенту сказали, что сегодня не приедем: переназначение такой заявки сервер отклонит всегда.
+    expect(lockOf({ ...requestOf('18754'), status: 'postponed' })).toEqual({
+      disabled: true,
+      title: 'Заявка перенесена: клиенту сказали, что сегодня не приедем',
+    });
     expect(lockOf({ ...requestOf('18754'), lat: null, lon: null })).toEqual({
       disabled: true,
       title: 'Адрес не найден на карте, назначить бригаду нельзя',

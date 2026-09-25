@@ -246,6 +246,15 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
       metrics_after: currentMetrics,
     },
     morning: morningRequests(),
+    // Итоги утреннего плана: заняты все три бригады, а заявка 10135 у Комаря начинается в 14:05 — позже своего окна.
+    morning_metrics: {
+      engineers_used: 3,
+      km_per_engineer: { E01: 20.4, E02: 11.3, E03: 9.8 },
+      total_km: 41.5,
+      assigned: 7,
+      unassigned: 0,
+      violations: 1,
+    },
     events: [
       { id: 'ev_1', event: { type: 'cancel', time: '09:30', request: null, request_id: '10135', engineer_id: null }, version: 2 },
       { id: 'ev_2', event: { type: 'engineer_unavailable', time: '13:00', request: null, request_id: null, engineer_id: 'E03' }, version: 3 },
@@ -265,7 +274,7 @@ export function makePlanningState(overrides: Partial<PlanningState> = {}): Plann
   };
 }
 
-/** Событие на шкале дня: применённое, впереди или отклонённое. */
+/** Событие на шкале дня: применённое, впереди или отклонённое. Варианты, как у сервера, не открываются у отклонённого. */
 export function makeTimelineItem(overrides: Partial<TimelineItem> = {}): TimelineItem {
   return {
     id: 'tl_1',
@@ -273,7 +282,8 @@ export function makeTimelineItem(overrides: Partial<TimelineItem> = {}): Timelin
     status: 'applied',
     reason: null,
     variant: null,
-    choosable: false,
+    variant_auto: false,
+    choosable: overrides.status !== 'rejected',
     ...overrides,
   };
 }
@@ -298,7 +308,7 @@ export function makeTimeline(): TimelineItem[] {
 const BASE_VARIANT_TEXTS: Record<string, { title: string; summary: string }> = {
   optimal: { title: 'Оптимально по дню', summary: 'Пересчитать остаток дня целиком' },
   stable: { title: 'Минимум перестановок', summary: 'Чужие маршруты почти не трогаем' },
-  keep: { title: 'Ничего не менять', summary: 'Оставить маршруты как есть' },
+  keep: { title: 'Ничего не менять', summary: 'Только само событие, остальные маршруты как есть' },
 };
 
 /**

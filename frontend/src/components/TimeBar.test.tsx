@@ -218,10 +218,10 @@ describe('TimeBar', () => {
     expect(within(later).queryByRole('button', { name: /^Срочная заявка/ })).not.toBeInTheDocument();
   });
 
-  it('offers «Варианты…» for an event that breaks the plan and shows its choice', () => {
+  it('offers «Варианты…» for an event of any type and shows its choice', () => {
     const openChoice = vi.fn().mockResolvedValue(undefined);
     const timeline = [
-      makeTimelineItem({ id: 'tl_2', event: makeEventChoice().event, status: 'applied', choosable: true, variant: 'stable' }),
+      makeTimelineItem({ id: 'tl_2', event: makeEventChoice().event, status: 'applied', variant: 'stable' }),
       makeTimelineItem({ id: 'tl_3', status: 'applied' }),
     ];
     resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }), openChoice });
@@ -235,34 +235,115 @@ describe('TimeBar', () => {
   });
 
   it('names the variant «отдать бригаде» by the brigade that took the request', () => {
-    const timeline = [makeTimelineItem({ id: 'tl_3', event: makeUrgentChoice().event, status: 'applied', choosable: true, variant: 'assign:E02' })];
+    const timeline = [makeTimelineItem({ id: 'tl_3', event: makeUrgentChoice().event, status: 'applied', variant: 'assign:E02' })];
     resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
     render(<TimeBar />);
     fireEvent.click(screen.getByRole('button', { name: /Срочная/ }));
     expect(within(screen.getByRole('group', { name: 'События 13:00' })).getByText('Вариант: Отдать: Бригада Белузин')).toBeInTheDocument();
   });
 
-  it('names the kept variant of a reassignment as the insertion into the route and opens its request', () => {
-    const timeline = [makeTimelineItem({ id: 'tl_4', event: makeReassignEvent(), status: 'applied', choosable: true, variant: 'keep' })];
+  it('names the kept variant of a reassignment like of any other event and opens its request', () => {
+    const timeline = [makeTimelineItem({ id: 'tl_4', event: makeReassignEvent(), status: 'applied', variant: 'keep' })];
     resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
     render(<TimeBar />);
     fireEvent.click(screen.getByRole('button', { name: 'Назначение' }));
     const events = screen.getByRole('group', { name: 'События 13:30' });
-    expect(within(events).getByText('Вариант: Вставить в маршрут')).toBeInTheDocument();
+    expect(within(events).getByText('Вариант: Ничего не менять')).toBeInTheDocument();
+    expect(within(events).queryByText(/Вставить в маршрут/)).not.toBeInTheDocument();
     fireEvent.click(within(events).getByRole('button', { name: 'Переназначение заявки 50104: Бригада Арташкин → Бригада Белузин с 13:30' }));
     expect(useAppStore.getState().selectedRequestId).toBe('50104');
   });
 
-  it('shows the strategy of a cancellation, which has no choice window of its own', () => {
-    // Отмену диспетчер выбирал кнопкой «Отменить, маршруты не трогать»: на шкале должно быть видно, что он выбрал.
+  it('says that «ничего не менять» was taken without a window and still offers the variants of a cancellation', () => {
+    const openChoice = vi.fn().mockResolvedValue(undefined);
+    // Отмена из карточки заявки ничего не сломала: сервер прошёл её с «Ничего не менять», окно не открывалось.
+    const timeline = [makeTimelineItem({ id: 'tl_1', status: 'applied', variant: 'keep', variant_auto: true })];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }), openChoice });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 10135/));
+    const events = screen.getByRole('group', { name: 'События 09:30' });
+    expect(within(events).getByText('Вариант: Ничего не менять — выбирать было не из чего')).toBeInTheDocument();
+    fireEvent.click(within(events).getByRole('button', { name: 'Варианты…' }));
+    expect(openChoice).toHaveBeenCalledWith('tl_1');
+  });
+
+  it('shows the choice of the dispatcher for a cancellation from the calls tab', () => {
+    // «Отменить, маршруты не трогать» во вкладке «Коммуникации» выбирает «Ничего не менять» сам диспетчер.
     const timeline = [makeTimelineItem({ id: 'tl_1', status: 'applied', variant: 'keep' })];
     resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
     render(<TimeBar />);
     fireEvent.click(screen.getByTitle(/^Отмена заявки 10135/));
     const events = screen.getByRole('group', { name: 'События 09:30' });
-    expect(within(events).getByText('Вариант: Маршруты не трогать')).toBeInTheDocument();
-    // Окна выбора у отмены нет: кнопку «Варианты…» ей не показывают.
-    expect(within(events).queryByRole('button', { name: 'Варианты…' })).not.toBeInTheDocument();
+    expect(within(events).getByText('Вариант: Ничего не менять')).toBeInTheDocument();
+    expect(within(events).getByRole('button', { name: 'Варианты…' })).toBeEnabled();
+  });
+
+  it('offers no variants for a rejected event and says when an event waits for a choice', () => {
+    const timeline = [
+      makeTimelineItem({ id: 'tl_2', event: makeEventChoice().event, status: 'awaiting', variant: null }),
+      makeTimelineItem({
+        id: 'tl_5',
+        event: { type: 'cancel', time: '16:30', request: null, request_id: '74198', engineer_id: null },
+        status: 'rejected',
+        reason: 'Заявка 74198 уже выполнена.',
+      }),
+      makeTimelineItem({
+        id: 'tl_6',
+        event: { type: 'cancel', time: '17:00', request: null, request_id: '46393', engineer_id: null },
+        status: 'rejected',
+        reason: 'Заявка 46393 уже отменена.',
+        variant: 'optimal',
+      }),
+    ];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
+    render(<TimeBar />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Недоступен/ }));
+    const awaiting = screen.getByRole('group', { name: 'События 13:00' });
+    expect(within(awaiting).getByText('Вариант не выбран')).toBeInTheDocument();
+    expect(within(awaiting).getByRole('button', { name: 'Варианты…' })).toBeEnabled();
+
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 74198/));
+    const rejected = screen.getByRole('group', { name: 'События 16:30' });
+    expect(within(rejected).queryByRole('button', { name: 'Варианты…' })).not.toBeInTheDocument();
+    expect(within(rejected).queryByText(/Вариант/)).not.toBeInTheDocument();
+
+    // Стратегию, которую диспетчер выбрал сам, видно и у отклонённого события.
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 46393/));
+    const chosen = screen.getByRole('group', { name: 'События 17:00' });
+    expect(within(chosen).getByText('Вариант: Оптимально по дню')).toBeInTheDocument();
+    expect(within(chosen).queryByRole('button', { name: 'Варианты…' })).not.toBeInTheDocument();
+  });
+
+  it('offers no variants behind an event that waits for a choice and does not call an uncounted event unchosen', () => {
+    // Часы встали на недоступности в 13:00; отмену в 14:30 сервер не считал: до неё проход дойдёт после выбора.
+    const timeline = [
+      makeTimelineItem({ id: 'tl_2', event: makeEventChoice().event, status: 'awaiting', variant: null }),
+      makeTimelineItem({
+        id: 'tl_3',
+        event: { type: 'cancel', time: '14:30', request: null, request_id: '74198', engineer_id: null },
+        status: 'pending',
+        choosable: false,
+      }),
+      makeTimelineItem({
+        id: 'tl_4',
+        event: { type: 'cancel', time: '16:30', request: null, request_id: '46393', engineer_id: null },
+        status: 'pending',
+      }),
+    ];
+    resetStore({ datasetId: 'd_test', state: makePlanningState({ timeline }) });
+    render(<TimeBar />);
+
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 74198/));
+    const behind = screen.getByRole('group', { name: 'События 14:30' });
+    expect(within(behind).queryByRole('button', { name: 'Варианты…' })).not.toBeInTheDocument();
+    expect(within(behind).queryByText(/Вариант/)).not.toBeInTheDocument();
+
+    // Впереди, ещё не посчитано: варианты открыть можно (сервер их посчитает), но «не выбран» — неправда.
+    fireEvent.click(screen.getByTitle(/^Отмена заявки 46393/));
+    const ahead = screen.getByRole('group', { name: 'События 16:30' });
+    expect(within(ahead).getByRole('button', { name: 'Варианты…' })).toBeEnabled();
+    expect(within(ahead).queryByText(/^Вариант( не выбран|:)/)).not.toBeInTheDocument();
   });
 
   it('blocks play and the slider while the choice is open', () => {
@@ -287,6 +368,31 @@ describe('TimeBar', () => {
     expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
   });
 
+  it('offers the summary of the day next to the clock only when the plan reached the end of the day', () => {
+    render(<TimeBar />);
+    const button = () => screen.queryByRole('button', { name: 'Итоги дня' });
+    expect(button()).toBeNull();
+    // Ползунок в конце, а план ещё на 13:00: итогов дня пока нет.
+    act(() => useAppStore.setState({ clock: '23:00' }));
+    expect(button()).toBeNull();
+    act(() => useAppStore.setState({ state: at('23:00') }));
+    fireEvent.click(button() as HTMLElement);
+    expect(useAppStore.getState().daySummaryOpen).toBe(true);
+    act(() => useAppStore.setState({ daySummaryOpen: false, choice: makeEventChoice() }));
+    expect(button()).toBeDisabled();
+    // Время стоит на событии, которое ждёт выбора: день не закончился.
+    act(() => useAppStore.setState({ state: at('23:00', { pending_choice: makeEventChoice() }) }));
+    expect(button()).toBeNull();
+  });
+
+  it('closes the events of a pin when the summary of the day drops above them', () => {
+    resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }) });
+    render(<TimeBar />);
+    fireEvent.click(screen.getByTitle(/^Задержка: Бригада Арташкин/));
+    act(() => useAppStore.setState({ daySummaryOpen: true }));
+    expect(screen.queryByRole('group', { name: 'События 15:00' })).not.toBeInTheDocument();
+  });
+
   it('closes the events of a pin on Esc and keeps that Esc from the panels below', () => {
     resetStore({ datasetId: 'd_test', state: at('13:00', { timeline: makeTimeline() }) });
     render(<TimeBar />);
@@ -298,7 +404,7 @@ describe('TimeBar', () => {
     expect(fireEvent.keyDown(document.body, { key: 'Escape' })).toBe(true);
   });
 
-  it('says when the plan is being moved to the clock and while the server prepares the events', () => {
+  it('says when the plan is being moved to the clock or replanned and while the server prepares the events', () => {
     resetStore({ datasetId: 'd_test', state: at('13:00', { timeline_ready: false }) });
     render(<TimeBar />);
     expect(screen.getByText('Готовим события…')).toHaveClass('muted');
@@ -307,6 +413,11 @@ describe('TimeBar', () => {
     expect(screen.queryByText('Готовим события…')).not.toBeInTheDocument();
     act(() => useAppStore.setState({ committing: false, state: at('13:00') }));
     expect(screen.queryByText(/Пересчитываем план|Готовим события/)).not.toBeInTheDocument();
+    // Событие ушло на сервер: окна выбора заранее нет, о расчёте говорит строка у часов.
+    act(() => useAppStore.setState({ busy: true }));
+    expect(screen.getByText('Пересчитываем план…')).toHaveClass('muted');
+    act(() => useAppStore.setState({ busy: false }));
+    expect(screen.queryByText('Пересчитываем план…')).not.toBeInTheDocument();
   });
 
   it('stops the clock when the time bar goes away', async () => {

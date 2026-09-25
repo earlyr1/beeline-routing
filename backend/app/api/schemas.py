@@ -8,7 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, StrictBool, StrictInt, model_validator
 
 from app.domain.enums import Transport
-from app.domain.models import Engineer, Event, Office, Plan, Request
+from app.domain.models import Engineer, Event, Metrics, Office, Plan, Request, TimeWindow
 from app.domain.timeutil import HHMM
 from app.domain.windows import TimeSlot
 from app.planning.models import AppliedEvent, EventChoice, EventVariant, PlanDiff, PrecomputedPlan
@@ -111,11 +111,15 @@ class TimelineItem(BaseModel):
     event: Event
     status: TimelineStatus
     reason: str | None = None
-    # Стратегия «ломающего» события («optimal», «stable», «keep» или «assign:<инженер>»); null — не выбрана
-    # или событие не «ломающее».
+    # Стратегия, с которой событие проходит план («optimal», «stable», «keep» или «assign:<инженер>»); null —
+    # диспетчер не выбирал, а проход шкалы ещё не решил: событие не посчитано или ждёт выбора (status «awaiting»).
     variant: EventVariant | None = None
-    # «Ломающее» событие: для него сервер предлагает варианты исправления.
-    choosable: bool = False
+    # Стратегию выбрал не диспетчер, а правило окна выбора: пересчёт ничего бы не спас, и событие применено
+    # с «Ничего не менять» (variant «keep»). Сменить её можно, как любую, через варианты события.
+    variant_auto: bool = False
+    # Варианты события можно открыть сейчас (GET …/variants) и сменить: событие не отклонено и не стоит за событием,
+    # которое ждёт выбора, — до такого проход шкалы не дойдёт, пока диспетчер не выберет, и сервер ответил бы 409.
+    choosable: bool = True
 
 
 class VariantRequest(BaseModel):
@@ -140,27 +144,17 @@ class MorningRequest(BaseModel):
     start: HHMM | None = None
 
 
-class TimeWindow(BaseModel):
-    """Окно клиента: с какого и по какое время он ждёт бригаду. Точного времени визита он не знает."""
-
-    start: HHMM
-    end: HHMM
-    # Окно «как можно скорее»: его задаёт сервер от времени события до конца смен, и называют его словами.
-    asap: bool = False
-
-
-class AgreedWindow(BaseModel):
+class AgreedCall(BaseModel):
     """Что клиент знает про заявку после звонка: окно, которое ему назвали, или null — сегодня не приедем.
 
-    Отметку ставит диспетчер на вкладке «Коммуникации», и живёт она на сервере: она приходит с планом в
-    другую вкладку и в другой браузер и переживает перезапуск сервиса.
+    Отметка ✓ вкладки «Коммуникации» — событие «Коммуникация» (client_agreed) на шкале дня, поэтому она живёт там же,
+    где остальные события: приходит в любую вкладку, переживает перезапуск и пропадает, когда часы уходят раньше
+    неё. Названное окно событие делает окном заявки: дальше план сравнивается с ним.
     """
 
     window: TimeWindow | None = None
-    # Окно самой заявки в момент разговора: по нему видно, что диспетчер передвинул его уже после звонка.
-    request_window: TimeWindow | None = None
-    # Номер плана, на котором договорились: с планом старше отметки её не сравнивают (часы отмотали назад).
-    version: int | None = None
+    # Событие шкалы, которое записало договорённость: удалить его — снять отметку.
+    entry_id: str
 
 
 class PlanningState(BaseModel):
@@ -184,6 +178,9 @@ class PlanningState(BaseModel):
     # Начало дня (текущее время 00:00, ни одного события шкалы): окно каждой заявки и её утренний визит.
     # С окнами отсюда вкладка «Коммуникации» сравнивает план, когда клиенту ещё не звонили.
     morning: list[MorningRequest] = Field(default_factory=list)
+    # Итоги утреннего плана из той же сессии начала дня: окно «Итоги дня» сравнивает с ними итог дня. Пробега
+    # и нарушений утра из morning не собрать. null — утра нет.
+    morning_metrics: Metrics | None = None
     events: list[AppliedEvent] = Field(default_factory=list)
     matrix_source: Literal["osrm", "haversine"]
     # Текущее время плана. now, events, last_diff и previous_plan относятся к плану на это время.
@@ -191,14 +188,15 @@ class PlanningState(BaseModel):
     timeline: list[TimelineItem] = Field(default_factory=list)
     # Все шаги таймлайна посчитаны: статусы событий впереди окончательные.
     timeline_ready: bool = True
-    # «Ломающее» событие, на котором остановилось текущее время, и его варианты; null — выбирать нечего.
+    # Событие, которое ждёт выбора и на котором остановилось текущее время, и его варианты; null — выбирать
+    # нечего. Ждёт выбора событие любого типа, если «Ничего не менять» ломает больше, чем лучший из пересчётов.
     pending_choice: EventChoice | None = None
     # Откуда утренний план дня: посчитан заранее ночным расчётом (сколько шёл поиск и когда закончился) или null —
     # найден при загрузке дня. События дня пересчитываются от утреннего плана на месте в обоих случаях.
     precomputed: PrecomputedPlan | None = None
-    # Что уже согласовано с клиентами по телефону: номер заявки → окно, которое клиенту назвали.
-    # Пересборка дня и сброс событий очищают отметки: обзвона в новом дне ещё не было.
-    agreed: dict[str, AgreedWindow] = Field(default_factory=dict)
+    # Что уже согласовано с клиентами по телефону: номер заявки → последняя договорённость среди событий
+    # «Коммуникация», применённых к текущему времени. Пересборка дня и сброс событий очищают шкалу, а с ней и отметки.
+    agreed: dict[str, AgreedCall] = Field(default_factory=dict)
 
 
 class RouteLeg(BaseModel):
@@ -266,13 +264,13 @@ def to_planning_state(
     pending_choice: EventChoice | None = None,
     morning: PlanningSession | None = None,
     generated: bool = False,
-    agreed: Mapping[str, AgreedWindow] | None = None,
+    agreed: Mapping[str, AgreedCall] | None = None,
 ) -> PlanningState:
     """Состояние на текущее время cursor (по умолчанию время последнего события сессии).
 
-    morning — сессия начала дня: из неё в ответ идут окна заявок и визиты утреннего плана, а не она целиком.
+    morning — сессия начала дня: из неё в ответ идут окна заявок, визиты и итоги утреннего плана, а не она целиком.
     generated — регион сгенерирован нами: об этом говорит вкладка «Сравнение».
-    agreed — согласованные окна дня: что клиентам уже сказали по телефону.
+    agreed — договорённости с клиентами к текущему времени: что им уже сказали по телефону.
     """
     return PlanningState(
         dataset_id=session.dataset_id,
@@ -291,6 +289,7 @@ def to_planning_state(
         control=session.control,
         last_diff=session.last_diff,
         morning=morning_requests(morning),
+        morning_metrics=morning.plan.metrics if morning is not None else None,
         events=session.events,
         matrix_source=session.problem.travel.base.source,
         cursor=session.now if cursor is None else cursor,

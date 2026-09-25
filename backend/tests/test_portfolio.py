@@ -187,8 +187,10 @@ def test_solve_uses_the_pool_with_the_share_of_the_event(monkeypatch):
         ctx,
         variant="stable",
     )
+    # Доля пула одна у всех событий и стратегий: без выбора диспетчера «Оптимально» и «Минимум перестановок»
+    # считаются вместе.
     apply_event(base, Event(type=EventType.CANCEL, time="09:30", request_id="R2"), ctx)
-    assert calls == [2, (1, 2, 500_000), 1, (1, 4, 20_000)]
+    assert calls == [2, (1, 2, 500_000), 2, (1, 2, 20_000)]
     calls.clear()
 
     urgent = Event(type=EventType.URGENT, time="12:00", request=req("U1", 0, 0, "13:00", "17:00"))

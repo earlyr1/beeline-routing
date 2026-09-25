@@ -11,7 +11,6 @@ from app.api.geometry import route_geometry
 from app.api.ingest_service import preprocess_scenario, preprocess_upload, scenario_bundle, scenarios
 from app.api.registry import DatasetRecord
 from app.api.schemas import (
-    AgreedWindow,
     ClientConfig,
     CursorRequest,
     DatasetStatus,
@@ -23,6 +22,7 @@ from app.api.schemas import (
 )
 from app.api.timeline import (
     VariantUnavailable,
+    check_step,
     check_variant,
     ensure_precompute,
     event_choice,
@@ -31,21 +31,15 @@ from app.api.timeline import (
     planning_state,
     settle,
 )
-from app.domain.enums import EventType, Priority, request_label
+from app.domain.enums import Priority, request_label
 from app.domain.models import Event, Request
 from app.domain.timeutil import fmt_hhmm
 from app.domain.windows import is_slot, off_grid_text
 from app.planning.explain import build_explanation
+from app.planning.facts import EventRejected, agreement, edited_request, geocode_entry, new_request
 from app.planning.models import EventChoice, Explanation
-from app.planning.session import (
-    EventRejected,
-    PlanningSession,
-    early_event_text,
-    geocode_entry,
-    start_session,
-)
+from app.planning.session import PlanningSession, early_event_text, start_session
 from app.planning.timeline import EVENT_TIME_RANGE_TEXT, LAST_MINUTE, check_known, known_requests
-from app.planning.variants import is_choosable
 from app.synth.work_types import urgent_work_types
 
 router = APIRouter(prefix="/api")
@@ -86,24 +80,35 @@ def window_grid_problem(deps: AppDeps, event: Event, known: dict[str, Request]) 
     Правило живёт в слое API, потому что сетка — правило разговора с клиентом, а не модели: диспетчер предлагает
     клиенту слот, поэтому произвольный интервал сервер не принимает, что бы ни прислал клиент.
 
-    Проверяются ровно два события со своей заявкой: срочная заявка (окно у неё всегда новое) и изменение заявки,
-    и только если окно в нём действительно выбирают. Заявка «как можно скорее» не проверяется: её окно задаёт
-    сервер, от времени события до конца смен, и слотом оно не бывает. А вот обратный переход проверяется: окно
-    сервера клиенту не называли, поэтому снять «как можно скорее» можно, только выбрав слот.
+    Проверяются срочная заявка (окно у неё всегда новое), изменение заявки, если окно в нём действительно
+    выбирают, и звонок клиенту: окно, которое ему назвали, становится окном заявки. Окно «как можно скорее» не
+    проверяется: его задаёт сервер, от времени события до конца смен, и слотом оно не бывает. А вот обратный
+    переход проверяется: окно сервера клиенту не называли, поэтому снять «как можно скорее» можно, только выбрав слот.
 
     Заявки ДАННЫХ сеткой не проверяются вовсе — ни при загрузке выгрузки и бандла, ни в контрольных файлах:
     настоящие данные и есть источник правды. У аварий выгрузки там стоит весь день, 00:01–23:59, и такая заявка
-    должна и дальше и планироваться, и редактироваться; поэтому изменение с тем же окном сетку не задевает.
+    должна и дальше и планироваться, и редактироваться; поэтому изменение с тем же окном сетку не задевает. Звонку
+    такой поблажки нет: окно аварии — пометка данных, а не обещание, и клиенту называют слот вокруг визита.
     """
     grid = deps.ingest.synth_config.window_grid
-    request = event.request
-    if not grid or request is None or request.asap:
+    if not grid:
         return None
-    if event.type not in (EventType.URGENT, EventType.REQUEST_UPDATED):
+    told = agreement(event)
+    if told is not None:
+        window = told.window
+        # «Сегодня не приедем» окна не называет.
+        if window is None or window.asap or is_slot(grid, window.start, window.end):
+            return None
+        called = known.get(told.request_id)
+        label = request_label(told.request_id, called.priority if called is not None else Priority.NORMAL)
+        return off_grid_text(label, window.start, window.end, grid)
+    added, edited = new_request(event), edited_request(event)
+    request = added or edited
+    if request is None or request.asap:
         return None
     stored = known.get(event.request_id or request.id)
     if (
-        event.type == EventType.REQUEST_UPDATED
+        edited is not None
         and stored is not None
         and not stored.asap
         and (stored.window_start, stored.window_end) == (request.window_start, request.window_end)
@@ -112,7 +117,7 @@ def window_grid_problem(deps: AppDeps, event: Event, known: dict[str, Request]) 
     if is_slot(grid, request.window_start, request.window_end):
         return None
     # Срочная заявка у диспетчера всегда «URG-<номер>»: приоритет ей ставит сервер, что бы ни прислал клиент.
-    priority = Priority.URGENT if event.type == EventType.URGENT else (stored or request).priority
+    priority = Priority.URGENT if added is not None else (stored or request).priority
     label = request_label(request.id, priority)
     return off_grid_text(label, request.window_start, request.window_end, grid)
 
@@ -245,8 +250,8 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
     """Событие в текущее время плана или позже: встаёт на шкалу, и текущее время переходит к нему.
 
     Событие раньше текущего времени отклоняется. События на шкале между текущим временем и новым событием
-    применяются по пути. Отклонённое событие на шкале не остаётся, текущее время не меняется. «Ломающее» событие
-    сразу получает стратегию optimal; если по пути есть «ломающее» событие без выбора, ответ 409.
+    применяются по пути. Отклонённое событие на шкале не остаётся, текущее время не меняется. Событие сразу
+    получает стратегию optimal, окна выбора у него нет; если по пути есть событие, которое ждёт выбора, ответ 409.
     """
     record = _record(deps, dataset_id)
     ctx = deps.ingest.planning
@@ -265,7 +270,7 @@ def post_event(dataset_id: str, event: Event, deps: Deps) -> PlanningState:
                 cursor = record.cursor
                 if event.time < cursor:
                     raise HTTPException(status_code=422, detail=early_event_text(event.time, cursor))
-            entry = record.new_entry(event, geo, variant="optimal" if is_choosable(event) else None)
+            entry = record.new_entry(event, geo, variant="optimal")
             step = insert_and_replay(record, ctx, entry)
             if step is None:
                 record.drop_entry(entry.id)
@@ -291,8 +296,10 @@ def add_timeline_event(
     применяется, на шкале его нет, а ответ 422 с причиной. Событие позже текущего времени ждёт своего времени, его
     шаг считается в фоне.
 
-    variant — стратегия события сразу, без окна выбора: так диспетчер отменяет заявку отказавшегося клиента,
-    выбирая между пересчётом остатка дня и «маршруты не трогать». Событию без стратегий ответ 409.
+    Без variant стратегию решает результат: если «Ничего не менять» ломает больше, чем лучший из пересчётов,
+    событие ждёт выбора (pending_choice, часы встают на нём), иначе применяется с «Ничего не менять». variant —
+    стратегия сразу, без окна выбора: так диспетчер отменяет заявку отказавшегося клиента, выбирая между
+    пересчётом остатка дня и «маршруты не трогать».
     """
     record = _record(deps, dataset_id)
     ctx = deps.ingest.planning
@@ -361,9 +368,9 @@ def clear_timeline(dataset_id: str, deps: Deps) -> PlanningState:
 def get_timeline_variants(
     dataset_id: str, entry_id: str, deps: Deps, assign: str | None = None
 ) -> EventChoice:
-    """Варианты исправления для «ломающего» события шкалы: для окна выбора и смены выбора.
+    """Варианты исправления для события шкалы: для окна выбора и смены выбора. У отклонённого события — 409.
 
-    assign — номер бригады: у срочной заявки к трём вариантам добавляется четвёртый, «отдать ей заявку».
+    assign — номер бригады: у события об одной заявке к трём вариантам добавляется четвёртый, «отдать ей заявку».
     Такой вариант считается только по этому запросу, поэтому окно открывается без него.
     """
     record = _record(deps, dataset_id)
@@ -388,6 +395,7 @@ def put_timeline_variant(dataset_id: str, entry_id: str, body: VariantRequest, d
                 if entry is None:
                     raise VariantUnavailable(404, f"Событие {entry_id} не найдено.")
                 check_variant(record, entry.event, body.variant)
+                check_step(record, entry, body.variant)
                 record.choose_variant(entry_id, body.variant)
             settle(record, ctx)
             return planning_state(record)
@@ -408,39 +416,6 @@ def post_cursor(dataset_id: str, body: CursorRequest, deps: Deps) -> PlanningSta
     state = planning_state(record)
     ensure_precompute(record, ctx, deps.run_background)
     return state
-
-
-@router.put("/datasets/{dataset_id}/agreed/{request_id}", response_model=PlanningState)
-def put_agreed(dataset_id: str, request_id: str, body: AgreedWindow, deps: Deps) -> PlanningState:
-    """Диспетчер назвал клиенту окно (или сказал, что сегодня не приедем): отметка вкладки «Коммуникации».
-
-    Какое именно окно назвали, считает вкладка по плану, который у неё на экране: «клиенту называют слот
-    сетки» — правило разговора, и живёт оно там же, где разговор. Сервер помнит договорённость и показывает
-    её всем, кто открыл этот день, — и после перезапуска тоже.
-    """
-    record = _record(deps, dataset_id)
-    with record.lock:
-        session = _session(record)
-        if session.request(request_id) is None:
-            raise HTTPException(status_code=404, detail=f"Заявка {request_id} не найдена.")
-        record.mark_agreed(request_id, body)
-        return planning_state(record)
-
-
-@router.delete("/datasets/{dataset_id}/agreed/{request_id}", response_model=PlanningState)
-def delete_agreed(dataset_id: str, request_id: str, deps: Deps) -> PlanningState:
-    """Снимает отметку «договорились»: заявка снова попадёт в список звонков, если план с окном разошёлся.
-
-    Интерфейс диспетчера эту ручку не зовёт: строка уходит из блока «Согласовано» сама, как только план
-    снова расходится с тем, что знает клиент (frontend/src/lib/communications.ts). Ручка нужна контракту
-    API — снять отметку должно быть чем — и тестам вкладки «Коммуникации».
-    """
-    record = _record(deps, dataset_id)
-    with record.lock:
-        _session(record)
-        if not record.unmark_agreed(request_id):
-            raise HTTPException(status_code=404, detail=f"По заявке {request_id} договорённости нет.")
-        return planning_state(record)
 
 
 @router.get("/datasets/{dataset_id}/explain/{request_id}", response_model=Explanation)

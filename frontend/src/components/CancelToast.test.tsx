@@ -10,9 +10,10 @@ import * as api from '../api/client';
 import type { PlanningState } from '../api/types';
 import { cancelEvent } from '../lib/events';
 import { CANCEL_UNDO_MS, useAppStore } from '../store/useAppStore';
-import { makeDataUrgentState, makePlanningState } from '../test/fixtures';
+import { makeDataUrgentState, makeEventChoice, makePlanningState, makeTimelineItem } from '../test/fixtures';
 import { resetStore } from '../test/store';
 import { CancelToast } from './CancelToast';
+import { ChoiceDialog } from './events/ChoiceDialog';
 import { RequestsTab } from './panel/RequestsTab';
 
 const rowOf = (label: string) => screen.getByText(label).closest('li') as HTMLElement;
@@ -97,6 +98,32 @@ describe('CancelToast', () => {
     expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', cancelEvent('50104', '13:00'), undefined);
     expect(screen.queryByText('Заявка 50104 отменена')).toBeNull();
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  });
+
+  it('opens the choice when the server stops the time on the cancel sent after the countdown', async () => {
+    // У освободившейся бригады есть кому помочь: «Ничего не менять» оставляет больше заявок без инженера, чем пересчёт.
+    const event = cancelEvent('50104', '13:00');
+    const choice = makeEventChoice({ entry_id: 'tl_9', event, assignable: false });
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(
+      makePlanningState({ pending_choice: choice, timeline: [makeTimelineItem({ id: 'tl_9', event, status: 'awaiting', variant: null })] }),
+    );
+    renderDay();
+    render(<ChoiceDialog />);
+    cancelIn('50104');
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    await advance(CANCEL_UNDO_MS);
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', event, undefined);
+    expect(screen.queryByText('Заявка 50104 отменена')).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Отмена заявки 50104 в 13:00' })).toBeInTheDocument();
+    expect(useAppStore.getState()).toMatchObject({ clock: '13:00', playing: false });
+    // У отмены заявку отдавать некому: четвёртой карточки нет.
+    expect(screen.queryByRole('article', { name: 'Другая бригада…' })).toBeNull();
+
+    // Esc закрывает окно выбора, а не ищет отмену в уведомлении: её уже нет.
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(useAppStore.getState().dismissedChoice).toBe('tl_9');
   });
 
   it.each([

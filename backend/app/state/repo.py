@@ -20,7 +20,7 @@ from collections.abc import Collection
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Protocol
 
-from app.api.schemas import AgreedWindow, UploadReport
+from app.api.schemas import UploadReport
 from app.llm.schemas import Proposal
 from app.planning.models import EventVariant
 from app.planning.session import PlanningSession
@@ -82,7 +82,6 @@ class DayState:
     day_revision: int = 0
     last_number: int = 0
     last_version: int = 0
-    agreed: dict[str, AgreedWindow] = field(default_factory=dict)
     proposals: list[Proposal] = field(default_factory=list)
     urgent_number: int = 0
 
@@ -108,7 +107,7 @@ class DayWriter(Protocol):
         last_number: int,
         last_version: int,
     ) -> None:
-        """День с нуля: входные данные, утренний план, пустая шкала, текущее время 00:00, обзвона нет."""
+        """День с нуля: входные данные, утренний план, пустая шкала (а с ней и отметки звонков), время 00:00."""
 
     def save_cursor(self, cursor: int) -> None:
         """Текущее время плана."""
@@ -120,7 +119,7 @@ class DayWriter(Protocol):
         """Событие уходит со шкалы вместе с шагами, в которых участвовало; keys — что осталось в кэше."""
 
     def set_variant(self, entry_id: str, variant: EventVariant, *, revision: int, expect: int) -> None:
-        """Выбор или смена стратегии «ломающего» события."""
+        """Выбор или смена стратегии события."""
 
     def bump_number(self, last_number: int) -> None:
         """Номер последнего созданного события: tl_<n> не повторяются и после перезапуска."""
@@ -132,12 +131,6 @@ class DayWriter(Protocol):
 
     def keep_steps(self, keys: Collection[StepKey]) -> None:
         """Оставляет в кэше только эти шаги (плюс утренний план): то же, что делает Timeline.prune."""
-
-    def save_agreed(self, request_id: str, window: AgreedWindow) -> None:
-        """Согласованное окно вкладки «Коммуникации»: что клиенту сказали по телефону."""
-
-    def drop_agreed(self, request_id: str) -> None:
-        """Отметка «договорились» снята."""
 
     def save_proposals(self, proposals: Collection[Proposal], *, urgent_number: int) -> None:
         """Предложения помощника целиком: их немного, а статусы меняются по одному."""

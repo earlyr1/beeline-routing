@@ -1,6 +1,7 @@
 import { requestLabel } from '../lib/format';
 import { useAppStore } from '../store/useAppStore';
 import { CancelToast } from './CancelToast';
+import { DaySummary } from './DaySummary';
 import { DiffBanner } from './DiffBanner';
 import { ErrorToast } from './ErrorToast';
 import { ChoiceDialog } from './events/ChoiceDialog';
@@ -59,6 +60,7 @@ export function MainScreen() {
       {engineerDialog === 'transport' && <TransportChangeDialog />}
       {engineerDialog === 'unavailable' && <EngineerUnavailableDialog />}
       <ChoiceDialog />
+      <DaySummary />
       <div className="toast-stack">
         <CancelToast />
         <ErrorToast />

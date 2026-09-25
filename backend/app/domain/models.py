@@ -124,6 +124,15 @@ class Office(BaseModel):
     lon: float
 
 
+class TimeWindow(BaseModel):
+    """Окно клиента: с какого и по какое время он ждёт бригаду. Точного времени визита он не знает."""
+
+    start: HHMM
+    end: HHMM
+    # Окно «как можно скорее»: его задаёт сервер от времени события до конца смен, и называют его словами.
+    asap: bool = False
+
+
 class Event(BaseModel):
     type: EventType
     time: HHMM
@@ -140,6 +149,9 @@ class Event(BaseModel):
     # Переназначение заявки: request_id уходит бригаде engineer_id. previous_engineer_id (бригада заявки в плане до
     # события, null — заявка была без инженера) заполняет backend.
     previous_engineer_id: str | None = None
+    # «Коммуникация»: окно, которое диспетчер назвал клиенту по телефону по заявке request_id; null — сказал, что
+    # сегодня не приедем.
+    agreed_window: TimeWindow | None = None
 
     @model_validator(mode="after")
     def _payload(self) -> Event:
@@ -165,6 +177,8 @@ class Event(BaseModel):
                 raise ValueError("номер заявки в request_id и request.id не совпадает")
         if self.type == EventType.REQUEST_REASSIGNED and (not self.request_id or not self.engineer_id):
             raise ValueError("для переназначения заявки нужны request_id и engineer_id")
+        if self.type == EventType.CLIENT_AGREED and not self.request_id:
+            raise ValueError("для договорённости с клиентом нужен request_id")
         return self
 
 

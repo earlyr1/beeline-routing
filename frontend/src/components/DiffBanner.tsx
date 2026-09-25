@@ -26,7 +26,11 @@ export function DiffBanner() {
   const after = diff.metrics_after;
   const shifts = diff.time_shifts.filter((item) => item.delta_min !== 0).length;
   const forecast = diff.delay_forecast ?? null;
-  const forecastText = forecast ? forecastLines(forecast, requests, engineers) : [];
+  // Изменения — от последнего применённого события шкалы. Если оно прошло с «Ничего не менять», прогноз без
+  // перепланирования и есть план: опоздания в нём — факт, а не «опоздали бы».
+  const lastApplied = (state.timeline ?? []).filter((item) => item.status === 'applied').at(-1);
+  const kept = lastApplied?.variant === 'keep';
+  const forecastText = forecast ? forecastLines(forecast, requests, engineers, kept) : [];
   const lateTitle = forecast ? lateVisitsTitle(forecast, requests) : '';
   const forecastWarns = forecast !== null && (forecast.late_without_replan.length > 0 || forecast.overtime_without_replan_min > 0);
 
