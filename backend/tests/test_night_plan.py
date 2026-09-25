@@ -1,6 +1,8 @@
 """Ночной план: отпечаток задачи, выбор утреннего плана при сборке дня, API и scripts/night_plan.py. Без сети."""
 
 import json
+import os
+import shutil
 import subprocess
 import sys
 from dataclasses import replace
@@ -906,6 +908,55 @@ def test_script_refuses_an_unknown_region_and_a_silent_osrm(tmp_path, capsys):
     assert cli.main(["--region", REGION, "--osrm", "off"], env={"DATA_DIR": str(tmp_path)}) == 2
     assert "Укажите каталог явно: --out" in capsys.readouterr().err
     assert not night_file(tmp_path / "bundles").exists()
+
+
+def make_night(*overrides: str) -> subprocess.CompletedProcess[str]:
+    """make -n night из корня репозитория: команда, которую запустила бы цель, без самого расчёта.
+
+    Внешний make (make test) и окружение не подмешивают свои LEVEL, LUNCH и флаги: цель видит только overrides.
+    """
+    outer = {"MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "MAKELEVEL", "LEVEL", "LUNCH", "MINUTES", "REGION"}
+    env = {name: value for name, value in os.environ.items() if name not in outer}
+    return subprocess.run(
+        ["make", "-n", "-C", str(BACKEND_DIR.parent), "night", *overrides],
+        env=env,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=60,
+    )
+
+
+needs_make = pytest.mark.skipif(
+    shutil.which("make") is None or not (BACKEND_DIR.parent / "Makefile").exists(),
+    reason="нужны make и Makefile",
+)
+
+
+@needs_make
+@pytest.mark.parametrize(
+    ("overrides", "flags"),
+    [
+        ((), []),
+        (("LEVEL=2",), ["--level 2"]),
+        (("LEVEL=2", "LUNCH=0"), ["--level 2", "--no-lunch"]),
+        (("LUNCH=1",), []),
+    ],
+)
+def test_make_night_passes_the_pair_of_the_night_plan(overrides, flags):
+    run = make_night(*overrides)
+    assert run.returncode == 0, run.stderr
+    assert "python -m scripts.night_plan --region all --minutes 120" in run.stdout
+    assert [flag for flag in ("--level 2", "--no-lunch") if flag in run.stdout] == flags
+
+
+@needs_make
+@pytest.mark.parametrize("lunch", ["no", "false", "off", "нет"])
+def test_make_night_refuses_a_lunch_other_than_0_or_1(lunch):
+    # Иначе LUNCH=no молча считал бы пару с обедом, и ночь расчёта ушла бы не на тот файл.
+    run = make_night("LEVEL=2", f"LUNCH={lunch}")
+    assert run.returncode != 0
+    assert f"LUNCH={lunch}" in run.stderr and "0 — без обеда" in run.stderr
+    assert "scripts.night_plan" not in run.stdout
 
 
 def test_script_defaults_keep_every_process_on_its_own_core():
