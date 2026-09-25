@@ -3,21 +3,27 @@
 Запуск из каталога backend, на ночь — под caffeinate, чтобы Mac не уснул от бездействия посреди поиска (от закрытой
 крышки caffeinate -i не спасает):
   caffeinate -i ~/.local/bin/uv run python -m scripts.night_plan --region all --minutes 120
+  caffeinate -i ~/.local/bin/uv run python -m scripts.night_plan --region all --minutes 120 --level 2
   ~/.local/bin/uv run python -m scripts.night_plan --region east --minutes 1 --out /tmp/night
 
 День региона собирается тем же кодом, что и в сервисе: бандл data/bundles/<регион>/bundle.json, контекст
-планирования сервиса (app/api/deps.py, planning_context) с OSRM и матрицами 2ГИС из data/transit,
-нагрузка по умолчанию и обед по плану. Поэтому отпечаток задачи в файле совпадает с тем, что посчитает сервис на тех
-же бандлах, OSRM и файлах 2ГИС, и сервис берёт ночной план утренним без поиска (app/planning/night.py).
+планирования сервиса (app/api/deps.py, planning_context) с OSRM и матрицами 2ГИС из data/transit, уровень нагрузки
+из --level (по умолчанию «Обычный день») и обед по плану, если нет --no-lunch. Задача, веса цели и запас на дорогу —
+те же, что у сервиса при загрузке дня с этими нагрузкой и обедом. Поэтому отпечаток задачи в файле совпадает с тем,
+что посчитает сервис на тех же бандлах, OSRM и файлах 2ГИС, и сервис берёт ночной план утренним без поиска
+(app/planning/night.py).
 
 Перед долгим поиском регион ищется так же, как сервис при загрузке дня: те же стратегии (SOLVER_WORKERS) и лимит
-(SOLVER_TIME_LIMIT_LUNCH_S, 30 с). Это честная точка сравнения на той же задаче, и долгий поиск стартует от лучшего
-из этого плана и прежнего ночного, поэтому записанный план по цели не хуже плана этого живого поиска.
+дня с этим обедом (SOLVER_TIME_LIMIT_LUNCH_S, 30 с; без обеда SOLVER_TIME_LIMIT_S, 5 с). Это честная точка
+сравнения на той же задаче, и долгий поиск стартует от лучшего из этого плана и прежнего ночного, поэтому
+записанный план по цели не хуже плана этого живого поиска.
 
-Результат — data/bundles/<регион>/night_plan.json (каталог меняет --out): рядом с бандлом, поэтому ночной план
-попадает в образ backend при пересборке. В файле только номера и числа. Прежний файл с тем же отпечатком, который
-дешевле по цели, не перезаписывается. Если OSRM не ответил на запрос матрицы и расстояния ушли на прямую, регион
-не записывается: такой отпечаток сервис с OSRM не повторит. По той же причине --osrm off работает только с --out.
+Результат — файл пары (уровень нагрузки, обед) рядом с бандлом (каталог меняет --out): «Обычный день» с обедом —
+data/bundles/<регион>/night_plan.json, остальные — night_plan_level<N>.json и night_plan_level<N>_nolunch.json
+(app/planning/night.py, night_plan_path). Так ночной план попадает в образ backend при пересборке. В файле только
+номера и числа. Прежний файл той же пары с тем же отпечатком, который дешевле по цели, не перезаписывается. Если
+OSRM не ответил на запрос матрицы и расстояния ушли на прямую, регион не записывается: такой отпечаток сервис с OSRM
+не повторит. По той же причине --osrm off работает только с --out.
 """
 
 from __future__ import annotations
@@ -44,13 +50,20 @@ from app.planning.night import (
     NightPlanUnreadable,
     load_night_plan,
     night_plan_path,
+    pair_text,
     plan_routes,
     problem_fingerprint,
     routes_plan,
     save_night_plan,
 )
 from app.planning.session import PlanningContext, day_problem, search_plan
-from app.planning.workload import DEFAULT_WORKLOAD_LEVEL, workload_weights
+from app.planning.workload import (
+    DEFAULT_WORKLOAD_LEVEL,
+    WORKLOAD_LEVEL_TEXT,
+    WORKLOAD_LEVELS,
+    is_workload_level,
+    workload_weights,
+)
 from app.settings import Settings
 from app.solvers.portfolio import PORTFOLIO, SolverPool, plan_cost
 from app.solvers.problem import Problem
@@ -70,6 +83,7 @@ REBUILD = (
 )
 # Строка оптимизированного плана в report.md бандла: её посчитал prepare поиском с лимитом по умолчанию (30 с),
 # с OSRM, но без матриц 2ГИС, то есть на другой задаче: матрицы лежат в репозитории, и у сервиса они есть всегда.
+# Нагрузка там по умолчанию, обед по плану.
 REPORT_ROW = "Оптимизированный"
 # Поиск, который шёл заметно меньше лимита: OR-Tools считает лимит по настенным часам, а монотонные часы
 # в сне Mac стоят. Так видно, что Mac засыпал посреди поиска.
@@ -204,21 +218,25 @@ def run_region(
     workers: int,
     in_process: bool,
     live: LiveSearch,
+    workload_level: int,
+    lunch_enabled: bool,
 ) -> RegionResult:
-    """Ищет ночной план одного региона и пишет файл, если он не хуже прежнего с тем же отпечатком.
+    """Ищет ночной план одного региона для пары (уровень нагрузки, обед) и пишет файл этой пары, если план не хуже
+    прежнего с тем же отпечатком.
 
+    Задача, веса и лимит живого поиска — как у сервиса при загрузке дня с этими нагрузкой и обедом (start_session).
     Сначала — поиск, как у сервиса при загрузке дня, на той же задаче; долгий поиск стартует от лучшего из его плана
-    и прежнего ночного.
+    и прежнего ночного той же пары.
     """
     started = time.monotonic()
     result = RegionResult(region)
     bundle: Bundle = load_bundle(bundles_dir / region / "bundle.json")
-    weights = workload_weights(DEFAULT_WORKLOAD_LEVEL)
-    problem = day_problem(bundle.requests, bundle.engineers, ctx, DEFAULT_WORKLOAD_LEVEL, True)
+    weights = workload_weights(workload_level)
+    problem = day_problem(bundle.requests, bundle.engineers, ctx, workload_level, lunch_enabled)
     fingerprint = problem_fingerprint(problem, weights)
     result.lines.append(
-        f"{bundle.office.title} ({region}): матрица {problem.travel.base.source}, {transit_text(problem)}, "
-        f"отпечаток {fingerprint[:16]}…"
+        f"{bundle.office.title} ({region}), {pair_text(workload_level, lunch_enabled)}: матрица "
+        f"{problem.travel.base.source}, {transit_text(problem)}, отпечаток {fingerprint[:16]}…"
     )
     if ctx.osrm is not None and problem.travel.base.source != "osrm":
         # OSRM ответил на проверку при старте, но не на запрос матрицы: расстояния ушли на прямую. Отпечаток такой
@@ -229,7 +247,7 @@ def run_region(
         )
         return result
 
-    path = night_plan_path(out_dir, region)
+    path = night_plan_path(out_dir, region, workload_level, lunch_enabled)
     previous_note = "нет"
     previous = None
     try:
@@ -248,7 +266,7 @@ def run_region(
         )
 
     # Поиск, как у сервиса при загрузке дня, на той же задаче: с ним и сравнивать долгий поиск.
-    live_limit_s = ctx.day_time_limit_s(True)
+    live_limit_s = ctx.day_time_limit_s(lunch_enabled)
     with live.lock:
         live_plan = search_plan(problem, weights, live_limit_s, live.pool)
     live_cost = plan_cost(problem, live_plan, weights)
@@ -288,8 +306,14 @@ def run_region(
     result.lines.append(row("прежний ночной план", previous_note))
     report = report_metrics(bundles_dir / region / "report.md")
     report_text = metrics_text(report) if report else "строки нет"
-    if report and problem.travel.transit is not None:
-        report_text += " — другая задача: общественный транспорт там по формуле, а не по 2ГИС"
+    if report:
+        other = []
+        if problem.travel.transit is not None:
+            other.append("общественный транспорт там по формуле, а не по 2ГИС")
+        if (workload_level, lunch_enabled) != (DEFAULT_WORKLOAD_LEVEL, True):
+            other.append(f"там {pair_text(DEFAULT_WORKLOAD_LEVEL, True)}")
+        if other:
+            report_text += " — другая задача: " + "; ".join(other)
     result.lines.append(row("report.md (30 с, без 2ГИС)", report_text))
     control = bundle.control_plan.metrics if bundle.control_plan is not None else None
     result.lines.append(row("диспетчеры", metrics_text(control) if control else "плана нет"))
@@ -315,8 +339,8 @@ def run_region(
             search_s=max(1, round(total_s)),
             workers=searches,
             computed_at=datetime.now().astimezone().isoformat(timespec="seconds"),
-            workload_level=DEFAULT_WORKLOAD_LEVEL,
-            lunch_enabled=True,
+            workload_level=workload_level,
+            lunch_enabled=lunch_enabled,
             cost=cost,
             metrics=night_metrics(plan.metrics),
             routes=plan_routes(plan),
@@ -358,6 +382,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         type=int,
         help="регионов одновременно (по умолчанию так, чтобы процессов было не больше ядер)",
     )
+    parser.add_argument(
+        "--level",
+        type=int,
+        default=DEFAULT_WORKLOAD_LEVEL,
+        help=(
+            f"уровень нагрузки от 0 до {len(WORKLOAD_LEVELS) - 1}: "
+            + ", ".join(f"{level} — «{item.title}»" for level, item in enumerate(WORKLOAD_LEVELS))
+            + f" (по умолчанию {DEFAULT_WORKLOAD_LEVEL})"
+        ),
+    )
+    parser.add_argument(
+        "--no-lunch",
+        action="store_true",
+        help="день без обеда по плану (по умолчанию с обедом); ночной план пишется в файл своей пары",
+    )
     parser.add_argument("--out", type=Path, help="каталог ночных планов (по умолчанию data/bundles)")
     parser.add_argument(
         "--osrm",
@@ -383,6 +422,10 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
     if args.minutes <= 0:
         print("Лимит поиска --minutes должен быть больше нуля", file=sys.stderr)
         return 2
+    if not is_workload_level(args.level):
+        print(f"--level: {WORKLOAD_LEVEL_TEXT}", file=sys.stderr)
+        return 2
+    level, lunch = args.level, not args.no_lunch
     try:
         regions = pick_regions(settings.bundles_dir, args.region)
     except RegionsNotFound as error:
@@ -413,18 +456,20 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         return 2
     out_dir = args.out or settings.bundles_dir
     limit_s = time_limit_s(args.minutes)
-    # Поиск, как у сервиса при загрузке дня: тот же лимит и столько же стратегий, по региону за раз.
-    live_limit_s = settings.solver_time_limit_lunch_s
+    # Без кэша OSRM: ночной расчёт берёт матрицу у того OSRM, что работает сейчас, а не из старого кэша.
+    ctx = planning_context(settings, osrm, None)
+    # Поиск, как у сервиса при загрузке дня с этим обедом: тот же лимит и столько же стратегий, по региону за раз.
+    live_limit_s = ctx.day_time_limit_s(lunch)
     live_workers = settings.solver_workers
 
     print(CAFFEINATE)
     rounds = math.ceil(len(regions) / parallel)
     finish = datetime.now() + timedelta(seconds=rounds * limit_s + len(regions) * live_limit_s)
     print(
-        f"регионов: {len(regions)} ({', '.join(regions)}), одновременно: {parallel}, процессов на регион: "
-        f"{workers}, поиск {search_text(limit_s)} на регион; перед ним поиск, как у сервиса при загрузке "
-        f"({search_text(live_limit_s)}, стратегий {min(live_workers, len(PORTFOLIO))}), по региону за раз; "
-        f"закончится около {finish:%H:%M}"
+        f"{pair_text(level, lunch)}; регионов: {len(regions)} ({', '.join(regions)}), одновременно: {parallel}, "
+        f"процессов на регион: {workers}, поиск {search_text(limit_s)} на регион; перед ним поиск, как у сервиса "
+        f"при загрузке ({search_text(live_limit_s)}, стратегий {min(live_workers, len(PORTFOLIO))}), по региону "
+        f"за раз; закончится около {finish:%H:%M}"
     )
     if workers > len(PORTFOLIO):
         print(f"больше {len(PORTFOLIO)} процессов на регион не нужно: в портфеле {len(PORTFOLIO)} стратегии")
@@ -432,8 +477,6 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         print(f"процессов {workers * parallel} больше, чем ядер ({cpu}): поиски будут мешать друг другу")
     print(f"{osrm_note}; каталог ночных планов: {out_dir}", flush=True)
 
-    # Без кэша OSRM: ночной расчёт берёт матрицу у того OSRM, что работает сейчас, а не из старого кэша.
-    ctx = planning_context(settings, osrm, None)
     # Поиск одного региона в одном процессе идёт прямо здесь: так быстрее на маленьких задачах и в тестах.
     in_process = workers == 1 and parallel == 1
     # Пул живого поиска — как у сервиса (app/api/deps.py, build_deps): при SOLVER_WORKERS 1 поиск идёт на месте.
@@ -443,7 +486,7 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
     def job(region: str) -> RegionResult:
         try:
             result = run_region(
-                region, settings.bundles_dir, out_dir, ctx, limit_s, workers, in_process, live
+                region, settings.bundles_dir, out_dir, ctx, limit_s, workers, in_process, live, level, lunch
             )
         except Exception as error:  # noqa: BLE001 - сбой одного региона не должен стоить ночи остальным
             result = RegionResult(region, [f"{region}: ночной план не посчитан — {error!r}"], failed=True)

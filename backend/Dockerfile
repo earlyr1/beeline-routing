@@ -13,6 +13,7 @@ COPY backend/pyproject.toml backend/uv.lock ./
 RUN uv sync --frozen --no-dev
 
 COPY backend/ ./
+# Бандлы регионов и ночные планы всех пар «нагрузка, обед» (night_plan*.json): каталог целиком, без отбора файлов.
 COPY data/bundles /app/data/bundles
 COPY data/geocode_cache.json /app/data/geocode_cache.json
 # Матрицы общественного транспорта от 2ГИС: в образе, чтобы сервис считал одинаково на любой машине и без сети.
