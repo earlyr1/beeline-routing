@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Literal, cast
 
@@ -29,22 +29,66 @@ from app.llm.client import LlmResult, ToolCall
 from app.planning.facts import EDITABLE_REQUEST_FIELDS, EventRejected, window_order_text
 from app.planning.session import PlanningContext, PlanningSession, check_event
 
+# Помощник не задаёт вопросов: памяти между сообщениями нет, и ответ на вопрос модель прочла бы без самого вопроса.
+# Что сообщение не понято, диспетчер читает одной фразой «Не понял: <причина>.» и пишет сообщение целиком заново.
+# Причины (из not_understood, от поиска инженера и заявки, от разбора) пишутся с маленькой буквы и без точки.
+NOT_UNDERSTOOD_TOOL = "not_understood"
+# Инструмент уточняющего вопроса, которого больше нет: модель со старой памятью ещё может его назвать, и её вопрос
+# читается как причина not_understood.
+LEGACY_CLARIFY_TOOL = "ask_clarification"
+REWRITE_HINT = "Напишите сообщение целиком ещё раз — прошлых сообщений помощник не помнит."
+# Понята часть сообщения: написать его целиком ещё раз значит получить понятое вторым предложением, а «Применить
+# все» внесло бы в план две одинаковые аварии или две задержки. Поэтому заново пишется только непонятое.
+PARTIAL_HINT = (
+    "Остальное — в предложениях ниже. Непонятое напишите отдельным сообщением, целиком: "
+    "прошлых сообщений помощник не помнит."
+)
+# «Не понял» без причины: модель её не назвала или вместо причины написала вопрос.
+NO_REASON = "Не понял, что изменить в плане."
+NO_REASON_PARTIAL = "Не понял часть сообщения."
 NOTHING_FOUND = (
-    "Не нашёл в сообщении изменений плана. Опишите, что случилось: отмена заявки, "
-    "срочная заявка, изменение заявки, недоступность инженера, смена транспорта или задержка инженера."
+    "в сообщении нет изменения плана (отмена заявки, срочная заявка, изменение заявки, недоступность инженера, "
+    "смена транспорта или задержка инженера)"
+)
+# Своё «Не понял», «Непонятно, …» или «Уточните, …» в начале причины: второе «Не понял» в ответе лишнее.
+_NOT_UNDERSTOOD_PREFIX = re.compile(
+    r"^(?:(?:не\s+понял[аи]?|не\s+понимаю|не\s+могу\s+понять|не\s*понятно|не\s*ясно)\b[\s:,.!—–-]*"
+    r"|(?:уточните|укажите)\s*[,:]\s*)+",
+    re.IGNORECASE,
+)
+# Не причина, а вопрос или просьба к диспетчеру: вопрос внутри текста («Кто заболел? Уточните фамилию»), «Укажите …».
+# Не причина: вопрос или просьба к диспетчеру, а также служебный текст — вызов инструмента или JSON, который модель
+# написала словами вместо вызова («propose_engineer_unavailable {\"engineer_id\": …}»): диспетчеру его не показываем.
+_NOT_A_REASON = re.compile(
+    r"\?|[{}\[\]]|\b[a-z]+_[a-z_]+\b|\b(?:уточните|укажите|подскажите|скажите|назовите|напишите)\b",
+    re.IGNORECASE,
+)
+MAX_REASON_LEN = 200
+# Слова, с которых причина начинается с маленькой буквы после «Не понял:». Заглавную опускаем только у них:
+# фамилия инженера в начале причины должна остаться с большой.
+_LOWER_LEAD = re.compile(
+    r"(?:не|нет|ни|в|во|на|с|со|у|к|о|по|до|из|от|для|при|без|кто|кого|что|чего|как(?:ой|ая|ое|ие|ого|ую|их)?"
+    r"|где|куда|когда|сколько|насколько|почему|зачем|инженер\w*|заявк\w*|окн[оа]|время|адрес|длительность"
+    r"|срочн\w*)\b",
+    re.IGNORECASE,
 )
 # Возврат отменённой заявки убран из интерфейса и из инструментов помощника: передумать можно только в уведомлении
-# сразу после отмены. На просьбу вернуть помощник честно говорит, что так нельзя, а не молчит.
+# сразу после отмены. На просьбу вернуть помощник честно говорит, что так нельзя, а не молчит, — в том числе рядом
+# с предложениями по остальному сообщению: для этого у модели есть инструмент restore_not_supported.
 RESTORE_UNSUPPORTED = (
     "Вернуть отменённую заявку нельзя: передумать можно только в первые 5 секунд после отмены, в уведомлении. "
     "Если клиент снова ждёт визит, добавьте срочную заявку."
 )
+RESTORE_TOOL = "restore_not_supported"
 # Инструмент возврата, которого больше нет: модель со старой памятью ещё может его назвать.
 LEGACY_RESTORE_TOOL = "propose_restore"
 _RESTORE_WORDS = re.compile(
     r"\bверн(?:и|ите|уть|ём|ем|ёт|ет|ул|ула|ули)\b|снова в силе|\bвозврат", re.IGNORECASE
 )
-URGENT_WINDOW_MISSING = "Укажите окно визита или отметьте, что заявка как можно скорее."
+_REFUSED = re.compile(r"не\s+поддерживается|нельзя|невозможно", re.IGNORECASE)
+URGENT_WINDOW_MISSING = (
+    "у срочной заявки названа одна граница окна, а нужно окно целиком или «как можно скорее»"
+)
 
 
 def _norm(value: str) -> str:
@@ -128,18 +172,13 @@ class RequestUpdateArgs(RequestArgs):
     asap: bool | None = None
 
 
-class ClarifyArgs(BaseModel):
-    question: str = Field(min_length=1)
-
-
-ARGUMENT_MODELS: dict[str, type[_TimedArgs] | type[ClarifyArgs]] = {
+ARGUMENT_MODELS: dict[str, type[_TimedArgs]] = {
     "propose_urgent_request": UrgentArgs,
     "propose_cancel": RequestArgs,
     "propose_engineer_unavailable": EngineerArgs,
     "propose_engineer_transport_change": TransportChangeArgs,
     "propose_request_update": RequestUpdateArgs,
     "propose_engineer_delay": EngineerDelayArgs,
-    "ask_clarification": ClarifyArgs,
 }
 
 
@@ -152,12 +191,21 @@ class ProposalDraft:
 
 @dataclass
 class Interpretation:
+    """drafts — предложения; not_understood — причины, по которым часть сообщения не понята (None — модель не назвала
+    причину); notices — ответы без «Не понял» (честный отказ вернуть заявку); prose — текст, который модель написала
+    вместо инструментов."""
+
     drafts: list[ProposalDraft] = field(default_factory=list)
-    clarifications: list[str] = field(default_factory=list)
+    not_understood: list[str | None] = field(default_factory=list)
+    notices: list[str] = field(default_factory=list)
+    prose: str | None = None
 
 
 class Unresolved(ValueError):
-    """Модель назвала инженера или заявку, которых нельзя однозначно найти, или не сказала, что менять."""
+    """Модель назвала инженера или заявку, которых нельзя однозначно найти, или не сказала, что менять.
+
+    Текст — причина для «Не понял: …»: с маленькой буквы и без точки в конце.
+    """
 
 
 class Refused(ValueError):
@@ -176,9 +224,9 @@ def resolve_engineer(session: PlanningSession, value: str) -> str:
     if len(matches) == 1:
         return matches[0].id
     if not matches:
-        raise Unresolved(f"Инженер «{value}» не найден.")
+        raise Unresolved(f"инженер «{value}» не найден")
     names = ", ".join(engineer.name for engineer in matches[:5])
-    raise Unresolved(f"Под «{value}» подходят несколько инженеров: {names}. Уточните, кого вы имеете в виду.")
+    raise Unresolved(f"под «{value}» подходят несколько инженеров: {names}")
 
 
 # Во фронте срочная заявка подписана «URG-<номер>», в том числе заявка дня со своим билайновским номером.
@@ -199,11 +247,11 @@ def resolve_request(session: PlanningSession, value: str) -> str:
     if len(matches) == 1:
         return matches[0].id
     if not matches:
-        raise Unresolved(f"Заявка «{value}» не найдена.")
+        raise Unresolved(f"заявка «{value}» не найдена")
     listed = "; ".join(
         f"{request_label(request.id, request.priority)} ({request.address})" for request in matches[:5]
     )
-    raise Unresolved(f"Под «{value}» подходят несколько заявок: {listed}. Уточните номер.")
+    raise Unresolved(f"под «{value}» подходят несколько заявок: {listed}")
 
 
 def _validation_text(error: ValidationError) -> str:
@@ -216,8 +264,8 @@ def _on_grid(ctx: PlanningContext, window_start: int, window_end: int, notes: li
     Слот берётся по началу окна (app/domain/windows.py), поэтому «с часу до четырёх» становится слотом ещё до
     того, как из предложения соберётся событие, — но не молча: сдвиг уходит строкой в предложение, и диспетчер
     видит в карточке и то, о чём просили, и то, что он подтверждает. Время вне рабочего дня своего слота не имеет,
-    и ближайший слот означал бы совсем другое окно (с 22:00 до 23:00 уехало бы назад, в 20:00–22:00): про такое
-    окно помощник переспрашивает. Сетки в контексте нет — окно как есть.
+    и ближайший слот означал бы совсем другое окно (с 22:00 до 23:00 уехало бы назад, в 20:00–22:00): на такое
+    окно помощник отвечает «Не понял» и перечисляет слоты. Сетки в контексте нет — окно как есть.
     """
     slot = slot_for(ctx.window_grid, window_start)
     if slot is None:
@@ -225,7 +273,7 @@ def _on_grid(ctx: PlanningContext, window_start: int, window_end: int, notes: li
     named = f"{fmt_hhmm(window_start)}–{fmt_hhmm(window_end)}"
     if not slot.start <= window_start < slot.end:
         raise Unresolved(
-            f"Окна {named} в сетке нет: клиенту называют слот. Выберите один из: {slots_text(ctx.window_grid)}."
+            f"окна {named} нет в сетке, клиенту называют один из слотов: {slots_text(ctx.window_grid)}"
         )
     if (slot.start, slot.end) != (window_start, window_end):
         notes.append(f"Окно {named} положено на слот {fmt_hhmm(slot.start)}–{fmt_hhmm(slot.end)}.")
@@ -239,8 +287,8 @@ def _updated_request(
     changes = args.model_dump(include=set(EDITABLE_REQUEST_FIELDS), exclude_none=True)
     if not changes:
         raise Unresolved(
-            f"Не понял, что изменить в заявке {request_label(stored.id, stored.priority)}. "
-            "Уточните окно, длительность, адрес или другое поле."
+            f"не сказано, что изменить в заявке {request_label(stored.id, stored.priority)}: "
+            "окно, длительность, адрес или другое поле"
         )
     if changes.get("asap"):
         # Окно заявки «как можно скорее» задаёт backend, названное окно не используется.
@@ -336,7 +384,7 @@ def _build_event(
         )
     urgent = cast(UrgentArgs, args)
     # Срочная заявка без названного окна — «как можно скорее», даже если модель забыла asap=true: так YandexGPT
-    # отвечал на «Срочно авария на …». Переспрашиваем, только если названа одна граница окна.
+    # отвечал на «Срочно авария на …». «Не понял» — только если названа одна граница окна.
     no_window = urgent.window_start is None and urgent.window_end is None
     if urgent.asap or no_window:
         # Окно заявки «как можно скорее» заполнит проверка события: от времени события до конца смен.
@@ -371,27 +419,32 @@ def _interpret_call(
     seen: set[tuple],
     now: int,
 ) -> None:
-    if call.name == LEGACY_RESTORE_TOOL:
-        out.clarifications.append(RESTORE_UNSUPPORTED)
+    if call.name in (RESTORE_TOOL, LEGACY_RESTORE_TOOL):
+        out.notices.append(RESTORE_UNSUPPORTED)
+        return
+    if call.name in (NOT_UNDERSTOOD_TOOL, LEGACY_CLARIFY_TOOL):
+        # Причину не проверяем строго: и без неё диспетчер должен прочесть, что сообщение не понято.
+        arguments = call.arguments or {}
+        said = arguments.get("reason") or arguments.get("question")
+        if isinstance(said, str) and _RESTORE_WORDS.search(said) and _REFUSED.search(said):
+            # Модель отказала в возврате через «не понял»: повторять сообщение незачем, диспетчеру — честный отказ.
+            out.notices.append(RESTORE_UNSUPPORTED)
+        else:
+            out.not_understood.append(_reason(said))
         return
     model = ARGUMENT_MODELS.get(call.name)
     if model is None:
-        out.clarifications.append(
-            f"Помощник предложил неизвестное действие «{call.name}». Переформулируйте запрос."
-        )
+        out.not_understood.append(f"помощник предложил неизвестное действие «{call.name}»")
         return
     if call.arguments is None:
-        out.clarifications.append(f"Не удалось разобрать предложение «{call.name}»: {call.error}.")
+        out.not_understood.append(f"не удалось разобрать предложение «{call.name}»: {call.error}")
         return
     try:
         args = model.model_validate(call.arguments)
     except ValidationError as error:
-        out.clarifications.append(
-            f"Не удалось разобрать предложение «{call.name}»: {_validation_text(error)}."
+        out.not_understood.append(
+            f"не удалось разобрать предложение «{call.name}»: {_validation_text(error)}"
         )
-        return
-    if isinstance(args, ClarifyArgs):
-        out.clarifications.append(args.question.strip())
         return
     refusal: str | None = None
     notes: list[str] = []
@@ -400,11 +453,11 @@ def _interpret_call(
     except Refused as error:
         event, refusal = error.event, str(error)
     except Unresolved as error:
-        out.clarifications.append(str(error))
+        out.not_understood.append(str(error))
         return
     except ValidationError as error:
-        out.clarifications.append(
-            f"Не удалось разобрать предложение «{call.name}»: {_validation_text(error)}."
+        out.not_understood.append(
+            f"не удалось разобрать предложение «{call.name}»: {_validation_text(error)}"
         )
         return
 
@@ -448,16 +501,58 @@ def _interpret_call(
             ProposalDraft(
                 event=stored,
                 rationale=rationale,
-                error=f"Адрес «{stored.request.address}» не найден на карте. Уточните адрес или добавьте заявку вручную с точкой на карте.",
+                error=f"Адрес «{stored.request.address}» не найден на карте. Напишите сообщение ещё раз с точным адресом или добавьте заявку вручную с точкой на карте.",
             )
         )
         return
     out.drafts.append(ProposalDraft(event=stored, rationale=rationale))
 
 
-def nothing_found(text: str) -> str:
-    """Ответ, когда помощник не нашёл ни изменений, ни вопроса: просьба вернуть заявку получает честный отказ."""
-    return RESTORE_UNSUPPORTED if _RESTORE_WORDS.search(text) else NOTHING_FOUND
+def _reason(value: object) -> str | None:
+    """Причина от модели в виде, в котором она встаёт в «Не понял: …»: без своего «Не понял», точки и вопросительного
+    знака, с маленькой буквы. None — причины нет или вместо неё вопрос к диспетчеру («Кто заболел? Уточните фамилию»):
+    ответить на него нельзя, и помощник говорит «Не понял» без причины."""
+    if not isinstance(value, str):
+        return None
+    reason = _NOT_UNDERSTOOD_PREFIX.sub("", " ".join(value.split())).rstrip(" .?!…;:")
+    if not reason or len(reason) > MAX_REASON_LEN or _NOT_A_REASON.search(reason):
+        return None
+    if _LOWER_LEAD.match(reason):
+        reason = reason[0].lower() + reason[1:]
+    return reason
+
+
+def not_understood_text(reasons: Sequence[str | None], partial: bool = False) -> str:
+    """«Не понял» один раз на все причины и просьба написать сообщение целиком: вопрос помощник не запомнит.
+
+    partial — часть сообщения понята и ушла в предложения: тогда заново пишется только непонятое.
+    """
+    unique = list(dict.fromkeys(reason for reason in reasons if reason))
+    hint = PARTIAL_HINT if partial else REWRITE_HINT
+    if not unique:
+        return f"{NO_REASON_PARTIAL if partial else NO_REASON} {hint}"
+    if len(unique) == 1:
+        return f"Не понял: {unique[0]}. {hint}"
+    listed = ";\n".join(f"— {reason}" for reason in unique)
+    return f"Не понял:\n{listed}.\n{hint}"
+
+
+def reply_text(out: Interpretation, text: str) -> str | None:
+    """Ответ диспетчеру рядом с предложениями; text — его сообщение. None — сказать нечего, есть предложения.
+
+    Если модель не предложила ничего и не назвала причину, просьба вернуть заявку получает честный отказ, а в
+    остальном «Не понял» с тем, что модель написала текстом, или с тем, какие изменения помощник понимает.
+    """
+    notices = list(dict.fromkeys(out.notices))
+    reasons = list(out.not_understood)
+    if not (out.drafts or notices or reasons):
+        if _RESTORE_WORDS.search(text):
+            notices.append(RESTORE_UNSUPPORTED)
+        else:
+            reasons.append(_reason(out.prose) if out.prose else NOTHING_FOUND)
+    if reasons:
+        notices.append(not_understood_text(reasons, partial=bool(out.drafts)))
+    return "\n".join(notices) or None
 
 
 def interpret(
@@ -473,5 +568,5 @@ def interpret(
     for call in result.calls:
         _interpret_call(call, session, ctx, new_request_id, out, seen, session.now if now is None else now)
     if not result.calls and result.text and result.text.strip():
-        out.clarifications.append(result.text.strip())
+        out.prose = result.text.strip()
     return out

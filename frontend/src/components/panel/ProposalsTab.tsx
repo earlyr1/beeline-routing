@@ -88,6 +88,7 @@ export function ProposalsTab() {
         onSubmit={async (event) => {
           event.preventDefault();
           const message = text.trim();
+          // После «Не понял» без предложений текст остаётся в поле: его пишут заново целиком, и проще поправить.
           if (message && (await send(message))) setText('');
         }}
       >

@@ -38,7 +38,7 @@ def main(argv: list[str]) -> int:
     reply = call("POST", f"{base}/datasets/{dataset_id}/chat", body, {"Content-Type": "application/json"})
     print(f"ответ помощника за {time.monotonic() - started:.1f} с")
     if reply["clarification"]:
-        print("уточнение:", reply["clarification"])
+        print("помощник:", reply["clarification"])
     for proposal in reply["proposals"]:
         event = json.dumps(proposal["event"], ensure_ascii=False)
         error = f" | ошибка: {proposal['error']}" if proposal["error"] else ""

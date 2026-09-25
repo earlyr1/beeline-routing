@@ -56,7 +56,7 @@ def test_transport_change_goes_from_provider_to_pending_draft(mode):
 
     assert result.mode == mode
     interpretation = interpret(result, session, ctx, ids())
-    assert interpretation.clarifications == []
+    assert interpretation.not_understood == []
     [draft] = interpretation.drafts
     assert (draft.event.type, draft.event.engineer_id, draft.event.transport, draft.event.time) == (
         EventType.ENGINEER_TRANSPORT_CHANGED,
@@ -130,7 +130,7 @@ def test_request_update_goes_from_provider_to_pending_draft(mode):
 
     assert result.mode == mode
     interpretation = interpret(result, session, ctx, ids())
-    assert interpretation.clarifications == []
+    assert interpretation.not_understood == []
     [draft] = interpretation.drafts
     before = session.request("R2")
     assert (draft.event.type, draft.event.request_id, draft.event.time, draft.error) == (
@@ -199,7 +199,7 @@ def test_engineer_delay_goes_from_provider_to_pending_draft(mode):
 
     assert result.mode == mode
     interpretation = interpret(result, session, ctx, ids())
-    assert interpretation.clarifications == []
+    assert interpretation.not_understood == []
     [draft] = interpretation.drafts
     assert (
         draft.event.type,
@@ -230,7 +230,7 @@ def test_tools_mode_sends_eight_tools_and_parses_calls():
                 tool_call(
                     "propose_cancel", {"request_id": "R2", "time": "13:00", "rationale": "Клиент отказался"}
                 ),
-                tool_call("ask_clarification", {"question": "Кто именно заболел?"}, "call_2"),
+                tool_call("not_understood", {"reason": "не сказано, кто заболел"}, "call_2"),
             ]
         )
     )
@@ -239,7 +239,7 @@ def test_tools_mode_sends_eight_tools_and_parses_calls():
     assert result.mode == "tools"
     assert result.calls == [
         ToolCall("propose_cancel", {"request_id": "R2", "time": "13:00", "rationale": "Клиент отказался"}),
-        ToolCall("ask_clarification", {"question": "Кто именно заболел?"}),
+        ToolCall("not_understood", {"reason": "не сказано, кто заболел"}),
     ]
     request = provider.requests[0]
     body = provider.bodies()[0]
@@ -253,7 +253,8 @@ def test_tools_mode_sends_eight_tools_and_parses_calls():
         "propose_engineer_transport_change",
         "propose_request_update",
         "propose_engineer_delay",
-        "ask_clarification",
+        "restore_not_supported",
+        "not_understood",
     ]
     assert body["messages"] == MESSAGES
 
@@ -316,9 +317,9 @@ def test_bad_arguments_and_plain_text_are_returned_not_raised():
     call = provider.client(mode="tools").complete(MESSAGES).calls[0]
     assert call.arguments is None and "не являются JSON" in call.error
 
-    provider = ScriptedProvider(completion(content="Уточните, какую заявку отменить?"))
+    provider = ScriptedProvider(completion(content="Не сказано, какую заявку отменить."))
     result = provider.client(mode="tools").complete(MESSAGES)
-    assert result.calls == [] and result.text == "Уточните, какую заявку отменить?"
+    assert result.calls == [] and result.text == "Не сказано, какую заявку отменить."
 
 
 def test_parse_json_actions_edge_cases():
