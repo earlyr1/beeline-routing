@@ -422,7 +422,7 @@ def test_pool_first_model_rejecting_tools_answers_in_json_mode():
     assert (result.model, result.mode, result.calls) == (FIRST, "json", [])
 
 
-def test_pool_json_mode_unavailable_moves_on_but_a_bad_request_does_not():
+def test_pool_json_mode_unavailable_moves_on_to_the_next_model():
     provider = ScriptedProvider(
         status_error(400, "tools are not supported"), status_error(429, "rate limit"), cancel_call()
     )
@@ -430,11 +430,21 @@ def test_pool_json_mode_unavailable_moves_on_but_a_bad_request_does_not():
     assert provider.models() == [FIRST, FIRST, SECOND]
     assert (result.model, result.mode) == (SECOND, "tools")
 
-    # 400 и в JSON-режиме — ошибка самого запроса: вторая модель его тоже не примет.
-    provider = ScriptedProvider(status_error(400, "bad"), status_error(400, "bad"))
+
+def test_pool_moves_on_after_400_in_both_modes():
+    # Yandex AI Studio на пропавшую модель отвечает 400 «Failed to get model» и на tools, и в JSON-режиме.
+    provider = ScriptedProvider(
+        status_error(400, "Failed to get model"), status_error(400, "Failed to get model"), cancel_call()
+    )
+    result = provider.client(models=POOL).complete(MESSAGES)
+    assert provider.models() == [FIRST, FIRST, SECOND]
+    assert (result.model, result.mode) == (SECOND, "tools")
+
+    # Если 400 отвечают все модели — ошибка с причиной последней.
+    provider = ScriptedProvider(*[status_error(400, "bad")] * 4)
     with pytest.raises(LlmError, match="ответил ошибкой 400"):
         provider.client(models=POOL).complete(MESSAGES)
-    assert provider.models() == [FIRST, FIRST]
+    assert provider.models() == [FIRST, FIRST, SECOND, SECOND]
 
 
 @pytest.mark.parametrize("status", [401, 403])
