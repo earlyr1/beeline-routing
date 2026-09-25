@@ -11,6 +11,11 @@ ZONE=${ZONE:-ru-central1-d}
 REGISTRY_NAME=routing
 CI_SA_NAME=routing-ci
 VM_SA_NAME=routing-vm
+# Помощник диспетчера ходит в Yandex AI Studio по API-ключу этого аккаунта: роль на папку даёт create.sh, ключ
+# (секрет) создаётся руками — команду create.sh печатает в конце.
+LLM_SA_NAME=routing-llm
+LLM_ROLE=ai.languageModels.user
+LLM_KEY_SCOPE=yc.ai.languageModels.execute
 FEDERATION_NAME=routing-github
 ADDRESS_NAME=routing-ip
 SG_NAME=routing-sg

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Сносит всё, что создал create.sh: машину с дисками, статический IP, группу безопасности, сеть и подсеть (если
 # их создавали мы, а не взяли готовые: они узнаются по именам routing-*), образы и сам реестр, федерацию GitHub
-# и оба сервисных аккаунта, а также бакет с готовым графом OSRM из publish_graph.sh. Спрашивает подтверждение. Запуск: infra/yc/teardown.sh
+# и сервисные аккаунты (CI, машины и помощника вместе с его API-ключами), а также бакет с готовым графом OSRM из
+# publish_graph.sh. Спрашивает подтверждение. Запуск: infra/yc/teardown.sh
 # После него не остаётся ничего, за что Yandex Cloud берёт деньги, включая неактивный статический IP.
 set -euo pipefail
 
@@ -19,6 +20,7 @@ cat <<EOF
   статический IP $ADDRESS_NAME, группа безопасности $SG_NAME
   реестр $REGISTRY_NAME со всеми образами
   федерация $FEDERATION_NAME, сервисные аккаунты $CI_SA_NAME и $VM_SA_NAME
+  сервисный аккаунт помощника $LLM_SA_NAME с API-ключами: LLM_API_KEY в .env и в GitHub перестанет работать
   бакет $GRAPH_BUCKET с графом OSRM (после него osrm-prepare на чистом клоне соберёт граф сам)
 EOF
 [[ -n $SUBNET_ID ]] && echo "  подсеть $SUBNET_NAME"
@@ -97,6 +99,23 @@ fi
 remove_named "iam workload-identity oidc federation" "$FEDERATION_NAME"
 remove_named "iam service-account" "$CI_SA_NAME"
 remove_named "iam service-account" "$VM_SA_NAME"
+
+step "Помощник: API-ключи, роль на папку и сервисный аккаунт"
+LLM_SA_ID=$(id_of iam service-account get --name "$LLM_SA_NAME")
+if [[ -n $LLM_SA_ID ]]; then
+  for key in $(yc_ iam api-key list --service-account-id "$LLM_SA_ID" --format json | jq -r '.[]?.id'); do
+    echo "Удаляю API-ключ $key"
+    yc_ iam api-key delete --id "$key" >/dev/null
+  done
+  # Папка остаётся, и роль на неё висела бы в списке доступа без аккаунта: снимаем её до удаления аккаунта.
+  if yc_ resource-manager folder list-access-bindings --id "$FOLDER_ID" --format json |
+    jq -e --arg role "$LLM_ROLE" --arg sa "$LLM_SA_ID" 'any(.[]?; .role_id == $role and .subject.id == $sa)' >/dev/null; then
+    echo "Снимаю роль $LLM_ROLE на папку"
+    yc_ resource-manager folder remove-access-binding --id "$FOLDER_ID" --role "$LLM_ROLE" \
+      --service-account-id "$LLM_SA_ID" >/dev/null
+  fi
+fi
+remove_named "iam service-account" "$LLM_SA_NAME"
 
 rm -f "$STATE_FILE" "$KNOWN_HOSTS_FILE"
 step "Готово: в папке $FOLDER_ID не осталось ничего из create.sh"
