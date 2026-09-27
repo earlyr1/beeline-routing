@@ -1,20 +1,23 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
-  return { ...actual, getExplanation: vi.fn() };
+  return { ...actual, getExplanation: vi.fn(), addTimelineEvent: vi.fn(), moveCursor: vi.fn() };
 });
 
 import * as api from '../api/client';
-import { cancelEvent, reassignEvent } from '../lib/events';
+import { cancelEvent, delayEvent, reassignEvent } from '../lib/events';
 import { useAppStore } from '../store/useAppStore';
 import { makeAsapState, makeDataUrgentState, makeExplanation, makePlanningState } from '../test/fixtures';
 import { resetStore } from '../test/store';
+import { EngineerDelayDialog } from './events/EngineerDelayDialog';
 import { ExplanationCard } from './ExplanationCard';
 
 const card = () => screen.getByRole('region', { name: 'Объяснение по заявке' });
 const headerActions = () => within(card().querySelector('.explanation__actions') as HTMLElement).getAllByRole('button');
+const delayButton = () => within(card()).queryByRole('button', { name: 'Задержка бригады' });
+const valueOf = (label: string) => (screen.getByLabelText(label) as HTMLInputElement).value;
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -73,7 +76,8 @@ describe('ExplanationCard', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '13:30', cancelRequest });
     render(<ExplanationCard />);
     await screen.findByText(/Назначена Бригада Арташкин/);
-    expect(headerActions().map((button) => button.textContent)).toEqual(['Изменить', 'Отменить', '✕']);
+    // В 13:30 бригада в пути к 50104: рядом стоит и «Задержка бригады».
+    expect(headerActions().map((button) => button.textContent)).toEqual(['Изменить', 'Отменить', 'Задержка бригады', '✕']);
     const cancel = screen.getByRole('button', { name: 'Отменить' });
     expect(cancel).toBeEnabled();
     expect(cancel).not.toHaveAttribute('title');
@@ -202,6 +206,92 @@ describe('ExplanationCard', () => {
     fireEvent.click(picker);
     fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: /Бригада Белузин/ }));
     expect(applyEvent).toHaveBeenCalledWith(reassignEvent('50104', 'E02', '13:30'));
+  });
+
+  // 50104 у Арташкина: выезд 13:00, приезд 13:35, работа 14:00–14:45.
+  it.each([
+    ['the brigade is on the way to it', '13:30', true],
+    ['the work is in progress', '14:10', true],
+    ['the brigade has not left yet', '12:30', false],
+    ['the brigade waits at the client', '13:40', false],
+    ['the work is done', '14:45', false],
+  ])('shows «Задержка бригады» only while the visit is under way: %s', async (_, clock, shown) => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    if (shown) {
+      expect(delayButton()).toBeEnabled();
+      expect(delayButton()).toHaveClass('btn', 'btn-small');
+    } else {
+      expect(delayButton()).not.toBeInTheDocument();
+    }
+  });
+
+  it('has no «Задержка бригады» for a request without a brigade', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '18754', clock: '18:30' });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(delayButton()).not.toBeInTheDocument();
+  });
+
+  it('locks «Задержка бригады» while replanning, like its neighbours, and for a brigade that is no longer available', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '14:10', busy: true });
+    const view = render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(delayButton()).toBeDisabled();
+    view.unmount();
+
+    // URG-001 у Белузина в работе 13:05–14:05, а сам Белузин с 13:50 недоступен.
+    const state = makePlanningState();
+    const engineers = state.engineers.map((engineer) => (engineer.id === 'E02' ? { ...engineer, available: false, unavailable_from: '13:50' } : engineer));
+    resetStore({ datasetId: 'd_test', state: { ...state, engineers }, selectedRequestId: 'URG-001', clock: '13:30' });
+    render(<ExplanationCard />);
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    expect(delayButton()).toBeDisabled();
+    expect(delayButton()).toHaveAttribute('title', 'Инженер недоступен, задержку поставить нельзя');
+  });
+
+  // «Задержка с» — время часов и в работе: сервер продлит начатый визит сразу, а не когда часы дойдут до его конца.
+  it.each([
+    ['while the work is in progress', '14:10'],
+    ['while the brigade is on the way', '13:30'],
+  ])('opens the delay dialog with the brigade of the visit and the clock time, %s', async (_, clock) => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock });
+    render(
+      <>
+        <ExplanationCard />
+        <EngineerDelayDialog />
+      </>,
+    );
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    fireEvent.click(delayButton() as HTMLElement);
+    expect(screen.getByRole('dialog', { name: 'Задержка инженера' })).toBeInTheDocument();
+    expect([valueOf('Инженер'), valueOf('На сколько минут'), valueOf('Задержка с')]).toEqual(['E01', '30', clock]);
+  });
+
+  it('sends the usual delay event with the brigade at the clock time', async () => {
+    vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
+    vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ cursor: '14:10', version: 5 }));
+    vi.mocked(api.addTimelineEvent).mockResolvedValue(makePlanningState({ cursor: '14:10', version: 6 }));
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock: '14:10' });
+    render(
+      <>
+        <ExplanationCard />
+        <EngineerDelayDialog />
+      </>,
+    );
+    await screen.findByText(/Назначена Бригада Арташкин/);
+    fireEvent.click(delayButton() as HTMLElement);
+    fireEvent.click(screen.getByRole('button', { name: '60 мин' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
+    await waitFor(() => expect(useAppStore.getState().delayDialogOpen).toBe(false));
+    // Обычное событие задержки во время часов: применяется сразу, дальше — общий поток событий и правило окна.
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', delayEvent('E01', 60, '14:10'), undefined);
+    expect(useAppStore.getState().state?.version).toBe(6);
   });
 
   it('renders nothing without a selection', () => {

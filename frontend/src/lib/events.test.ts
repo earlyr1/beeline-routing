@@ -38,6 +38,7 @@ import {
   reassignState,
   requestActionState,
   requestChanges,
+  requestDelayState,
   requestEditForm,
   requestUpdateEvent,
   timeError,
@@ -659,6 +660,49 @@ describe('engineer delay', () => {
       'Переработка 25 мин',
     ]);
     expect(forecastLines(makeDelayForecast({ late_without_replan: [] }), requests, engineers, true)).toEqual(['Задержка не привела к опозданиям']);
+  });
+});
+
+describe('brigade delay from the request card', () => {
+  const state = makePlanningState();
+  const visits = assignmentIndex(state.plan);
+  const requestOf = (id: string) => state.requests.find((request) => request.id === id) as ServiceRequest;
+  const delayOf = (id: string, clock: string, patch: { busy?: boolean; request?: Partial<ServiceRequest> } = {}, engineers = state.engineers) =>
+    requestDelayState({ ...requestOf(id), ...patch.request }, visits.get(id), engineers, { busy: patch.busy ?? false, clock });
+
+  it('offers the delay only while the visit is «В работе» or the brigade is «В пути» to it', () => {
+    // 50104 у Арташкина: выезд 13:00, приезд 13:35, работа 14:00–14:45.
+    expect(delayOf('50104', '12:59')).toBeNull();
+    expect(delayOf('50104', '13:00')).toEqual({ engineerId: 'E01', disabled: false, title: undefined });
+    expect(delayOf('50104', '13:30')).toMatchObject({ engineerId: 'E01', disabled: false });
+    // Бригада ждёт у клиента начала окна: ни в пути, ни в работе.
+    expect(delayOf('50104', '13:40')).toBeNull();
+    expect(delayOf('50104', '14:00')).toMatchObject({ engineerId: 'E01', disabled: false });
+    expect(delayOf('50104', '14:44')).toMatchObject({ engineerId: 'E01', disabled: false });
+    expect(delayOf('50104', '14:45')).toBeNull();
+    // Без бригады и отменённая заявка задержки из карточки не дают.
+    expect(delayOf('18754', '18:30')).toBeNull();
+    expect(delayOf('50104', '14:10', { request: { status: 'cancelled' } })).toBeNull();
+  });
+
+  it('stays in the card after the delay: the server extended the visit, and it is still «В работе»', () => {
+    // Задержка на 60 мин в 14:10: сервер продлил визит 14:00–14:45 до 15:45, и в 15:00 можно добавить ещё.
+    const assignment = visits.get('50104');
+    if (!assignment) throw new Error('50104 не назначена');
+    const extended = { ...assignment, visit: { ...assignment.visit, end: '15:45' } };
+    const context = { busy: false, clock: '15:00' };
+    expect(requestDelayState(requestOf('50104'), extended, state.engineers, context)).toMatchObject({ engineerId: 'E01', disabled: false });
+    expect(requestDelayState(requestOf('50104'), extended, state.engineers, { ...context, clock: '15:45' })).toBeNull();
+  });
+
+  it('is locked while replanning and for a brigade that is no longer available', () => {
+    expect(delayOf('50104', '14:10', { busy: true })).toMatchObject({ disabled: true, title: undefined });
+    const sick = state.engineers.map((engineer) => (engineer.id === 'E01' ? { ...engineer, available: false, unavailable_from: '14:30' } : engineer));
+    expect(delayOf('50104', '14:10', {}, sick)).toMatchObject({
+      engineerId: 'E01',
+      disabled: true,
+      title: 'Инженер недоступен, задержку поставить нельзя',
+    });
   });
 });
 

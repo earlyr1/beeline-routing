@@ -6,6 +6,7 @@ import { BrigadePicker } from './BrigadePicker';
 import { EngineerLink } from './EngineerLink';
 import { EquipmentBadge } from './EquipmentBadge';
 import { RequestActions } from './RequestActions';
+import { RequestDelayButton } from './RequestDelayButton';
 import { TierBadge } from './TierBadge';
 import { useExplanation } from './useExplanation';
 import { WhyButton } from './WhyPanel';
@@ -71,6 +72,8 @@ export function ExplanationCard() {
         <div className="explanation__actions">
           {/* Те же кнопки и правила, что в строке списка заявок. */}
           {request && <RequestActions request={request} />}
+          {/* Только в карточке: пока визит «В работе» или бригада «В пути» к нему. */}
+          {request && <RequestDelayButton request={request} />}
           <button type="button" className="btn btn-ghost btn-small" onClick={() => selectRequest(null)} aria-label="Закрыть объяснение">
             ✕
           </button>
