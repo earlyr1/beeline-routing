@@ -674,6 +674,20 @@ describe('EngineerDelayDialog', () => {
     });
   });
 
+  it('takes the brigade and the time «Задержка с» from the request card and refills for another request', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '14:10', delayDialogOpen: true, delayEngineerId: 'E01', delayTime: '14:45' });
+    const view = render(<EngineerDelayDialog />);
+    expect([valueOf('Инженер'), valueOf('На сколько минут'), valueOf('Задержка с')]).toEqual(['E01', '30', '14:45']);
+    // Визитов бригады после 14:45 — те, что сдвинет задержка.
+    expect(optionsOf('Инженер')[0]).toBe('Бригада Арташкин (визитов после 14:45: 1)');
+    fireEvent.change(screen.getByLabelText('Задержка с'), { target: { value: '15:00' } });
+
+    // Та же бригада из карточки другой заявки: форма заполняется заново её временем.
+    act(() => useAppStore.getState().startDelay('E01', '14:20'));
+    view.rerender(<EngineerDelayDialog />);
+    expect(valueOf('Задержка с')).toBe('14:20');
+  });
+
   it('preselects the engineer of the brigade page and keeps it when the time changes', () => {
     resetStore({ datasetId: 'd_test', state: withBusyBeluzin(makePlanningState()), clock: '13:00', delayDialogOpen: true, delayEngineerId: 'E01' });
     render(<EngineerDelayDialog />);

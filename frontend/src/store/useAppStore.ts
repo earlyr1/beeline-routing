@@ -127,8 +127,10 @@ export interface AppData {
   /** Заявка, открытая в диалоге «Изменить заявку»; null, когда диалог закрыт. */
   editingRequestId: string | null;
   delayDialogOpen: boolean;
-  /** Инженер со страницы бригады для диалога «Задержка инженера»; null — диалог закрыт. */
+  /** Инженер со страницы бригады или бригада заявки из её карточки для диалога «Задержка инженера»; null — диалог закрыт. */
   delayEngineerId: string | null;
+  /** «Задержка с» из карточки заявки; null — время часов в момент открытия, как со страницы бригады. */
+  delayTime: HHMM | null;
   /** Диалог смены транспорта или недоступности; null, когда закрыт. */
   engineerDialog: EngineerDialog | null;
   /** Открытый диалог панели событий; пока он открыт, плавающие диалоги стоят левее него. */
@@ -233,8 +235,11 @@ export interface AppActions {
   /** Открыть диалог изменения заявки; точка, выбранная для прежнего изменения, сбрасывается. */
   startEdit(requestId: string): void;
   closeEdit(): void;
-  /** Открыть диалог задержки для инженера со страницы бригады. */
-  startDelay(engineerId: string): void;
+  /**
+   * Открыть диалог задержки для инженера со страницы бригады или для бригады заявки из её карточки.
+   * time — «Задержка с» из карточки заявки; без него время берётся с часов.
+   */
+  startDelay(engineerId: string, time?: HHMM): void;
   closeDelay(): void;
   /** Открыть смену транспорта или недоступность для инженера со страницы бригады. */
   openEngineerDialog(kind: EngineerDialogKind, engineerId: string): void;
@@ -282,6 +287,7 @@ export const initialAppData: AppData = {
   editingRequestId: null,
   delayDialogOpen: false,
   delayEngineerId: null,
+  delayTime: null,
   engineerDialog: null,
   toolbarDialog: null,
   mapMenu: null,
@@ -298,6 +304,7 @@ const NO_FLOATING_DIALOG = {
   editingRequestId: null,
   delayDialogOpen: false,
   delayEngineerId: null,
+  delayTime: null,
   engineerDialog: null,
 } satisfies Partial<AppData>;
 
@@ -1120,13 +1127,13 @@ export const useAppStore = create<AppState>()((set, get) => {
       get().clearPick('edit');
     },
 
-    startDelay(engineerId) {
-      set({ ...NO_FLOATING_DIALOG, delayDialogOpen: true, delayEngineerId: engineerId, mapMenu: null });
+    startDelay(engineerId, time) {
+      set({ ...NO_FLOATING_DIALOG, delayDialogOpen: true, delayEngineerId: engineerId, delayTime: time ?? null, mapMenu: null });
       get().clearPick('edit');
     },
 
     closeDelay() {
-      set({ delayDialogOpen: false, delayEngineerId: null });
+      set({ delayDialogOpen: false, delayEngineerId: null, delayTime: null });
     },
 
     openEngineerDialog(kind, engineerId) {

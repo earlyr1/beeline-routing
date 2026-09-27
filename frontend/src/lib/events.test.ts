@@ -38,6 +38,7 @@ import {
   reassignState,
   requestActionState,
   requestChanges,
+  requestDelayState,
   requestEditForm,
   requestUpdateEvent,
   timeError,
@@ -52,7 +53,7 @@ import {
   workTypeSummary,
   type UrgentForm,
 } from './events';
-import { EVENT_LABELS } from './format';
+import { EVENT_LABELS, fromMinutes, toMinutes } from './format';
 import { assignmentIndex, byId } from './planView';
 
 const form: UrgentForm = {
@@ -659,6 +660,48 @@ describe('engineer delay', () => {
       'Переработка 25 мин',
     ]);
     expect(forecastLines(makeDelayForecast({ late_without_replan: [] }), requests, engineers, true)).toEqual(['Задержка не привела к опозданиям']);
+  });
+});
+
+describe('brigade delay from the request card', () => {
+  const state = makePlanningState();
+  const visits = assignmentIndex(state.plan);
+  const requestOf = (id: string) => state.requests.find((request) => request.id === id) as ServiceRequest;
+  const delayOf = (id: string, clock: string, patch: { busy?: boolean; request?: Partial<ServiceRequest> } = {}, engineers = state.engineers) =>
+    requestDelayState({ ...requestOf(id), ...patch.request }, visits.get(id), engineers, { busy: patch.busy ?? false, clock });
+
+  it('offers the delay only while the visit is «В работе» or the brigade is «В пути» to it', () => {
+    // 50104 у Арташкина: выезд 13:00, приезд 13:35, работа 14:00–14:45.
+    expect(delayOf('50104', '12:59')).toBeNull();
+    expect(delayOf('50104', '13:00')).toEqual({ engineerId: 'E01', time: '13:00', disabled: false, title: undefined });
+    expect(delayOf('50104', '13:30')).toMatchObject({ engineerId: 'E01', time: '13:30' });
+    // Бригада ждёт у клиента начала окна: ни в пути, ни в работе.
+    expect(delayOf('50104', '13:40')).toBeNull();
+    expect(delayOf('50104', '14:00')).toMatchObject({ engineerId: 'E01', time: '14:45' });
+    expect(delayOf('50104', '14:44')).toMatchObject({ engineerId: 'E01', time: '14:45' });
+    expect(delayOf('50104', '14:45')).toBeNull();
+    // Без бригады и отменённая заявка задержки из карточки не дают.
+    expect(delayOf('18754', '18:30')).toBeNull();
+    expect(delayOf('50104', '14:10', { request: { status: 'cancelled' } })).toBeNull();
+  });
+
+  it('never starts the delay earlier than the clock', () => {
+    for (const request of state.requests) {
+      for (let minute = 9 * 60; minute <= 17 * 60; minute += 1) {
+        const delay = delayOf(request.id, fromMinutes(minute));
+        if (delay) expect(toMinutes(delay.time)).toBeGreaterThanOrEqual(minute);
+      }
+    }
+  });
+
+  it('is locked while replanning and for a brigade that is no longer available', () => {
+    expect(delayOf('50104', '14:10', { busy: true })).toMatchObject({ disabled: true, title: undefined });
+    const sick = state.engineers.map((engineer) => (engineer.id === 'E01' ? { ...engineer, available: false, unavailable_from: '14:30' } : engineer));
+    expect(delayOf('50104', '14:10', {}, sick)).toMatchObject({
+      engineerId: 'E01',
+      disabled: true,
+      title: 'Инженер недоступен, задержку поставить нельзя',
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import type { DelayForecast, Engineer, HHMM, Plan, PlanEvent, Priority, ServiceRequest, Skill, TimeSlot, Transport, Visit, WorkType } from '../api/types';
+import { requestClockStatus } from './clock';
 import {
   addMinutes,
   formatWindow,
@@ -282,6 +283,44 @@ export function reassignState(request: ServiceRequest, visit: Visit | undefined,
   if (isWorkStarted(request, visit, context.clock)) return { disabled: true, title: 'Работа уже началась, переназначить нельзя' };
   if (request.lat === null || request.lon === null) return { disabled: true, title: 'Адрес не найден на карте, назначить бригаду нельзя' };
   return { disabled: requestActionState(request, visit, context).disabled, title: undefined };
+}
+
+/** Кнопка «Задержка бригады» в карточке заявки: что подставить в диалог задержки и доступна ли кнопка. */
+export interface RequestDelayState {
+  /** Бригада визита заявки в текущем плане. */
+  engineerId: string;
+  /** «Задержка с»: плановое окончание визита в работе или время часов, если бригада в пути; не раньше часов. */
+  time: HHMM;
+  /** Идёт перепланирование или бригада уже недоступна: сервер задержку не примет. */
+  disabled: boolean;
+  title: string | undefined;
+}
+
+/**
+ * Задержка бригады из карточки заявки: диспетчер думает «на Окской работа затянулась на час», а не «бригада опаздывает».
+ * Кнопка есть, только пока по часам визит «В работе» или бригада «В пути» к нему — те же статусы, что у метки в карточке.
+ * В работе задержка ставится с планового окончания визита: бригада освободится позже, и сдвинутся следующие визиты.
+ * В пути — с времени часов: бригада позже приедет. null — кнопки нет: визит впереди (для него есть «Изменить»
+ * длительность), выполнен, бригада ждёт у клиента, заявка без бригады или отменена.
+ */
+export function requestDelayState(
+  request: ServiceRequest,
+  assignment: { engineerId: string; visit: Visit } | undefined,
+  engineers: Engineer[],
+  { busy, clock }: RequestActionContext,
+): RequestDelayState | null {
+  if (!assignment || request.status === 'cancelled') return null;
+  const { engineerId, visit } = assignment;
+  const status = requestClockStatus(visit, clock);
+  if (status !== 'working' && status !== 'driving') return null;
+  const unavailable = engineers.find((engineer) => engineer.id === engineerId)?.available === false;
+  return {
+    engineerId,
+    time: status === 'working' ? laterTime(visit.end, clock) : clock,
+    disabled: busy || unavailable,
+    // Та же подсказка, что у «Задержки» на странице бригады.
+    title: unavailable ? 'Инженер недоступен, задержку поставить нельзя' : undefined,
+  };
 }
 
 /**
