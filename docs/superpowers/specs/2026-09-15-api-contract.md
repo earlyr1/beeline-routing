@@ -139,6 +139,8 @@
 | `GET /api/config` | | `ClientConfig` | ключ Яндекс Карт отдаётся с backend из env, типы работ срочной заявки и сетка окон визита — из `config/synth_config.yaml` |
 | `GET /api/health` | | `{"status": "ok"}` | для healthcheck compose |
 | `POST /api/upload` | multipart `file` (.csv или .json) | `DatasetStatus` (202) | предподсчёт идёт в фоне |
+| `GET /api/scenarios` | | `[{"region", "title", "requests", "engineers", "generated"}]` | регионы из `data/bundles` для ряда «Или открыть день региона»; `generated` — регион сгенерирован нами |
+| `POST /api/scenarios/{region}` | | `DatasetStatus` (202) | день региона без файла, дальше как после `/upload`; 404, если региона нет |
 | `GET /api/datasets/{id}` | | `DatasetStatus` | фронт опрашивает раз в секунду |
 | `POST /api/datasets/{id}/plan` | | `PlanningState` | считает FCFS и OR-Tools заново, сбрасывает события. 409 пока processing |
 | `GET /api/datasets/{id}/state` | | `PlanningState` | 409 если план ещё не построен |
