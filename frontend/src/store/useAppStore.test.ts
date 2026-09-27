@@ -336,9 +336,9 @@ describe('useAppStore', () => {
   });
 
   it('opens the delay dialog for the engineer of the brigade page and closes it', () => {
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null, delayTime: null });
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
     useAppStore.getState().startDelay('E01');
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E01', delayTime: null });
+    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E01' });
     useAppStore.getState().startDelay('E02');
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E02' });
     useAppStore.getState().closeDelay();
@@ -347,27 +347,6 @@ describe('useAppStore', () => {
     useAppStore.getState().startDelay('E01');
     useAppStore.getState().reset();
     expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null });
-  });
-
-  it('opens the delay dialog from the request card with the brigade and the time and forgets the time on closing', () => {
-    useAppStore.getState().startDelay('E01', '14:45');
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: true, delayEngineerId: 'E01', delayTime: '14:45' });
-    // Со страницы бригады время снова берётся с часов.
-    useAppStore.getState().startDelay('E02');
-    expect(useAppStore.getState()).toMatchObject({ delayEngineerId: 'E02', delayTime: null });
-
-    useAppStore.getState().startDelay('E01', '14:45');
-    useAppStore.getState().closeDelay();
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null, delayTime: null });
-
-    // Другой плавающий диалог закрывает задержку вместе с её временем.
-    useAppStore.getState().startDelay('E01', '14:45');
-    useAppStore.getState().startEdit('46393');
-    expect(useAppStore.getState()).toMatchObject({ delayDialogOpen: false, delayEngineerId: null, delayTime: null });
-
-    useAppStore.getState().startDelay('E01', '14:45');
-    useAppStore.getState().reset();
-    expect(useAppStore.getState().delayTime).toBeNull();
   });
 
   it('remembers the open urgent request dialog next to a floating dialog and forgets it on a new session', () => {

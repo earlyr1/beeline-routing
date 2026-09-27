@@ -5,8 +5,8 @@ import { useAppStore } from '../store/useAppStore';
 
 /**
  * «Задержка бригады» в карточке заявки: у начатой заявки «Изменить» недоступен, а работа затянулась — задержку
- * ставят прямо отсюда, а не со страницы бригады с ручным временем. Кнопка открывает тот же диалог «Задержка инженера»
- * с бригадой визита и временем «Задержка с»; дальше обычное событие задержки. Есть, только пока визит «В работе»
+ * ставят прямо отсюда, а не ищут бригаду заявки. Кнопка открывает тот же диалог «Задержка инженера» с бригадой визита
+ * и временем часов, как со страницы бригады; дальше обычное событие задержки. Есть, только пока визит «В работе»
  * или бригада «В пути» к нему.
  */
 export function RequestDelayButton({ request }: { request: ServiceRequest }) {
@@ -26,7 +26,7 @@ export function RequestDelayButton({ request }: { request: ServiceRequest }) {
       className="btn btn-small"
       disabled={delay.disabled}
       title={delay.title}
-      onClick={() => startDelay(delay.engineerId, delay.time)}
+      onClick={() => startDelay(delay.engineerId)}
     >
       Задержка бригады
     </button>

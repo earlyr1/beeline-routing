@@ -9,34 +9,24 @@ const DEFAULT_DELAY_MIN = 30;
 
 /**
  * Диалог «Задержка инженера»: один на экран, открывается со страницы бригады и из карточки заявки, визит которой
- * «В работе» или бригада «В пути» к нему. Из карточки подставлены бригада визита и время «Задержка с».
+ * «В работе» или бригада «В пути» к нему. Из карточки подставлена бригада визита, время в обоих случаях — часов.
  */
 export function EngineerDelayDialog() {
   const state = useAppStore((s) => s.state);
   const open = useAppStore((s) => s.delayDialogOpen);
   const delayEngineerId = useAppStore((s) => s.delayEngineerId);
-  const delayTime = useAppStore((s) => s.delayTime);
   if (!state || !open || delayEngineerId === null) return null;
-  // Ключ по инженеру и времени: кнопка на странице другой бригады или в карточке другой заявки заполняет форму заново.
-  return (
-    <DelayForm key={`${delayEngineerId} ${delayTime ?? ''}`} state={state} chosenEngineerId={delayEngineerId} chosenTime={delayTime} />
-  );
+  // Ключ по инженеру: кнопка на странице другой бригады или в карточке заявки другой бригады заполняет форму заново.
+  return <DelayForm key={delayEngineerId} state={state} chosenEngineerId={delayEngineerId} />;
 }
 
-interface DelayFormProps {
-  state: PlanningState;
-  chosenEngineerId: string;
-  /** «Задержка с» из карточки заявки; null — время часов. */
-  chosenTime: HHMM | null;
-}
-
-function DelayForm({ state, chosenEngineerId, chosenTime }: DelayFormProps) {
+function DelayForm({ state, chosenEngineerId }: { state: PlanningState; chosenEngineerId: string }) {
   const busy = useAppStore((s) => s.busy);
   const applyEvent = useAppStore((s) => s.applyEvent);
   const closeDelay = useAppStore((s) => s.closeDelay);
   const engineers = state.engineers.filter((engineer) => engineer.available);
-  // Время события с часов дня в момент открытия или из карточки заявки: часы могут идти дальше, время в форме остаётся.
-  const [initialTime] = useState<HHMM>(() => chosenTime ?? useAppStore.getState().clock);
+  // Время события с часов дня в момент открытия: часы могут идти дальше, время в форме остаётся.
+  const [initialTime] = useState<HHMM>(() => useAppStore.getState().clock);
   const [time, setTime] = useState<HHMM>(initialTime);
   // Бригада уже недоступна (план сменился, пока диалог открыт): предлагаем того, у кого больше всего визитов
   // после этого времени, иначе задержка ничего не изменит.

@@ -254,10 +254,11 @@ describe('ExplanationCard', () => {
     expect(delayButton()).toHaveAttribute('title', 'Инженер недоступен, задержку поставить нельзя');
   });
 
+  // «Задержка с» — время часов и в работе: сервер продлит начатый визит сразу, а не когда часы дойдут до его конца.
   it.each([
-    ['from the planned end of the work in progress', '14:10', '14:45'],
-    ['from the clock while the brigade is on the way', '13:30', '13:30'],
-  ])('opens the delay dialog with the brigade of the visit, %s', async (_, clock, time) => {
+    ['while the work is in progress', '14:10'],
+    ['while the brigade is on the way', '13:30'],
+  ])('opens the delay dialog with the brigade of the visit and the clock time, %s', async (_, clock) => {
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
     resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104', clock });
     render(
@@ -269,12 +270,10 @@ describe('ExplanationCard', () => {
     await screen.findByText(/Назначена Бригада Арташкин/);
     fireEvent.click(delayButton() as HTMLElement);
     expect(screen.getByRole('dialog', { name: 'Задержка инженера' })).toBeInTheDocument();
-    expect([valueOf('Инженер'), valueOf('На сколько минут'), valueOf('Задержка с')]).toEqual(['E01', '30', time]);
-    // Время не раньше часов: задержка не уходит в прошлое.
-    expect(valueOf('Задержка с') >= clock).toBe(true);
+    expect([valueOf('Инженер'), valueOf('На сколько минут'), valueOf('Задержка с')]).toEqual(['E01', '30', clock]);
   });
 
-  it('sends the usual delay event with the brigade and the planned end of the visit', async () => {
+  it('sends the usual delay event with the brigade at the clock time', async () => {
     vi.mocked(api.getExplanation).mockResolvedValue(makeExplanation());
     vi.mocked(api.moveCursor).mockResolvedValue(makePlanningState({ cursor: '14:10', version: 5 }));
     vi.mocked(api.addTimelineEvent).mockResolvedValue(makePlanningState({ cursor: '14:10', version: 6 }));
@@ -290,8 +289,8 @@ describe('ExplanationCard', () => {
     fireEvent.click(screen.getByRole('button', { name: '60 мин' }));
     fireEvent.click(screen.getByRole('button', { name: 'Перепланировать' }));
     await waitFor(() => expect(useAppStore.getState().delayDialogOpen).toBe(false));
-    // Обычное событие задержки: на шкалу дня ко времени конца визита, дальше — общий поток событий и правило окна.
-    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', delayEvent('E01', 60, '14:45'), undefined);
+    // Обычное событие задержки во время часов: применяется сразу, дальше — общий поток событий и правило окна.
+    expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', delayEvent('E01', 60, '14:10'), undefined);
     expect(useAppStore.getState().state?.version).toBe(6);
   });
 
