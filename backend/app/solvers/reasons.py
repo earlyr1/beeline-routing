@@ -110,7 +110,7 @@ def unassigned_reason(problem: Problem, request_id: str, sequences: dict[str, li
     if not fitting:
         state, sim = min(solo, key=lambda pair: (pair[1].visits[0].start, pair[1].visits[0].end))
         visit = sim.visits[0]
-        # Без обеда инженер успел бы: не помещается именно обед.
+        # Без новых нарушений обеду места нет: время визита названо с учётом обеда.
         lunch_note = "и с учётом обеда " if sim.lunch_conflict else ""
         detail = (
             f"без других заявок {lunch_note}{state.engineer.name} начнёт не раньше {fmt_hhmm(visit.start)} "

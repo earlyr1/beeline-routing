@@ -21,7 +21,8 @@ class SimResult:
     end_node: int
     end_time: int  # окончание последнего визита: обед после него сюда не входит
     lunch: Lunch | None = None
-    # Без обеда маршрут прошёл бы проверку: не помещается именно обед.
+    # Обед не встаёт без новых нарушений: он стоит там, где меньше всего задерживает клиентов (добавленные
+    # опоздания — в нарушениях визитов), или в окне обеда ему нет места вовсе.
     lunch_conflict: bool = False
 
     @property
@@ -42,9 +43,13 @@ def simulate_route(
     Места для обеда: перед каждым визитом и после последнего. Обед берётся там, где инженер освободился (у прошлого
     визита или в точке старта), с момента, когда он свободен, но не раньше начала окна обеда; дорога к следующему
     визиту идёт после обеда. Место, где начало обеда позже окна, не подходит. Берётся первое по маршруту место, где
-    маршрут допустим, и прежде всего место, где обед не сдвигает визиты (ожидания перед визитом хватает на обед).
-    Если обед нужен, а допустимого места нет, маршрут недопустим. Обед ставится, только если у инженера есть визиты:
-    в самом маршруте или закреплённые до события. lunch=False прогоняет маршрут без обеда, как план диспетчеров.
+    обед не добавляет нарушений к прогону без обеда, и прежде всего место, где обед не сдвигает визиты (ожидания
+    перед визитом хватает на обед). Если такого места нет, бригада всё равно пообедает: обед встаёт туда, где
+    добавляет меньше всего минут опоздания, затем переработки, затем нарушений, при равенстве — раньше по маршруту,
+    и прогон помечается lunch_conflict. Опоздания и переработка из-за обеда остаются нарушениями визитов, отдельной
+    записи про обед нет. Запись «не помещается обед» — только если в окне обеда места нет вовсе. Обед ставится,
+    только если у инженера есть визиты: в самом маршруте или закреплённые до события. lunch=False прогоняет маршрут
+    без обеда, как план диспетчеров.
 
     not_before — время, раньше которого визит не начинают, по номерам заявок: так «Ничего не менять» держит
     времена, которые уже назвали клиентам. Приехав раньше, инженер ждёт; позже — визит идёт как обычно.
@@ -56,35 +61,40 @@ def simulate_route(
     earliest, latest = window
     starts = [visit.start for visit in plain.visits]
     free = [state.available_from] + [visit.end for visit in plain.visits]
-    first: SimResult | None = None
-    shifted: SimResult | None = None
-    unshifted: SimResult | None = None
+    known = set(plain.violations)
+    runs: list[SimResult] = []
+    clean: SimResult | None = None
     for position in range(len(request_ids) + 1):
         if max(free[position], earliest) > latest:
             continue
         run = _drive(problem, state, request_ids, lunch_at=position, earliest=earliest, not_before=not_before)
-        keeps_times = [visit.start for visit in run.visits] == starts
-        if run.feasible and keeps_times:
-            return run
-        first = first or run
-        if run.feasible:
-            shifted = shifted or run
-        if keeps_times:
-            unshifted = unshifted or run
-    if shifted is not None:
-        return shifted
+        if known.issuperset(run.violations):
+            if [visit.start for visit in run.visits] == starts:
+                return run
+            clean = clean or run
+        runs.append(run)
+    if clean is not None:
+        return clean
     if not request_ids:
         # Новых визитов нет, а обед после закреплённой работы не помещается в смену: это не нарушение.
         return plain
-    if not plain.feasible:
-        # Маршрут недопустим и без обеда: причины и время прежние.
-        return unshifted or plain
-    chosen = unshifted or first or plain
+    if runs:
+        # min берёт первое из равных, то есть место раньше по маршруту.
+        return replace(min(runs, key=lambda run: _lunch_cost(run, state)), lunch_conflict=True)
+    # lunch_window не даёт окна, которое прошло к началу маршрута, поэтому место перед первым визитом есть всегда;
+    # запись остаётся на случай, если это правило окна обеда поменяется.
     text = (
         f"у {state.engineer.name} не помещается обед {LUNCH_MIN} мин "
         f"с началом {fmt_hhmm(earliest)}–{fmt_hhmm(latest)}"
     )
-    return replace(chosen, violations=[*chosen.violations, text], lunch_conflict=True)
+    return replace(plain, violations=[*plain.violations, text], lunch_conflict=True)
+
+
+def _lunch_cost(run: SimResult, state: EngineerState) -> tuple[int, int, int]:
+    """Во что маршруту обходится обед на этом месте: минуты опоздания, переработки и число нарушений."""
+    finish = run.end_time if run.lunch is None else max(run.end_time, run.lunch.end)
+    late = sum(visit.late_min for visit in run.visits)
+    return late, max(0, finish - state.available_until), len(run.violations)
 
 
 def _lunch_from(free: int, earliest: int) -> Lunch:

@@ -435,7 +435,7 @@ def _check_reachable(problem: Problem, request_id: str, engineer_id: str, label:
             f"{state.engineer.equipment_stock} ед., и все они уже розданы."
         )
     visit = alone.visits[0]
-    # Без обеда бригада успела бы: не помещается именно обед.
+    # Без новых нарушений обеду места нет: время визита названо с учётом обеда.
     lunch_note = " и с учётом обеда" if alone.lunch_conflict else ""
     raise EventRejected(
         f"{name} не успевает к заявке {label} даже без других заявок{lunch_note}: начнёт не раньше "

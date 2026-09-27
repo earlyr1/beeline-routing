@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from app.domain.enums import EventType, Priority, ReasonCode, RequestTier, Skill, Transport
-from app.domain.models import Event, Metrics, Plan, Route, Unassigned, Visit
+from app.domain.models import Event, Lunch, Metrics, Plan, Route, Unassigned, Visit
 from app.planning import session as session_module
 from app.planning.models import DiffMove, PlanDiff
 from app.planning.session import apply_event
@@ -23,6 +23,7 @@ from app.planning.variants import (
     variant_summary,
     variant_title,
 )
+from app.solvers.simulate import simulate_route
 from tests.helpers import eng, problem_of, req
 from tests.planning_helpers import busy_engineer, context, new_session, routes, visit_times
 from tests.timeline_helpers import fcfs_solves
@@ -627,3 +628,31 @@ def test_skipped_because_of_equipment_is_not_explained_by_time():
             "утром бригада взяла 2 ед.",
         )
     ]
+
+
+# --- Обед при вставке закреплённой заявки ----------------------------------------------------------------------
+
+
+def test_insert_does_not_push_the_lunch_past_the_end_of_the_shift():
+    """Бригада работает до 15:10; прежний маршрут — R1 12:00–13:00 и обед после неё. Закреплённая X 13:00–14:40
+    после R1 визитов не задерживает, но обед тогда встаёт только после X, 14:40–15:25, за концом смены (перед X он
+    задержал бы X на 15 минут). Это хуже прежнего маршрута: бригада берёт X, пропускает R1 и обедает до X."""
+    requests = [
+        req("R1", 1, 0, "12:00", "12:10", duration=60),
+        req("X", 1, 0, "13:00", "13:30", duration=100).model_copy(update={"fixed_engineer_id": "E1"}),
+    ]
+    problem = replace(
+        problem_of(requests, [eng("E1", available=False, unavailable_from="15:10")]),
+        previous_order={"E1": ["R1"]},
+        previous_assignment={"R1": "E1"},
+    )
+    together = simulate_route(problem, problem.states[0], ["R1", "X"])
+    assert together.lunch == Lunch(start="14:40", end="15:25")
+    assert [visit.late_min for visit in together.visits] == [0, 0]
+
+    plan = keep_plan(problem)
+
+    assert routes(plan)["E1"] == ["X"]
+    assert [item.request_id for item in plan.unassigned] == ["R1"]
+    assert plan.routes[0].lunch == Lunch(start="12:00", end="12:45")
+    assert plan.violations == []
