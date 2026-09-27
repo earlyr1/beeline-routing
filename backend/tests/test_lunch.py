@@ -87,17 +87,60 @@ def test_lunch_without_a_gap_pushes_later_visits():
     assert second.late_min == 0
 
 
-def test_route_is_infeasible_when_no_lunch_placement_fits():
-    # Работа 09:30–16:30 без перерыва: до неё обед не начать, после неё окно обеда уже прошло.
+def test_lunch_that_fits_only_with_lateness_is_still_taken():
+    # Работа 09:30–16:30 без перерыва: после неё окно обеда уже прошло, до неё обед сдвигает визит. Бригада всё
+    # равно обедает (12:00–12:45 в точке старта), а опоздание — обычное нарушение визита, отдельной записи про обед нет.
     problem = problem_of([req("R1", 1, 0, "09:30", "09:40", duration=420)], [eng("E1")])
     sim = simulate_route(problem, problem.states[0], ["R1"])
     assert not sim.feasible and sim.lunch_conflict
-    assert any("обед" in violation for violation in sim.violations)
+    assert sim.lunch == Lunch(start="12:00", end="12:45")
+    [visit] = sim.visits
+    assert (visit.start, visit.late_min) == (765 + visit.leg_min, 765 + visit.leg_min - 580)
+    assert not any("обед" in violation for violation in sim.violations), sim.violations
     for plan in (FcfsSolver().solve(problem), OrToolsSolver(time_limit_s=1).solve(problem)):
         assert routes(plan) == {"E1": []}
         [lost] = plan.unassigned
         assert lost.reason_code == ReasonCode.DOES_NOT_FIT
         assert "с учётом обеда" in lost.reason_text, lost.reason_text
+
+
+def test_route_late_without_lunch_gets_lunch_where_it_adds_least_lateness():
+    """R1 опаздывает и без обеда. Обед 12:00 перед R2 задержал бы R2 на 25 минут и R3 на 15, обед 14:00 перед R3 —
+    только R3 на 15, а после R3 (до 15:30) окно обеда уже прошло. Обед встаёт перед R3, хотя это не первое место."""
+    problem = problem_of(
+        [
+            req("R1", 1, 0, "09:00", "09:02", duration=176),
+            req("R2", 1, 0, "12:00", "12:20", duration=120),
+            req("R3", 1, 0, "14:00", "14:30", duration=90),
+        ],
+        [eng("E1")],
+    )
+    state = problem.states[0]
+    plain = simulate_route(problem, state, ["R1", "R2", "R3"], lunch=False)
+    assert [visit.late_min for visit in plain.visits] == [2, 0, 0]
+
+    sim = simulate_route(problem, state, ["R1", "R2", "R3"])
+
+    assert sim.lunch == Lunch(start="14:00", end="14:45") and sim.lunch_conflict
+    assert [visit.late_min for visit in sim.visits] == [2, 0, 15]
+    # Опоздание R1 прежнее, R3 опаздывает из-за обеда: это нарушения визитов, записи про обед нет.
+    assert sim.violations == [
+        "R1: начало 09:04 позже окна до 09:02 на 2 мин",
+        "R3: начало 14:45 позже окна до 14:30 на 15 мин",
+    ]
+
+
+def test_route_without_any_lunch_place_in_the_window_reports_lunch(monkeypatch):
+    """Места в окне обеда нет вовсе: инженер свободен с 15:30, окно обеда 12:00–15:00. Такого окна lunch_window
+    не даёт (прошедшее окно обеда не требуется), поэтому оно подменено: обеда нет, а нарушение называет обед."""
+    base = problem_of([req("R1", 1, 0, "16:00", "17:00")], [eng("E1")])
+    state = replace(base.states[0], available_from=930)
+    monkeypatch.setattr(base, "lunch_window", lambda _state: (720, 900))
+
+    sim = simulate_route(base, state, ["R1"])
+
+    assert sim.lunch is None and sim.lunch_conflict
+    assert sim.violations == ["у Инженер E1 не помещается обед 45 мин с началом 12:00–15:00"]
 
 
 def test_reason_without_lunch_conflict_does_not_mention_lunch():
@@ -293,6 +336,33 @@ def test_delay_forecast_without_replan_includes_lunch():
         (late.request_id, late.planned_start, late.forecast_start, late.late_min)
         for late in forecast.late_without_replan
     ] == [("R2", 800, 826, 6)]
+
+
+def test_keep_after_delay_has_lunch_even_when_route_is_late_without_it():
+    """R2 идёт 10:04–12:34, задержка на объекте в 10:30 на 60 минут сдвигает её окончание на 13:34. R3 (окно до
+    13:30) опоздала бы и без обеда, на 4 минуты, а после R3 (до 15:34) окно обеда уже прошло. Бригада всё равно
+    пообедает: «Ничего не менять» ставит обед 13:34–14:19 перед R3 и честно показывает опоздание R3 на 49 минут."""
+    ctx = context()
+    requests = [
+        req("R1", 1, 0, "09:00", "10:00", duration=60),
+        req("R2", 1, 0, "10:00", "11:00", duration=150),
+        req("R3", 1, 0, "13:00", "13:30", duration=120),
+    ]
+    session = new_session(
+        ctx=ctx, requests=requests, engineers=[eng("E1")], workload_level=EXACT_TRAVEL_LEVEL
+    )
+    assert routes(session.plan) == {"E1": ["R1", "R2", "R3"]}
+    assert route_of(session.plan, "E1").lunch is not None
+
+    updated = apply_event(session, delay("E1", 60, "10:30"), ctx, variant="keep")
+
+    assert routes(updated.plan) == {"E1": ["R1", "R2", "R3"]}
+    assert route_of(updated.plan, "E1").lunch == Lunch(start="13:34", end="14:19")
+    r3 = visit_of(updated.plan, "R3")
+    assert (r3.start, r3.late_min) == (859, 49)
+    assert updated.plan.violations == ["R3: начало 14:19 позже окна до 13:30 на 49 мин"]
+    [late] = updated.last_diff.delay_forecast.late_without_replan
+    assert (late.request_id, late.forecast_start, late.late_min) == ("R3", 859, 49)
 
 
 # Тексты и API

@@ -23,7 +23,7 @@ from app.planning.facts import subject_request_id
 from app.planning.models import BaseVariant, EventChoice, EventVariant, PlanDiff, VariantOption
 from app.solvers.assemble import build_plan
 from app.solvers.problem import EngineerState, Problem
-from app.solvers.simulate import simulate_route
+from app.solvers.simulate import SimResult, simulate_route
 
 VARIANTS: tuple[BaseVariant, ...] = ("optimal", "stable", "keep")
 # Пересчёты, с которыми правило окна выбора сравнивает «Ничего не менять».
@@ -243,16 +243,18 @@ def _no_worse(
 
     Допустимый маршрут подходит. Недопустимый подходит, если нарушений не прибавилось: ни одна заявка не опаздывает
     и не заканчивается после смены больше, чем в прежнем маршруте (новая заявка — вовремя и в смену), не появилось
-    плечо длиннее предела транспорта, не появилось заявки, на которую у бригады не осталось оборудования, а обед,
-    если в прежнем маршруте он помещался, не пропадает и не перестаёт
-    помещаться. Визиты сравниваются в том виде, в каком их покажет план, — обычной симуляцией. Так бригада не
-    пропускает заявку, к которой опаздывала и без вставки, но и не едет на велосипеде через полобласти: по времени
-    такая вставка проходит, а предел плеча она нарушает.
+    плечо длиннее предела транспорта, не появилось заявки, на которую у бригады не осталось оборудования, а обед
+    не пропадает и не заходит за конец смены дальше, чем в прежнем маршруте. Обед симуляция ставит всегда, даже
+    ценой опоздания (simulate_route), поэтому опоздания из-за обеда проверяются вместе с остальными по визитам.
+    Визиты сравниваются в том виде, в каком их покажет план, — обычной симуляцией. Так бригада не пропускает заявку,
+    к которой опаздывала и без вставки, но и не едет на велосипеде через полобласти: по времени такая вставка
+    проходит, а предел плеча она нарушает.
     """
     before = simulate_route(problem, state, route)
     allowed = {visit.request_id: (visit.late_min, _overtime(visit, state)) for visit in before.visits}
     long_before = _long_legs(problem, state, before.visits)
     without_equipment_before = _without_equipment(problem, state, route)
+    lunch_overtime = _lunch_overtime(before, state)
 
     def fits(request_ids: Sequence[str]) -> bool:
         result = simulate_route(problem, state, request_ids)
@@ -262,8 +264,9 @@ def _no_worse(
             return False
         if _without_equipment(problem, state, request_ids) - without_equipment_before:
             return False
-        lunch_lost = result.lunch_conflict or (result.lunch is None and before.lunch is not None)
-        if lunch_lost and not before.lunch_conflict:
+        if before.lunch is not None and result.lunch is None:
+            return False
+        if _lunch_overtime(result, state) > lunch_overtime:
             return False
         return all(
             visit.late_min <= allowed.get(visit.request_id, (0, 0))[0]
@@ -276,6 +279,11 @@ def _no_worse(
 
 def _overtime(visit: Visit, state: EngineerState) -> int:
     return max(0, visit.end - state.available_until)
+
+
+def _lunch_overtime(sim: SimResult, state: EngineerState) -> int:
+    """На сколько минут обед маршрута заходит за конец смены."""
+    return 0 if sim.lunch is None else max(0, sim.lunch.end - state.available_until)
 
 
 def _without_equipment(problem: Problem, state: EngineerState, request_ids: Sequence[str]) -> set[str]:

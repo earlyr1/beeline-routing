@@ -9,7 +9,7 @@ from dataclasses import replace
 import pytest
 
 from app.domain.enums import EventType, Priority, ReasonCode, Skill, Transport
-from app.domain.models import Event
+from app.domain.models import Event, Lunch
 from app.planning.session import EventRejected, apply_event, check_event
 from app.planning.variants import VARIANTS
 from tests.helpers import eng, req
@@ -544,9 +544,10 @@ def test_insert_keeps_a_visit_past_the_shift_since_before_the_event(solves):
     assert inserted.plan.violations == kept.plan.violations
 
 
-def test_insert_keeps_the_route_where_lunch_did_not_fit_since_before_the_event(solves):
-    """E1 задержан в 09:30 на 60 минут: без обеда P2 11:04–14:04 и P3 с 14:04 (окно до 14:30) успевают, а обеду места
-    нет. План ставит обед в 12:00, и P2 с P3 опаздывают.
+def test_insert_keeps_the_route_where_lunch_is_late_since_before_the_event(solves):
+    """E1 задержан в 09:30 на 60 минут: без обеда P2 11:04–14:04 и P3 с 14:04 (окно до 14:30) успевают, а без
+    опоздания обеду места нет. Бригада всё равно обедает там, где опоздание меньше: 14:04–14:49 перед P3, и P3
+    опаздывает на 19 минут (обед в 12:00 перед P2 задержал бы P2 на 45 минут и P3 на 75).
 
     X 17:50–18:00 после P3 ничего не сдвигает: бригада берёт X, ничего не пропуская.
     """
@@ -559,8 +560,9 @@ def test_insert_keeps_the_route_where_lunch_did_not_fit_since_before_the_event(s
     ]
     kept = kept_before_insert(ctx, requests, e1_delayed(), lunch_enabled=True)
     assert routes(kept.plan) == {"E1": ["P1", "P2", "P3"], "E2": ["X"]}
-    assert late_minutes(kept.plan) == {"P2": 45, "P3": 75}
-    assert "у Инженер E1 не помещается обед 45 мин с началом 12:00–15:00" in kept.plan.violations
+    assert late_minutes(kept.plan) == {"P3": 19}
+    assert kept.plan.routes[0].lunch == Lunch(start="14:04", end="14:49")
+    assert kept.plan.violations == ["P3: начало 14:49 позже окна до 14:30 на 19 мин"]
 
     inserted = apply_event(kept, reassign("X", "E1", time="10:00"), ctx, variant="keep")
 
@@ -571,11 +573,12 @@ def test_insert_keeps_the_route_where_lunch_did_not_fit_since_before_the_event(s
     assert inserted.plan.violations == kept.plan.violations
 
 
-def test_insert_does_not_take_the_lunch_break_of_a_route_late_since_before_the_event(solves):
+def test_insert_moves_the_lunch_break_of_a_route_late_since_before_the_event(solves):
     """E1 задержан в 09:30 на 60 минут: P2 11:04–12:04 с опозданием 34 минуты, обед 12:04–12:49, P3 13:30–15:30.
 
-    X 12:10–13:10 занимает место обеда, а после P3 обед уже не начать. Без обеда маршрут прошёл бы по опозданиям, но
-    бригада без обеда не остаётся: она пропускает P2, обедает после X и успевает к P3.
+    X 12:10–13:10 занимает место обеда, а после P3 обед уже не начать. Обед переезжает на после X, 13:10–13:55,
+    и P3 (окно до 14:00) всё равно успевает: бригада берёт X, не пропуская P2 и не оставаясь без обеда. Опоздание
+    P2 прежнее, 34 минуты.
     """
     ctx = context()
     requests = [
@@ -592,10 +595,10 @@ def test_insert_does_not_take_the_lunch_break_of_a_route_late_since_before_the_e
 
     inserted = apply_event(kept, reassign("X", "E1", time="10:00"), ctx, variant="keep")
 
-    assert routes(inserted.plan) == {"E1": ["P1", "X", "P3"], "E2": []}
-    assert inserted.plan.violations == []
-    assert [item.request_id for item in inserted.plan.unassigned] == ["P2"]
-    assert inserted.plan.routes[0].lunch.start == 790  # 13:10, сразу после X
+    assert routes(inserted.plan) == {"E1": ["P1", "P2", "X", "P3"], "E2": []}
+    assert inserted.plan.unassigned == []
+    assert late_minutes(inserted.plan) == {"P2": 34}
+    assert inserted.plan.routes[0].lunch == Lunch(start="13:10", end="13:55")  # сразу после X
 
 
 def test_insert_does_not_take_a_stop_beyond_the_leg_limit(solves):
