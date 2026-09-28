@@ -1371,6 +1371,8 @@ describe('EventToolbar', () => {
     expect(container.querySelector('input')).toBeNull();
     expect(screen.queryByText(/раньше текущего времени|не может быть раньше/)).not.toBeInTheDocument();
     expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(['Сброс событий', 'Срочная заявка']);
+    // Кнопки панели событий того же размера, что кнопки и поля шапки рядом.
+    for (const button of screen.getAllByRole('button')) expect(button).toHaveClass('btn', 'btn-bar');
   });
 
   it('keeps the open urgent request dialog in the store and closes it from the dialog', () => {

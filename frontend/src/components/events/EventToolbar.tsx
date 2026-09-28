@@ -42,14 +42,14 @@ export function EventToolbar() {
     <div className="event-toolbar">
       <button
         type="button"
-        className="btn"
+        className="btn btn-bar"
         disabled={resetLocked}
         title={hasEvents ? 'Убрать все события и вернуться к утреннему плану' : 'На шкале нет событий'}
         onClick={() => setConfirming((open) => !open)}
       >
         Сброс событий
       </button>
-      <button type="button" className="btn btn-danger" disabled={busy} onClick={() => openDialog('urgent')}>
+      <button type="button" className="btn btn-bar btn-danger" disabled={busy} onClick={() => openDialog('urgent')}>
         Срочная заявка
       </button>
       {confirming && !resetLocked && (

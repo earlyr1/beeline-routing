@@ -95,14 +95,16 @@ export function MetricsStrip() {
         <span className="muted">Сейчас {clock}</span>
         {state.precomputed && <PrecomputedNote info={state.precomputed} />}
       </div>
-      <Metric
-        label="Инженеров"
-        value={`${current.engineers_used} из ${state.engineers.length}`}
-        delta={formatSigned(current.engineers_used - base.engineers_used)}
-      />
-      <Metric label="Пробег" value={formatKm(current.total_km)} delta={`${formatSigned(current.total_km - base.total_km, 1)} км`} />
-      <Metric label="Назначено" value={String(current.assigned)} />
-      <Metric label="Не назначено" value={String(current.unassigned)} warn={current.unassigned > 0} />
+      <div className="metrics-strip__metrics">
+        <Metric
+          label="Инженеров"
+          value={`${current.engineers_used} из ${state.engineers.length}`}
+          delta={formatSigned(current.engineers_used - base.engineers_used)}
+        />
+        <Metric label="Пробег" value={formatKm(current.total_km)} delta={`${formatSigned(current.total_km - base.total_km, 1)} км`} />
+        <Metric label="Назначено" value={String(current.assigned)} />
+        <Metric label="Не назначено" value={String(current.unassigned)} warn={current.unassigned > 0} />
+      </div>
       <div className="metric metric--controls">
         <span className="metric__label">Нагрузка</span>
         <div className="metric__switches">
@@ -122,7 +124,7 @@ export function MetricsStrip() {
           </select>
           <button
             type="button"
-            className="btn btn-small metric__lunch"
+            className="btn btn-bar metric__lunch"
             aria-label="Обед по плану"
             aria-pressed={shown.lunch}
             title={DAY_MODE_TITLE}
@@ -133,10 +135,10 @@ export function MetricsStrip() {
           </button>
           {pending && (
             <>
-              <button type="button" className="btn btn-small btn-primary" title={DAY_MODE_TITLE} disabled={locked} onClick={rebuild}>
+              <button type="button" className="btn btn-bar btn-primary" title={DAY_MODE_TITLE} disabled={locked} onClick={rebuild}>
                 Применить
               </button>
-              <button type="button" className="btn btn-small btn-ghost" disabled={locked} onClick={() => setDraft(null)}>
+              <button type="button" className="btn btn-bar" disabled={locked} onClick={() => setDraft(null)}>
                 Отмена
               </button>
             </>
@@ -146,7 +148,7 @@ export function MetricsStrip() {
       <div className="metrics-strip__actions">
         <button
           type="button"
-          className="btn btn-ghost"
+          className="btn btn-bar"
           onClick={reset}
           disabled={busy}
           // День открывают и файлом, и кнопкой региона: после кнопки никакого файла в сессии нет.

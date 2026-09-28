@@ -59,6 +59,20 @@ describe('MetricsStrip', () => {
     expect(lunch()).toHaveAttribute('title', title);
   });
 
+  it('gives every button and the workload select of the header one size, «Другие данные» is a button like the rest', () => {
+    render(<MetricsStrip />);
+    fireEvent.change(workload(), { target: { value: '2' } });
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons.map((button) => button.textContent)).toEqual(['с обедом', 'Применить', 'Отмена', 'Другие данные']);
+    for (const button of buttons) {
+      expect(button).toHaveClass('btn', 'btn-bar');
+      expect(button).not.toHaveClass('btn-small');
+      expect(button).not.toHaveClass('btn-ghost');
+    }
+    expect(workload()).toHaveClass('metric__select');
+  });
+
   it('shows a day with lunch', () => {
     render(<MetricsStrip />);
     expect(workload().value).toBe('1');

@@ -447,43 +447,79 @@ h4 {
   flex-direction: column;
 }
 
+/* Верхняя панель: сверху регион и метрики, снизу все кнопки и поля; на широком экране всё в одну строку, в узком окне
+   кнопки действий («Другие данные», «Сброс событий», «Срочная заявка») уходят третьей строкой. Кнопки и поля панели
+   одного размера (.btn-bar и выбор нагрузки), подписи метрик и «Нагрузки» стоят на одной линии, кнопки — на одной
+   линии с полями «Нагрузки». «Применить»/«Отмена»
+   и подтверждение сброса высоту панели не меняют: место под них есть во всех раскладках.
+   --floating-top — верх плавающих диалогов (.dialog--floating) под панелью и часами дня: задаётся рядом
+   с раскладками панели, в тех же медиазапросах, чтобы высота панели и отступ диалогов менялись вместе. */
+:root {
+  --floating-top: 170px;
+}
+
 .topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  --bar-control: 32px;
+  --bar-label: 14px;
+  --bar-label-gap: 4px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  column-gap: 8px;
   padding: 10px 16px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
-  flex-wrap: wrap;
 }
 
 .metrics-strip {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'title metrics metrics'
+    'mode mode actions';
+  align-items: end;
+  column-gap: 28px;
+  row-gap: 10px;
 }
 
 .metrics-strip__title {
+  grid-area: title;
+  align-self: center;
   display: flex;
   flex-direction: column;
 }
 
+.metrics-strip__title strong {
+  line-height: 18px;
+}
+
+.metrics-strip__title .muted {
+  line-height: 17px;
+}
+
 /* Утренний план из ночного расчёта: короткая серая пометка под часами, как «Сейчас …», подробности в подсказке.
-   max-width переносит её на вторую строку, а не расширяет колонку заголовка. */
+   Одной строкой: перенос делал колонку заголовка выше метрик. */
 .metrics-strip__origin {
   font-size: 11px;
+  line-height: 15px;
   color: var(--muted);
-  max-width: 180px;
+  white-space: nowrap;
   cursor: help;
   text-decoration: underline dotted;
   text-underline-offset: 2px;
 }
 
-.metrics-strip__actions {
+.metrics-strip__metrics {
+  grid-area: metrics;
   display: flex;
-  gap: 6px;
+  gap: 24px;
+}
+
+.metrics-strip__actions {
+  grid-area: actions;
+  justify-self: end;
+  display: flex;
+  gap: 8px;
 }
 
 .metric {
@@ -509,33 +545,82 @@ h4 {
   color: var(--muted);
 }
 
-/* Нагрузка и обед прямо в шапке: выбор копится и применяется одним пересчётом дня кнопкой «Применить». */
+/* Метрики шапки: подпись сверху, под ней полоса высотой с поле — значение и разница с базовым. Метрика без разницы
+   стоит так же, по верху: подписи и значения всех метрик на одной линии. */
+.metrics-strip .metric {
+  min-width: 80px;
+}
+
+.metrics-strip .metric__label {
+  line-height: var(--bar-label);
+  margin-bottom: var(--bar-label-gap);
+  white-space: nowrap;
+}
+
+.metrics-strip .metric__value {
+  line-height: 19px;
+}
+
+.metrics-strip .metric__delta {
+  line-height: 13px;
+  white-space: nowrap;
+}
+
+/* Нагрузка и обед прямо в шапке: выбор копится и применяется одним пересчётом дня кнопкой «Применить».
+   В строке кнопок подпись стоит слева от полей, в одной строке с метриками — над ними, как у метрик. */
 .metric--controls {
-  min-width: 210px;
-  gap: 2px;
+  grid-area: mode;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.metrics-strip .metric--controls .metric__label {
+  margin-bottom: 0;
 }
 
 .metric__switches {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+/* Кнопки и поля верхней панели: одна высота, скругление, отступы и кегль. */
+.btn-bar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--bar-control, 32px);
+  padding: 0 12px;
+  font-size: 13px;
 }
 
 .metric__select {
+  height: var(--bar-control, 32px);
   font: inherit;
   font-size: 13px;
   color: var(--text);
-  padding: 3px 6px;
+  padding: 0 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   cursor: pointer;
 }
 
+.metric__select:hover:not(:disabled) {
+  border-color: #c5cad3;
+}
+
 .metric__select:disabled,
 .metric__lunch:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* «с обедом» и «без обеда» одной ширины: переключение не сдвигает «Применить»/«Отмена». */
+.metric__lunch {
+  min-width: 92px;
 }
 
 .metric__lunch[aria-pressed='true'] {
@@ -553,6 +638,45 @@ h4 {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* Широкий экран: всё в одну строку, панель ниже на строку кнопок, диалоги поднимаются на столько же. */
+@media (width >= 1680px) {
+  :root {
+    --floating-top: 128px;
+  }
+
+  .metrics-strip {
+    grid-template-columns: auto auto auto minmax(0, 1fr);
+    grid-template-areas: 'title metrics mode actions';
+  }
+
+  .metric--controls {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  .metrics-strip .metric--controls .metric__label {
+    margin-bottom: var(--bar-label-gap);
+  }
+}
+
+/* Узкое окно: «Нагрузка» с «Применить»/«Отмена» и кнопки действий в одну строку не помещаются (нужно около 970px),
+   поэтому «Нагрузка» занимает вторую строку целиком, а кнопки действий — третью, справа: панель событий стоит
+   по нижнему краю панели, в той же строке. Панель выше на строку, диалоги опускаются на столько же. */
+@media (width < 1024px) {
+  :root {
+    --floating-top: 212px;
+  }
+
+  .metrics-strip {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      'title metrics'
+      'mode mode'
+      'actions actions';
+  }
 }
 
 /* Подтверждение сброса событий: узкий диалог под кнопками панели событий. */
@@ -1863,10 +1987,11 @@ h4 {
 .dialog--floating {
   position: fixed;
   /* Ниже верхней панели и часов дня: ползунок и отметки событий остаются доступны. */
-  top: 128px;
+  /* Высота панели зависит от ширины окна: отступ задан рядом с её раскладками (--floating-top). */
+  top: var(--floating-top);
   right: 16px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 144px);
+  max-height: calc(100vh - var(--floating-top) - 16px);
   overflow: auto;
 }
 
