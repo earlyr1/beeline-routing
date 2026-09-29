@@ -255,6 +255,11 @@ h4 {
   font-size: 16px;
 }
 
+.scenarios__subtitle {
+  margin: 16px 0 10px;
+  font-size: 14px;
+}
+
 .scenarios__row {
   display: flex;
   flex-wrap: wrap;

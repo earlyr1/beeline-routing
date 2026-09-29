@@ -1,6 +1,7 @@
 """Подготовленные регионы: список для кнопок экрана загрузки и день региона без выбора файла."""
 
 from app.api.registry import MAX_DATASETS, DatasetRegistry
+from app.domain.timeutil import fmt_hhmm
 from app.ingest.bundle import save_bundle
 from tests.api_helpers import csv_bytes, memory_only, prepared_bundle, sample_bundle, upload
 
@@ -16,9 +17,62 @@ def test_scenarios_list_titles_counts_and_the_generated_region(api, tmp_path):
 
     # Порядок конфига: настоящий регион Билайна раньше сгенерированного нами.
     assert scenarios == [
-        {"region": "east", "title": "Восток", "requests": 3, "engineers": 2, "generated": False},
-        {"region": "north_west", "title": "Северо-Запад", "requests": 3, "engineers": 2, "generated": True},
+        {
+            "region": "east",
+            "title": "Восток",
+            "requests": 3,
+            "engineers": 2,
+            "generated": False,
+            "extra": False,
+        },
+        {
+            "region": "north_west",
+            "title": "Северо-Запад",
+            "requests": 3,
+            "engineers": 2,
+            "generated": True,
+            "extra": False,
+        },
     ]
+
+
+@memory_only
+def test_extra_days_follow_the_regions_as_their_own_group(api, tmp_path):
+    """Дополнительные дни организаторов — кнопки после регионов, с пометкой extra: экран ставит их отдельным рядом."""
+    save_bundle(
+        prepared_bundle("east_day2", "Восток, 28.09"), tmp_path / "bundles" / "east_day2" / "bundle.json"
+    )
+    client, _ = api(bundle=prepared_bundle("east", "Восток"))
+
+    scenarios = client.get("/api/scenarios").json()
+
+    assert [(s["region"], s["title"], s["extra"]) for s in scenarios] == [
+        ("east", "Восток", False),
+        ("east_day2", "Восток, 28.09", True),
+    ]
+    assert client.post("/api/scenarios/east_day2").status_code == 202
+
+
+def test_csv_of_an_extra_day_opens_its_day_and_the_region_csv_keeps_its_region(api, tmp_path):
+    """Выгрузка дополнительного дня открывается его бандлом (там ночной план), а выгрузка региона — регионом.
+
+    Офис у дня и у региона один и тот же: без поиска бандла по самой выгрузке файл региона мог бы открыться днём.
+    """
+    day = prepared_bundle("east_day2", "Восток, 28.09")
+    day = day.model_copy(
+        update={"requests": [r.model_copy(update={"id": f"d2-{r.id}"}) for r in day.requests]}
+    )
+    save_bundle(day, tmp_path / "bundles" / "east_day2" / "bundle.json")
+    client, _ = api(bundle=prepared_bundle("east", "Восток"))
+    day_rows = [(r.id, fmt_hhmm(r.window_start), fmt_hhmm(r.window_end), r.address) for r in day.requests]
+    region_rows = [(r.id, "10:00", "12:00", r.address) for r in sample_bundle().requests]
+
+    day_id = upload(client, "east_day2.csv", csv_bytes(day_rows, office=None))
+    region_id = upload(client, "east_synthetic.csv", csv_bytes(region_rows))
+
+    day_report = client.get(f"/api/datasets/{day_id}").json()["report"]
+    assert day_report["region"] == "east_day2" and day_report["region_title"] == "Восток, 28.09"
+    assert client.get(f"/api/datasets/{region_id}").json()["report"]["region"] == "east"
 
 
 @memory_only

@@ -191,6 +191,29 @@ describe('UploadScreen', () => {
     expect(useAppStore.getState().datasetId).toBe('d_test');
   });
 
+  it('puts the extra days of the organizers into their own row after the regions', async () => {
+    vi.mocked(api.getScenarios).mockResolvedValue([
+      ...SCENARIOS,
+      { region: 'east_day2', title: 'Восток, 28.09', requests: 74, engineers: 12, generated: false, extra: true },
+    ]);
+    vi.mocked(api.startScenario).mockResolvedValue(makeDatasetStatus());
+    render(<UploadScreen />);
+
+    const day = await screen.findByRole('button', { name: 'Восток, 28.09 74 заявки · 12 бригад' });
+    const heading = screen.getByRole('heading', { name: 'Дополнительные дни организаторов' });
+    const east = screen.getByRole('button', { name: 'Восток 66 заявок · 12 бригад' });
+    // Регионы — первым рядом, дополнительные дни — под своим заголовком после них.
+    expect(east.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(heading.compareDocumentPosition(day) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      screen.getByText('В этих выгрузках нет бригад: бригады и офис взяты из региона, сравнение — только с базовым вариантом из ТЗ.'),
+    ).toBeInTheDocument();
+
+    fireEvent.click(day);
+
+    await waitFor(() => expect(api.startScenario).toHaveBeenCalledWith('east_day2'));
+  });
+
   it('shows the same error when a prepared region fails to start', async () => {
     vi.mocked(api.getScenarios).mockResolvedValue(SCENARIOS);
     vi.mocked(api.startScenario).mockRejectedValue(
