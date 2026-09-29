@@ -134,7 +134,10 @@ describe('CommunicationsTab', () => {
 
   it('remembers «сегодня не приедем» for a client who is left without a visit', async () => {
     render(<CommunicationsTab />);
-    fireEvent.click(within(rowOf('18754')).getByRole('button', { name: '✓ Согласовано' }));
+    // Клиенту сообщают, что сегодня не приедем: отказаться ему не от чего, кнопка одна.
+    const buttons = within(rowOf('18754')).getAllByRole('button');
+    expect(buttons.map((button) => button.textContent)).toEqual(['✓ Клиент подтвердил']);
+    fireEvent.click(buttons[0]);
 
     await waitFor(() =>
       expect(api.addTimelineEvent).toHaveBeenCalledWith('d_test', expect.objectContaining({ request_id: '18754', agreed_window: null }), undefined),
@@ -172,9 +175,9 @@ describe('CommunicationsTab', () => {
     expect(cancelRequest).toHaveBeenCalledWith(cancelEvent('46393', '13:00'), 'keep');
     expect(screen.queryByRole('button', { name: 'Отменить, маршруты не трогать' })).toBeNull();
 
-    fireEvent.click(within(rowOf('18754')).getByRole('button', { name: '✕ Клиент отказался' }));
-    fireEvent.click(within(rowOf('18754')).getByRole('button', { name: 'Отменить и пересчитать остаток дня' }));
-    expect(cancelRequest).toHaveBeenLastCalledWith(cancelEvent('18754', '13:00'), 'optimal');
+    fireEvent.click(within(rowOf('46393')).getByRole('button', { name: '✕ Клиент отказался' }));
+    fireEvent.click(within(rowOf('46393')).getByRole('button', { name: 'Отменить и пересчитать остаток дня' }));
+    expect(cancelRequest).toHaveBeenLastCalledWith(cancelEvent('46393', '13:00'), 'optimal');
   });
 
   it('carries «маршруты не трогать» through the undo notice into the event that reaches the server', async () => {

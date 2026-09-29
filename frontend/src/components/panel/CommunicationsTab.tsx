@@ -23,8 +23,9 @@ const CALL_BADGES: Record<CallKind, { text: string; className: string }> = {
  * Кому звонить после событий дня (ответ организаторов, вопрос 2: новое время клиенту сообщает служба поддержки).
  * Клиент знает окно, а не минуту, поэтому строка появляется, только когда обещанное окно не выполняется:
  * сегодня не приедем, не попадаем в окно или у заявки теперь другое окно. Бригада в строке — справка.
- * «✓ Согласовано» ставит на шкалу событие «Коммуникация» во время часов: названное окно становится окном заявки,
- * «сегодня не приедем» переносит её. «Снять отметку» удаляет это событие.
+ * «✓ Согласовано» ставит на шкалу событие «Коммуникация» во время часов: названное окно становится окном заявки.
+ * «Сегодня не приедем» клиенту сообщают, а не предлагают: соглашаться или отказываться там не с чем, поэтому у такой
+ * строки одна кнопка — «✓ Клиент подтвердил», и она переносит заявку. «Снять отметку» удаляет это событие.
  */
 export function CommunicationsTab() {
   const state = useAppStore((s) => s.state);
@@ -75,6 +76,8 @@ export function CommunicationsTab() {
             if (!request) return null;
             const visit = assigned.get(row.requestId)?.visit;
             const actions = requestActionState(request, visit, { busy, clock });
+            // «Сегодня не приедем» клиенту сообщают: он может только принять это к сведению.
+            const lost = row.kind === 'lost';
             return (
               <li key={row.requestId} className={`call call--${row.severity}`} onClick={() => selectRequest(row.requestId)}>
                 <div className="call__head">
@@ -95,19 +98,21 @@ export function CommunicationsTab() {
                     disabled={busy}
                     onClick={handle(() => markAgreed(row.requestId))}
                   >
-                    ✓ Согласовано
+                    {lost ? '✓ Клиент подтвердил' : '✓ Согласовано'}
                   </button>
-                  <button
-                    type="button"
-                    className="btn btn-small"
-                    disabled={actions.disabled}
-                    title={actions.cancelTitle}
-                    onClick={handle(() => setRefusing(refusing === row.requestId ? null : row.requestId))}
-                  >
-                    ✕ Клиент отказался
-                  </button>
+                  {!lost && (
+                    <button
+                      type="button"
+                      className="btn btn-small"
+                      disabled={actions.disabled}
+                      title={actions.cancelTitle}
+                      onClick={handle(() => setRefusing(refusing === row.requestId ? null : row.requestId))}
+                    >
+                      ✕ Клиент отказался
+                    </button>
+                  )}
                 </div>
-                {refusing === row.requestId && (
+                {!lost && refusing === row.requestId && (
                   <div className="call__refuse">
                     <button
                       type="button"
