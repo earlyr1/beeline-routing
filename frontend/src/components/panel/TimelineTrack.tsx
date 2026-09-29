@@ -15,6 +15,24 @@ export function TimelineTicks({ scale }: { scale: TimeScale }) {
   );
 }
 
+/** Окно заявки поверх дорожек: начало и конец, % шкалы, и подпись для подсказки. */
+export interface WindowMarks {
+  from: number;
+  to: number;
+  label: string;
+}
+
+/** Две серые вертикальные линии окна: у каждой дорожки свои, вместе они идут через весь таймлайн. */
+export function WindowMarkLines({ marks }: { marks: WindowMarks }) {
+  const title = `Окно заявки ${marks.label}`;
+  return (
+    <>
+      <div className="timeline__mark" style={{ left: `${marks.from}%` }} title={title} />
+      <div className="timeline__mark" style={{ left: `${marks.to}%` }} title={title} />
+    </>
+  );
+}
+
 interface TimelineTrackProps {
   row: TimelineRow;
   color: string;
@@ -22,10 +40,12 @@ interface TimelineTrackProps {
   nowLeft: number;
   selectedRequestId: string | null;
   onSelect(requestId: string): void;
+  /** Окно выбранной заявки без исполнителя: серые линии показывают, чем заняты бригады в это время. */
+  marks?: WindowMarks | null;
 }
 
 /** Дорожка одного инженера: смена, обед, окна визитов, работы, недоступность и текущее время. Общая для таймлайна и страницы бригады. */
-export function TimelineTrack({ row, color, nowLeft, selectedRequestId, onSelect }: TimelineTrackProps) {
+export function TimelineTrack({ row, color, nowLeft, selectedRequestId, onSelect, marks }: TimelineTrackProps) {
   return (
     <div className="timeline__track">
       <div className="timeline__shift" style={{ left: `${row.shiftLeft}%`, width: `${row.shiftWidth}%` }} />
@@ -59,6 +79,7 @@ export function TimelineTrack({ row, color, nowLeft, selectedRequestId, onSelect
           />
         </Fragment>
       ))}
+      {marks && <WindowMarkLines marks={marks} />}
       {nowLeft > 0 && <div className="timeline__now" style={{ left: `${nowLeft}%` }} />}
     </div>
   );

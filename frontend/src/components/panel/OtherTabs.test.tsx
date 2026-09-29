@@ -97,6 +97,25 @@ describe('panel tabs', () => {
     expect(bar).toHaveAttribute('title', 'URG-50104: 14:00–14:45, окно 14:00–16:00');
   });
 
+  it('TimelineTab draws grey lines of the window of a selected request that has no brigade', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '18754' });
+    const { container } = render(<TimelineTab />);
+    // По две линии — начало и конец окна 18:00–20:00 — над часами и в дорожке каждой из трёх бригад.
+    const marks = Array.from(container.querySelectorAll('.timeline__mark'));
+    expect(marks).toHaveLength(8);
+    const scale = { from: 540, to: 1380 };
+    expect(marks[0]).toHaveStyle({ left: `${percent(scale, 1080)}%` });
+    expect(marks[1]).toHaveStyle({ left: `${percent(scale, 1200)}%` });
+    expect(screen.getByText(/Серые линии: окно 18:00–20:00 заявки 18754 без исполнителя\./)).toBeInTheDocument();
+  });
+
+  it('TimelineTab draws no window lines for a request that has a brigade', () => {
+    resetStore({ datasetId: 'd_test', state: makePlanningState(), selectedRequestId: '50104' });
+    const { container } = render(<TimelineTab />);
+    expect(container.querySelectorAll('.timeline__mark')).toHaveLength(0);
+    expect(screen.queryByText(/Серые линии/)).not.toBeInTheDocument();
+  });
+
   it('TimelineTab draws the now line of every engineer at the clock of the day', () => {
     resetStore({ datasetId: 'd_test', state: makePlanningState(), clock: '15:00' });
     const { container } = render(<TimelineTab />);
