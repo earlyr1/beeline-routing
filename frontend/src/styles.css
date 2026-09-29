@@ -1867,6 +1867,16 @@ h4 {
   background: var(--danger);
 }
 
+/* Окно выбранной заявки без исполнителя: серая линия через дорожку, клик проходит к полосам под ней. */
+.timeline__mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: #9ca3af;
+  pointer-events: none;
+}
+
 .timeline__legend {
   margin-top: 12px;
   font-size: 12px;
