@@ -50,10 +50,23 @@ class UrgentEventConfig(BaseModel):
     window_min: int
 
 
+class ExtraDayConfig(BaseModel):
+    """Дополнительный день организаторов: выгрузка того же вида без бригад и без адреса офиса.
+
+    Бригады и офис берутся из бандла региона region, распределения диспетчеров нет. Бандл собирает
+    scripts.extra_days, ночной план — scripts.night_plan, как у регионов.
+    """
+
+    title: str
+    region: str
+    source: str
+
+
 class SynthConfig(BaseModel):
     seed: int
     event_time: HHMM
     regions: dict[str, RegionConfig]
+    extra_days: dict[str, ExtraDayConfig] = Field(default_factory=dict)
     skill_by_bk: dict[str, Skill]
     tier_by_bk: dict[str, RequestTier]
     default_duration_min: int

@@ -42,6 +42,9 @@ class ScenarioInfo(BaseModel):
     engineers: int
     # Выгрузки Билайна по региону нет, данные сгенерированы нами (docs/assumptions.md): кнопка говорит об этом.
     generated: bool
+    # Дополнительный день организаторов: выгрузка без бригад, бригады и офис — из бандла региона. Кнопки таких дней
+    # идут отдельным рядом после регионов.
+    extra: bool = False
 
 
 class UploadReport(BaseModel):

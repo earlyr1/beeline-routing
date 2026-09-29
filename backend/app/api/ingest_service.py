@@ -85,13 +85,14 @@ class IngestDeps:
 
 
 def scenarios(deps: IngestDeps) -> list[ScenarioInfo]:
-    """Подготовленные регионы: у них есть и бандл в data/bundles, и описание в synth_config.yaml.
+    """Подготовленные регионы и дополнительные дни: у них есть и бандл в data/bundles, и описание в synth_config.yaml.
 
-    Порядок — как в конфиге: настоящие регионы Билайна идут раньше сгенерированного нами. Название берётся оттуда
-    же, откуда его взял prepare для офиса бандла, поэтому кнопка и заголовок отчёта после загрузки совпадают.
+    Порядок — как в конфиге: настоящие регионы Билайна идут раньше сгенерированного нами, дополнительные дни
+    организаторов — после регионов. Название берётся оттуда же, откуда его взял бандл для офиса, поэтому кнопка
+    и заголовок отчёта после загрузки совпадают.
     """
     bundles = deps.bundles.all()
-    return [
+    regions = [
         ScenarioInfo(
             region=region,
             title=config.title,
@@ -102,11 +103,24 @@ def scenarios(deps: IngestDeps) -> list[ScenarioInfo]:
         for region, config in deps.synth_config.regions.items()
         if (bundle := bundles.get(region)) is not None
     ]
+    extra = [
+        ScenarioInfo(
+            region=key,
+            title=day.title,
+            requests=len(bundle.requests),
+            engineers=len(bundle.engineers),
+            generated=False,
+            extra=True,
+        )
+        for key, day in deps.synth_config.extra_days.items()
+        if (bundle := bundles.get(key)) is not None
+    ]
+    return regions + extra
 
 
 def scenario_bundle(deps: IngestDeps, region: str) -> Bundle:
     """Бандл подготовленного региона; LookupError — региона нет в конфиге, его бандл не собран или не читается."""
-    config = deps.synth_config.regions.get(region)
+    config = deps.synth_config.regions.get(region) or deps.synth_config.extra_days.get(region)
     if config is None:
         raise LookupError(f"Регион {region} не найден: такого подготовленного региона нет.")
     bundle = deps.bundles.all().get(region)
@@ -188,7 +202,7 @@ def _geocode_missing(record: DatasetRecord, requests: list[Request], geocode: Ge
     return result
 
 
-def _drop_repeated_ids(raw: RawFile) -> RawFile:
+def drop_repeated_ids(raw: RawFile) -> RawFile:
     """Оставляет первую строку с каждым номером заявки, повторы попадают в отчёт о пропущенных строках."""
     seen: set[str] = set()
     rows: list[RawRequestRow] = []
@@ -263,13 +277,21 @@ def _read_upload(
         raise ValueError("Это файл «Контрольное распределение». Загрузите «Синтетические данные» региона.")
     # Повторы уносятся до проверки окон: замечание про окно строки, которой в дне всё равно не будет, диспетчера
     # только запутает, да и знаменатель «столько-то из скольких» должен считать заявки дня.
-    raw = _drop_repeated_ids(raw)
+    raw = drop_repeated_ids(raw)
     # Окна выгрузки проверяются до всего остального, но не правятся: строка, в окне которой работать нельзя,
     # выпадает, остальные замечания уходят в отчёт разбора (app/ingest/window_check.py).
     raw = check_windows(deps.synth_config, raw)
     if not raw.rows:
         raise ValueError(_nothing_left(raw))
-    reference = detect_region(raw, deps.bundles.all())
+    bundles = deps.bundles.all()
+    # Выгрузка, из которой собран какой-то бандл (регион или дополнительный день), открывается этим бандлом: у него
+    # есть ночной план. Иначе регион определяется как раньше, только без дополнительных дней: день регионом не считается.
+    reference = next((bundle for bundle in bundles.values() if _is_reference_file(raw, bundle)), None)
+    if reference is None:
+        extra = deps.synth_config.extra_days
+        reference = detect_region(
+            raw, {region: bundle for region, bundle in bundles.items() if region not in extra}
+        )
     if _is_reference_file(raw, reference):
         requests, control = list(reference.requests), reference.control_plan
     else:

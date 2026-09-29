@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
-import type { GeocodePrecision } from '../api/types';
+import type { GeocodePrecision, ScenarioInfo } from '../api/types';
 import { MATRIX_SOURCE_LABELS, PRECISION_LABELS, SOURCE_LABELS, STAGE_LABELS, plural } from '../lib/format';
 import { MAX_WORKLOAD_LEVEL, MIN_WORKLOAD_LEVEL, WORKLOAD_LEVELS, travelBufferText, workloadLevel } from '../lib/workload';
 import { useAppStore } from '../store/useAppStore';
@@ -53,10 +53,30 @@ export function UploadScreen() {
   const waiting = processing || busy;
   const report = status?.report ?? null;
   // Названия сгенерированных нами регионов из ответа сервера: подпись под рядом кнопок называет их сама.
-  const generatedTitles = scenarios
+  const regions = scenarios.filter((scenario) => !scenario.extra);
+  const extraDays = scenarios.filter((scenario) => scenario.extra);
+  const generatedTitles = regions
     .filter((scenario) => scenario.generated)
     .map((scenario) => scenario.title)
     .join(', ');
+  const renderScenario = (scenario: ScenarioInfo) => (
+    <button
+      key={scenario.region}
+      type="button"
+      className="btn scenario"
+      disabled={waiting}
+      onClick={() => openScenario(scenario.region)}
+    >
+      {/* Регион без выгрузки Билайна подписан прямо на кнопке, а не в подсказке. */}
+      <span className="scenario__title">
+        {scenario.generated ? `${scenario.title} (сгенерирован нами)` : scenario.title}
+      </span>
+      <span className="scenario__meta">
+        {scenario.requests} {plural(scenario.requests, 'заявка', 'заявки', 'заявок')} ·{' '}
+        {scenario.engineers} {plural(scenario.engineers, 'бригада', 'бригады', 'бригад')}
+      </span>
+    </button>
+  );
   const progress = status && status.progress.total > 0 ? Math.round((status.progress.done / status.progress.total) * 100) : 0;
   // Пока файл обрабатывается, нагрузку и обед можно менять: сервер получит их только вместе с «Спланировать».
   const planning = busy && status?.status === 'ready';
@@ -99,32 +119,23 @@ export function UploadScreen() {
           <section className="scenarios" aria-labelledby="scenarios-title">
             {/* Главный путь по ТЗ — сырая выгрузка, поэтому регионы стоят под выбором файла, а не над ним. */}
             <h2 id="scenarios-title">Или открыть день региона</h2>
-            <div className="scenarios__row">
-              {scenarios.map((scenario) => (
-                <button
-                  key={scenario.region}
-                  type="button"
-                  className="btn scenario"
-                  disabled={waiting}
-                  onClick={() => openScenario(scenario.region)}
-                >
-                  {/* Регион без выгрузки Билайна подписан прямо на кнопке, а не в подсказке. */}
-                  <span className="scenario__title">
-                    {scenario.generated ? `${scenario.title} (сгенерирован нами)` : scenario.title}
-                  </span>
-                  <span className="scenario__meta">
-                    {scenario.requests} {plural(scenario.requests, 'заявка', 'заявки', 'заявок')} ·{' '}
-                    {scenario.engineers} {plural(scenario.engineers, 'бригада', 'бригады', 'бригад')}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <div className="scenarios__row">{regions.map(renderScenario)}</div>
             <p className="muted">Те же выгрузки, уже разобранные: день открывается сразу, без выбора файла.</p>
             {generatedTitles && (
               // Про сгенерированный регион говорим сами: «те же выгрузки» к нему не относится.
               <p className="muted">
                 {`${generatedTitles} — наш регион: выгрузки Билайна по нему нет, адреса и бригады сгенерированы нами.`}
               </p>
+            )}
+            {extraDays.length > 0 && (
+              <>
+                <h3 className="scenarios__subtitle">Дополнительные дни организаторов</h3>
+                <div className="scenarios__row">{extraDays.map(renderScenario)}</div>
+                <p className="muted">
+                  В этих выгрузках нет бригад: бригады и офис взяты из региона, сравнение — только с базовым вариантом
+                  из ТЗ.
+                </p>
+              </>
             )}
           </section>
         )}

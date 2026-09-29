@@ -32,6 +32,18 @@ regions:
     synthetic: data/raw/north_west_synthetic.csv
     generated: true
 
+# Дополнительные дни организаторов (прислали 29.09.2026): те же выгрузки, но без бригад и без строки «Адрес офиса».
+# «День 2» и «день 3» в именах файлов — это даты: кнопки подписаны ими. Бригады и офис — из бандла региона region,
+# распределения диспетчеров в файлах нет. Югоцентр прислан дважды за один день 28.09 (76 из 77 номеров общие): кнопка
+# одна, по более полному файлу «день 3»; data/raw/extra/south_center_day2.csv оставлен как прислан. Бандлы собирает
+# python -m scripts.extra_days, на экране загрузки дни идут кнопками после регионов.
+extra_days:
+  east_day2: {title: "Восток, 28.09", region: east, source: data/raw/extra/east_day2.csv}
+  east_day3: {title: "Восток, 29.09", region: east, source: data/raw/extra/east_day3.csv}
+  south_east_day3: {title: "Юго-восток, 28.09", region: south_east, source: data/raw/extra/south_east_day3.csv}
+  south_east_day2: {title: "Юго-восток, 29.09", region: south_east, source: data/raw/extra/south_east_day2.csv}
+  south_center_day3: {title: "Югоцентр, 28.09", region: south_center, source: data/raw/extra/south_center_day3.csv}
+
 # Тип заявки BK -> навык из справочника ТЗ (п. 2.4.1)
 skill_by_bk:
   Локальная заявка: local

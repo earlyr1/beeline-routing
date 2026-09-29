@@ -188,6 +188,8 @@ export interface ScenarioInfo {
   engineers: number;
   /** Выгрузки Билайна по региону нет, данные сгенерированы нами: кнопка говорит об этом. */
   generated: boolean;
+  /** Дополнительный день организаторов: выгрузка без бригад, кнопка идёт отдельным рядом после регионов. */
+  extra?: boolean;
 }
 
 export interface UploadReport {
