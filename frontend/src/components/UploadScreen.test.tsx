@@ -214,6 +214,22 @@ describe('UploadScreen', () => {
     await waitFor(() => expect(api.startScenario).toHaveBeenCalledWith('east_day2'));
   });
 
+  it('brings «Спланировать» into view once the chosen day is ready: the rows of days above push it below the fold', async () => {
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    vi.mocked(api.getScenarios).mockResolvedValue(SCENARIOS);
+    vi.mocked(api.startScenario).mockResolvedValue(makeDatasetStatus());
+    render(<UploadScreen />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Восток 66 заявок · 12 бригад' }));
+
+    const plan = await screen.findByRole('button', { name: 'Спланировать' });
+    await waitFor(() => expect(scroll).toHaveBeenCalled());
+    expect(scroll.mock.contexts.at(-1)).toBe(plan);
+    expect(scroll).toHaveBeenLastCalledWith({ behavior: 'smooth', block: 'end' });
+    delete (Element.prototype as Partial<Element>).scrollIntoView;
+  });
+
   it('shows the same error when a prepared region fails to start', async () => {
     vi.mocked(api.getScenarios).mockResolvedValue(SCENARIOS);
     vi.mocked(api.startScenario).mockRejectedValue(

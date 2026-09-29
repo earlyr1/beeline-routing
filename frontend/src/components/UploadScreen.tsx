@@ -22,6 +22,8 @@ export function UploadScreen() {
   const lunchEnabled = useAppStore((s) => s.lunchEnabled);
   const setLunchEnabled = useAppStore((s) => s.setLunchEnabled);
   const inputRef = useRef<HTMLInputElement>(null);
+  const statusRef = useRef<HTMLDivElement>(null);
+  const planRef = useRef<HTMLButtonElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -49,6 +51,15 @@ export function UploadScreen() {
   };
 
   const processing = status?.status === 'processing';
+  const datasetId = status?.dataset_id ?? null;
+  const ready = status?.status === 'ready';
+  // Ряды регионов и дополнительных дней стоят выше отчёта: выбранный день уходит ниже края окна. Экран сам доводит
+  // до строки разбора, а когда день готов — до «Спланировать», чтобы кнопку не приходилось искать прокруткой.
+  useEffect(() => {
+    if (!datasetId) return;
+    const target = ready ? planRef.current : statusRef.current;
+    target?.scrollIntoView?.({ behavior: 'smooth', block: ready ? 'end' : 'nearest' });
+  }, [datasetId, ready]);
   // Новый день не открывается, пока идёт предподсчёт или расчёт плана: второе нажатие бросило бы уже идущий поиск.
   const waiting = processing || busy;
   const report = status?.report ?? null;
@@ -141,7 +152,7 @@ export function UploadScreen() {
         )}
 
         {status && (
-          <div className="upload-status" aria-live="polite">
+          <div className="upload-status" aria-live="polite" ref={statusRef}>
             <div className="upload-status__row">
               <span>{STAGE_LABELS[status.stage]}</span>
               {status.progress.total > 0 && (
@@ -273,7 +284,13 @@ export function UploadScreen() {
         </section>
 
         {status?.status === 'ready' && (
-          <button type="button" className="btn btn-primary btn-large" onClick={() => void plan()} disabled={busy}>
+          <button
+            type="button"
+            ref={planRef}
+            className="btn btn-primary btn-large"
+            onClick={() => void plan()}
+            disabled={busy}
+          >
             {busy ? 'Считаем план…' : 'Спланировать'}
           </button>
         )}
